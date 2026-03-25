@@ -1,0 +1,57 @@
+# ======================================================
+# DEPENDENCIAS PRINCIPALES - MÍNIMAS PARA PRODUCCIÓN
+# ======================================================
+
+# Telegram Bot Framework
+python-telegram-bot==20.7
+
+# MongoDB Driver
+pymongo==4.6.0
+
+# HTTP Requests (para Binance API)
+requests==2.31.0
+
+# Data Analysis
+pandas==2.0.3
+numpy==1.24.3
+
+# Technical Analysis Library
+ta==0.10.2
+
+# ======================================================
+# UTILIDADES Y MANEJO DE FECHAS
+# ======================================================
+
+# Manejo de fechas
+python-dateutil==2.8.2
+pytz==2023.3
+
+# Timezone handling (para Python < 3.9)
+backports.zoneinfo==0.2.1; python_version < "3.9"
+
+# ======================================================
+# DESARROLLO Y MONITOREO (OPCIONAL)
+# ======================================================
+
+# Mejor logging (opcional pero recomendado)
+colorlog==6.7.0
+
+# Variables de entorno (si usas .env files)
+python-dotenv==1.0.0
+
+# ======================================================
+# SEGURIDAD Y VALIDACIÓN (RECOMENDADO)
+# ======================================================
+
+# Validación de datos (opcional)
+pydantic==2.4.2
+
+# ======================================================
+# VERSIONES ESPECÍFICAS PARA EVITAR CONFLICTOS
+# ======================================================
+
+# Estas versiones son compatibles con Python 3.11.6
+certifi==2023.7.22
+charset-normalizer==3.3.0
+idna==3.4
+urllib3==2.0.7
