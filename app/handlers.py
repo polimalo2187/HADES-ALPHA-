@@ -1,0 +1,1920 @@
+import logging
+import asyncio
+from datetime import datetime, date
+from functools import partial
+from urllib.parse import quote
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest
+from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, CommandHandler, filters
+
+from app.database import users_collection
+from app.models import is_trial_active, is_plan_active, update_timestamp
+from app.binance_api import get_top_movers_usdtm, get_radar_opportunities, get_premium_index, get_open_interest
+from app.market_ui import render_market_state
+from app.plans import PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM, activate_plus, activate_premium, extend_current_plan
+from app.signals import get_latest_base_signal_for_plan, format_user_signal, get_user_signal_by_signal_id, get_recent_user_signals_for_user, get_signal_analysis_for_user, get_signal_tracking_for_user
+from app.config import is_admin, get_admin_whatsapps, get_bot_display_name
+from app.menus import main_menu, back_to_menu, my_account_menu, get_menu_text
+from app.referrals import get_user_referral_stats, get_referral_link, register_valid_referral, check_ref_rewards
+from app.user_service import get_or_create_user
+from app.risk import (
+    RiskConfigurationError,
+    SignalProfileError,
+    SignalRiskError,
+    build_risk_preview_from_user_signal,
+    get_exchange_fee_preset,
+    get_user_risk_profile,
+    save_user_risk_profile,
+)
+from app.risk_ui import (
+    PROFILE_CODE_TO_NAME,
+    build_active_signals_list_keyboard,
+    build_active_signals_list_text,
+    build_default_profile_selection_keyboard,
+    build_default_profile_selection_text,
+    build_exchange_selection_keyboard,
+    build_exchange_selection_text,
+    build_history_list_keyboard,
+    build_history_list_text,
+    build_risk_management_keyboard,
+    build_risk_management_text,
+    build_risk_result_keyboard,
+    build_risk_result_text,
+    build_signal_detail_keyboard,
+    build_signal_detail_text,
+    build_signal_profile_picker_keyboard,
+    build_signal_profile_picker_text,
+)
+
+from app.analysis_ui import (
+    build_signal_analysis_keyboard,
+    build_signal_analysis_text,
+)
+from app.tracking_ui import (
+    build_signal_tracking_keyboard,
+    build_signal_tracking_text,
+)
+
+from app.onboarding_ui import (
+    ONBOARDING_VERSION,
+    build_language_selector_keyboard,
+    build_language_selector_text,
+    build_onboarding_keyboard,
+    build_onboarding_text,
+    normalize_language,
+)
+
+try:
+    from app.statistics import (
+        get_last_days_stats,
+        get_last_days_stats_by_plan,
+        get_performance_snapshot,
+        get_signal_activity_stats,
+        get_signal_activity_stats_by_plan,
+        get_winrate_by_score,
+        reset_statistics,
+    )
+except ImportError:  # compat
+    get_last_days_stats = None
+    get_last_days_stats_by_plan = None
+    get_performance_snapshot = None
+    get_signal_activity_stats = None
+    get_signal_activity_stats_by_plan = None
+    get_winrate_by_score = None
+    reset_statistics = None
+
+
+logger = logging.getLogger(__name__)
+
+DAILY_LIMITS = {
+    PLAN_FREE: 3,
+    PLAN_PLUS: 5,
+    PLAN_PREMIUM: 7,
+}
+
+RISK_INPUT_FIELDS = {
+    "capital_usdt": {
+        "label": "capital",
+        "prompt": "💰 Envía tu capital disponible en USDT.\nEjemplo: 500",
+    },
+    "risk_percent": {
+        "label": "riesgo por trade",
+        "prompt": "🎯 Envía el porcentaje que arriesgas por trade.\nEjemplo: 1 o 1.5",
+    },
+    "fee_percent_per_side": {
+        "label": "fee por lado",
+        "prompt": "💸 Envía la fee por lado en porcentaje.\nEjemplo: 0.02",
+    },
+    "slippage_percent": {
+        "label": "slippage",
+        "prompt": "📉 Envía el slippage estimado en porcentaje.\nEjemplo: 0.03",
+    },
+    "default_leverage": {
+        "label": "apalancamiento por defecto",
+        "prompt": "📈 Envía el apalancamiento por defecto.\nEjemplo: 20 o 35",
+    },
+}
+
+
+def _get_user_language(user: dict | None) -> str:
+    return normalize_language((user or {}).get("language"))
+
+
+def _tr(language: str | None, es: str, en: str) -> str:
+    return en if _get_user_language({"language": language}) == "en" else es
+
+
+def _needs_onboarding(user: dict | None) -> bool:
+    if not user:
+        return True
+    language = normalize_language(user.get("language"))
+    version = int(user.get("onboarding_version") or 0)
+    completed = bool(user.get("onboarding_completed"))
+    return language not in {"es", "en"} or version < ONBOARDING_VERSION or not completed
+
+
+def _banned_message(language: str | None) -> str:
+    return _tr(language, "🚫 Tu acceso al bot ha sido revocado.", "🚫 Your access to the bot has been revoked.")
+
+
+def _admin_panel_keyboard(language: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(_tr(language, "➕ Activar plan", "➕ Activate plan"), callback_data="admin_activate_plan")],
+        [InlineKeyboardButton(_tr(language, "🗑 Eliminar usuario", "🗑 Delete user"), callback_data="admin_delete_user")],
+        [InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="back_menu")],
+    ])
+
+
+async def _show_language_selector_message(message, user_id: int):
+    await message.reply_text(
+        build_language_selector_text(),
+        reply_markup=build_language_selector_keyboard(user_id=user_id),
+    )
+
+
+async def _show_onboarding_screen(query, user: dict, screen: str):
+    language = _get_user_language(user)
+    await query.edit_message_text(
+        build_onboarding_text(screen, language),
+        reply_markup=build_onboarding_keyboard(screen, language),
+    )
+
+
+async def _show_onboarding_screen_message(message, user: dict, screen: str):
+    language = _get_user_language(user)
+    await message.reply_text(
+        build_onboarding_text(screen, language),
+        reply_markup=build_onboarding_keyboard(screen, language),
+    )
+
+# ======================================================
+# FUNCIONES AUXILIARES
+# ======================================================
+
+def format_whatsapp_contacts():
+    whatsapps = get_admin_whatsapps()
+    if not whatsapps:
+        return "WhatsApp: (no configurado)"
+    if len(whatsapps) == 1:
+        return f"WhatsApp: {whatsapps[0]}"
+    return "WhatsApps:\n- " + "\n- ".join(whatsapps)
+
+def _wa_link(phone: str, message: str) -> str:
+    # Si ya es un enlace completo de WhatsApp, usarlo directamente
+    phone_str = str(phone)
+    if phone_str.startswith("http://") or phone_str.startswith("https://"):
+        if "text=" in phone_str:
+            return phone_str
+        sep = "&" if "?" in phone_str else "?"
+        return f"{phone_str}{sep}text={quote(message)}"
+
+    # Si es número, construir enlace wa.me
+    clean = "".join(ch for ch in phone_str if ch.isdigit())
+    return f"https://wa.me/{clean}?text={quote(message)}"
+
+
+def parse_ref_code(start_param: str) -> int | None:
+    """Extrae user_id del referidor desde start parameter de Telegram"""
+    if not start_param:
+        return None
+    if start_param.startswith("ref_"):
+        try:
+            return int(start_param.split("_")[1])
+        except ValueError:
+            return None
+    return None
+
+# ======================================================
+# HANDLER /start (inserta referidos)
+# ======================================================
+
+async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Maneja /start sobre un único contrato de usuario."""
+    try:
+        user_id = update.effective_user.id
+        telegram_user = update.effective_user
+        message = update.effective_message
+        start_param = context.args[0] if context.args else None
+        referrer_id = parse_ref_code(start_param)
+
+        user, is_new_user = get_or_create_user(
+            user_id=user_id,
+            username=getattr(telegram_user, "username", None),
+            telegram_language=getattr(telegram_user, "language_code", None),
+            referred_by=referrer_id,
+        )
+
+        language = _get_user_language(user)
+
+        if user.get("banned"):
+            await message.reply_text(_banned_message(language))
+            return
+
+        if is_new_user or _needs_onboarding(user):
+            await _show_language_selector_message(message, user_id=user_id)
+            return
+
+        await message.reply_text(
+            get_menu_text(language, is_admin=is_admin(user_id)),
+            reply_markup=main_menu(language=language, is_admin=is_admin(user_id)),
+        )
+
+    except Exception as e:
+        logger.error(f"Error en handle_start: {e}", exc_info=True)
+        if update.effective_message is not None:
+            await update.effective_message.reply_text("❌ Error starting the bot.")
+
+
+async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+
+    try:
+        user_id = query.from_user.id
+        users_col = users_collection()
+        user = users_col.find_one({"user_id": user_id})
+
+        if user and user.get("banned"):
+            await query.edit_message_text(_banned_message(_get_user_language(user)))
+            return
+
+        if not user:
+            await query.edit_message_text(
+                _tr(_get_user_language(user), "Usuario no encontrado. Usa /start nuevamente.", "User not found. Use /start again."),
+                reply_markup=main_menu(language=_get_user_language(user)),
+            )
+            return
+
+        action = query.data
+        admin = is_admin(user_id)
+        plan = (user.get("plan") or PLAN_FREE)
+
+        if await _handle_risk_dynamic_callbacks(query, context, user, action):
+            return
+
+        if action in {"lang:es", "lang:en"}:
+            lang = normalize_language(action.split(":", 1)[1])
+            users_col.update_one(
+                {"user_id": user_id},
+                {"$set": {"language": lang, "onboarding_seen": True, "onboarding_completed": False, "onboarding_version": ONBOARDING_VERSION}},
+            )
+            user["language"] = lang
+            user["onboarding_seen"] = True
+            user["onboarding_completed"] = False
+            user["onboarding_version"] = ONBOARDING_VERSION
+            await _show_onboarding_screen(query, user, "home")
+            return
+
+        if action.startswith("ob:"):
+            screen = action.split(":", 1)[1]
+            if screen == "menu":
+                users_col.update_one(
+                    {"user_id": user_id},
+                    {"$set": {"onboarding_seen": True, "onboarding_completed": True, "onboarding_version": ONBOARDING_VERSION, "onboarding_completed_at": datetime.utcnow()}},
+                )
+                await query.edit_message_text(
+                    _tr(_get_user_language(user), "🏠 MENÚ PRINCIPAL — Selecciona una opción abajo", "🏠 MAIN MENU — Select an option below"),
+                    reply_markup=main_menu(language=_get_user_language(user), is_admin=admin),
+                )
+                return
+
+            if screen == "start":
+                screen = "how"
+
+            screen_map = {
+                "back:home": "home",
+                "back:how": "how",
+                "back:plans": "plans",
+                "home": "home",
+                "how": "how",
+                "risk": "risk",
+                "analysis": "analysis",
+                "tracking": "tracking",
+                "market": "market",
+                "plans": "plans",
+                "plus": "plus",
+                "premium": "premium",
+                "free": "free",
+                "guide": "guide",
+            }
+            resolved = screen_map.get(screen)
+            if not resolved:
+                await query.answer(_tr(_get_user_language(user), "Pantalla no disponible.", "Screen not available."), show_alert=False)
+                return
+            users_col.update_one(
+                {"user_id": user_id},
+                {"$set": {"onboarding_seen": True, "onboarding_version": ONBOARDING_VERSION}},
+            )
+            await _show_onboarding_screen(query, user, resolved)
+            return
+
+        if action == "admin_panel" and admin:
+            await query.edit_message_text(
+                _tr(_get_user_language(user), "👑 PANEL ADMINISTRADOR", "👑 ADMIN PANEL"),
+                reply_markup=_admin_panel_keyboard(_get_user_language(user)),
+            )
+            return
+
+        if action == "admin_delete_user" and admin:
+            context.user_data["awaiting_delete_user_id"] = True
+            await query.edit_message_text(_tr(_get_user_language(user), "🆔 Envía el User ID del usuario a eliminar:", "🆔 Send the User ID of the user to delete:"))
+            return
+
+        if action.startswith("confirm_delete_user:") and admin:
+            language = _get_user_language(user)
+            try:
+                target_user_id = int(action.split(":", 1)[1])
+            except ValueError:
+                await query.answer(_tr(language, "ID inválido.", "Invalid ID."), show_alert=True)
+                return
+
+            if target_user_id == user_id:
+                await query.answer(_tr(language, "No puedes banearte a ti mismo.", "You cannot ban yourself."), show_alert=True)
+                return
+
+            if is_admin(target_user_id):
+                await query.answer(_tr(language, "No puedes banear a otro administrador.", "You cannot ban another administrator."), show_alert=True)
+                return
+
+            users_col.update_one(
+                {"user_id": target_user_id},
+                {"$set": {"banned": True, "banned_at": datetime.utcnow(), "banned_by": user_id, "updated_at": datetime.utcnow()}},
+            )
+            logger.warning("[ADMIN] Usuario baneado | admin=%s target=%s", user_id, target_user_id)
+            await query.edit_message_text(
+                _tr(language, f"🚫 Usuario {target_user_id} bloqueado correctamente.", f"🚫 User {target_user_id} blocked successfully."),
+                reply_markup=_admin_panel_keyboard(language),
+            )
+            return
+
+        if action == "cancel_admin_delete" and admin:
+            await query.edit_message_text(
+                _tr(_get_user_language(user), "✅ Operación cancelada.", "✅ Operation cancelled."),
+                reply_markup=_admin_panel_keyboard(_get_user_language(user)),
+            )
+            return
+
+        if action == "admin_activate_plan" and admin:
+            context.user_data["awaiting_user_id"] = True
+            await query.edit_message_text(_tr(_get_user_language(user), "🆔 Envía el User ID del usuario:", "🆔 Send the User ID of the user:"))
+            return
+
+        if action == "view_signals":
+            await handle_view_signals(query, user, admin, users_col)
+            return
+
+        if action == "plans":
+            await handle_plans(query, user)
+            return
+
+        if action == "my_account":
+            await handle_my_account(query, user, admin)
+            return
+
+        if action == "referrals":
+            await handle_referrals(query, user)
+            return
+
+
+        # Nuevos módulos (Menú PRO)
+        if action == "performance":
+            await handle_performance(query, user)
+            return
+
+        if action == "reset_stats":
+            await handle_reset_stats(query, user, confirmed=False)
+            return
+
+        if action == "confirm_reset_stats":
+            await handle_reset_stats(query, user, confirmed=True)
+            return
+
+        if action == "cancel_reset_stats":
+            await handle_performance(query, user)
+            return
+
+        if action == "radar":
+            plan = (user.get("plan") or PLAN_FREE)
+            await handle_radar(query, user, plan)
+            return
+
+        if action == "radar_refresh":
+            plan = (user.get("plan") or PLAN_FREE)
+            await handle_radar(query, user, plan)
+            return
+
+        if action == "movers":
+            await handle_movers(query, user)
+            return
+
+        if action == "market":
+            await handle_market(query, user)
+            return
+
+        if action == "market_refresh":
+            await handle_market(query, user)
+            return
+
+        if action == "watchlist":
+            # Mostrar Watchlist (modo activo para capturar texto del usuario)
+            try:
+                from app.watchlist import get_symbols
+                from app.watchlist_ui import render_watchlist_view
+                symbols = get_symbols(int(user_id))
+                text, kb = render_watchlist_view(symbols, lang=_get_user_language(user))
+                context.user_data["watchlist_active"] = True
+                await query.edit_message_text(text, reply_markup=kb)
+            except Exception:
+                logging.exception("Watchlist open error")
+                await query.edit_message_text(_tr(_get_user_language(user), "❌ No pude abrir Watchlist ahora mismo.", "❌ I could not open Watchlist right now."), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Volver", callback_data="back_menu")]]))
+            
+        # Watchlist callbacks
+        if action == "wl_refresh":
+            try:
+                from app.watchlist import get_symbols
+                from app.watchlist_ui import render_watchlist_view
+                symbols = get_symbols(int(user_id))
+                text, kb = render_watchlist_view(symbols, lang=_get_user_language(user))
+                context.user_data["watchlist_active"] = True
+                await query.edit_message_text(text, reply_markup=kb)
+            except Exception:
+                logging.exception("Watchlist refresh error")
+                pass
+            return
+
+        if action == "wl_clear":
+            try:
+                from app.watchlist import clear, get_symbols
+                from app.watchlist_ui import render_watchlist_view
+                clear(int(user_id))
+                symbols = get_symbols(int(user_id))
+                text, kb = render_watchlist_view(symbols, lang=_get_user_language(user))
+                context.user_data["watchlist_active"] = True
+                await query.edit_message_text(_tr(_get_user_language(user), "🧹 Watchlist limpiada.\n\n", "🧹 Watchlist cleared.\n\n") + text, reply_markup=kb)
+            except Exception:
+                logging.exception("Watchlist clear error")
+                await query.answer(_tr(_get_user_language(user), "No pude limpiar.", "I could not clear it."), show_alert=False)
+            return
+
+        if action.startswith("wl_rm:"):
+            try:
+                from app.watchlist import remove_symbol, get_symbols
+                from app.watchlist_ui import render_watchlist_view
+                sym = action.split(":", 1)[1]
+                remove_symbol(int(user_id), sym)
+                symbols = get_symbols(int(user_id))
+                text, kb = render_watchlist_view(symbols, lang=_get_user_language(user))
+                context.user_data["watchlist_active"] = True
+                await query.edit_message_text(text, reply_markup=kb)
+            except Exception:
+                logging.exception("Watchlist remove error")
+                await query.answer(_tr(_get_user_language(user), "No pude quitar.", "I could not remove it."), show_alert=False)
+            return
+
+
+        if action == "alerts":
+            await handle_alerts(query, user)
+            return
+
+        if action == "alerts_refresh":
+            await handle_alerts(query, user)
+            return
+
+        if action == "history":
+            await handle_history(query, user)
+            return
+
+        if action == "history_refresh":
+            await handle_history(query, user)
+            return
+        if action == "support":
+            await handle_support(query, user)
+            return
+
+        if action == "register_exchange":
+            context.user_data["awaiting_exchange"] = True
+            await query.edit_message_text(
+                _tr(_get_user_language(user), "🌐 Envía el nombre de tu exchange (ej: Binance, CoinEx, KuCoin):", "🌐 Send the name of your exchange (e.g. Binance, CoinEx, KuCoin):")
+            )
+            return
+
+        if action == "back_menu":
+            context.user_data["watchlist_active"] = False
+            await query.edit_message_text(
+_tr(_get_user_language(user), "🏠 MENÚ PRINCIPAL — Selecciona una opción abajo", "🏠 MAIN MENU — Select an option below"),
+                reply_markup=main_menu(language=_get_user_language(user), is_admin=admin),
+            )
+            return
+
+        if action in ["choose_plus_plan", "choose_premium_plan"]:
+            target_user_id = context.user_data.get("target_user_id")
+            if target_user_id:
+                loop = asyncio.get_event_loop()
+                if action == "choose_plus_plan":
+                    success = await loop.run_in_executor(
+                        None,
+                        partial(activate_plus, target_user_id)
+                    )
+                    plan_name = "PLUS"
+                else:
+                    success = await loop.run_in_executor(
+                        None,
+                        partial(activate_premium, target_user_id)
+                    )
+                    plan_name = "PREMIUM"
+
+                if success:
+                    await query.edit_message_text(f"✅ Plan {plan_name} activado correctamente por 30 días.")
+                else:
+                    await query.edit_message_text(f"❌ No se pudo activar el plan {plan_name}.")
+
+                context.user_data.pop("awaiting_plan_choice", None)
+                context.user_data.pop("awaiting_plan_days", None)
+                context.user_data.pop("custom_plan_type", None)
+                context.user_data.pop("target_user_id", None)
+            return
+
+        if action in ["choose_plus_plan_days", "choose_premium_plan_days"]:
+            target_user_id = context.user_data.get("target_user_id")
+            if not target_user_id:
+                await query.edit_message_text("❌ No hay un usuario seleccionado para activar plan por días.")
+                return
+
+            selected_plan = PLAN_PLUS if action == "choose_plus_plan_days" else PLAN_PREMIUM
+            plan_name = "PLUS" if selected_plan == PLAN_PLUS else "PREMIUM"
+            context.user_data["awaiting_plan_choice"] = False
+            context.user_data["awaiting_plan_days"] = True
+            context.user_data["custom_plan_type"] = selected_plan
+
+            await query.edit_message_text(
+                f"📅 Activación manual de PLAN {plan_name}\n\n"
+                f"Envía la cantidad de días para el usuario {target_user_id}.\n"
+                "Ejemplo: 7, 15, 30"
+            )
+            return
+
+    except Exception as e:
+        logger.error(f"Error en handle_menu: {e}", exc_info=True)
+        await query.edit_message_text(
+            "❌ Ocurrió un error inesperado.",
+            reply_markup=main_menu(language=_get_user_language(user)),
+        )
+
+# ======================================================
+# HANDLER REFERRALS
+# ======================================================
+
+async def handle_referrals(query, user):
+    language = _get_user_language(user)
+    try:
+        user_id = user["user_id"]
+        stats = get_user_referral_stats(user_id)
+        if not stats:
+            await query.edit_message_text(
+                _tr(language, "❌ No se pudo cargar la información de referidos.", "❌ Could not load referral information."),
+                reply_markup=back_to_menu(language=language),
+            )
+            return
+
+        ref_link = get_referral_link(user_id)
+        valid_total = stats.get("valid_referrals_total")
+        if valid_total is None:
+            valid_total = stats.get("current_plus", 0) + stats.get("current_premium", 0)
+        reward_days_total = stats.get("reward_days_total", valid_total * 7)
+
+        if language == "en":
+            message = (
+                "👥 REFERRAL SYSTEM\n\n"
+                f"🔗 Your referral link:\n{ref_link}\n\n"
+                "📊 STATS:\n"
+                f"• Total valid referrals: {valid_total}\n"
+                f"• PLUS referrals: {stats.get('plus_referred', 0)}\n"
+                f"• PREMIUM referrals: {stats.get('premium_referred', 0)}\n\n"
+                "🎁 REWARDS:\n"
+                f"• Accumulated referral days: +{reward_days_total} days\n"
+                "• Each valid referral adds +7 days to your current plan\n\n"
+                "📢 HOW TO REFER:\n"
+                "1. Share your link\n"
+                "2. They join the bot\n"
+                "3. They activate a plan\n\n"
+                "📌 CURRENT RULE:\n"
+                "• Each valid referral adds +7 days to your current plan\n"
+                "• Referral type (PLUS/PREMIUM) is shown only as a statistic\n"
+            )
+        else:
+            message = (
+                "👥 SISTEMA DE REFERIDOS\n\n"
+                f"🔗 Tu enlace de referido:\n{ref_link}\n\n"
+                "📊 ESTADÍSTICAS:\n"
+                f"• Referidos válidos totales: {valid_total}\n"
+                f"• Referidos PLUS: {stats.get('plus_referred', 0)}\n"
+                f"• Referidos PREMIUM: {stats.get('premium_referred', 0)}\n\n"
+                "🎁 RECOMPENSAS:\n"
+                f"• Días acumulados por referidos: +{reward_days_total} días\n"
+                "• Cada referido válido suma +7 días a tu plan actual\n\n"
+                "📢 CÓMO REFERIR:\n"
+                "1. Comparte tu enlace\n"
+                "2. Ellos entran al bot\n"
+                "3. Activan un plan\n\n"
+                "📌 REGLA ACTUAL:\n"
+                "• Cada referido válido agrega +7 días a tu plan actual\n"
+                "• El tipo de referido (PLUS/PREMIUM) se muestra solo como estadística\n"
+            )
+
+        keyboard = [
+            [InlineKeyboardButton(_tr(language, "📋 Copiar enlace", "📋 Copy link"), callback_data="copy_ref_code")],
+            [InlineKeyboardButton(_tr(language, "⬅️ Volver al menú", "⬅️ Back to menu"), callback_data="back_menu")],
+        ]
+        await query.edit_message_text(text=message, reply_markup=InlineKeyboardMarkup(keyboard))
+    except Exception as e:
+        logger.error(f"Error en handle_referrals: {e}", exc_info=True)
+        await query.edit_message_text(
+            _tr(language, "❌ Error al cargar información de referidos.", "❌ Error loading referral information."),
+            reply_markup=back_to_menu(language=language),
+        )
+async def handle_copy_ref_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        user_id = query.from_user.id
+        user = users_collection().find_one({"user_id": user_id}) or {}
+        language = _get_user_language(user)
+        ref_link = get_referral_link(user_id)
+
+        await query.edit_message_text(
+            text=_tr(language, f"📋 Tu enlace de referido es:\n\n{ref_link}\n\nCópialo y compártelo.", f"📋 Your referral link is:\n\n{ref_link}\n\nCopy it and share it."),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(_tr(language, "⬅️ Volver a referidos", "⬅️ Back to referrals"), callback_data="referrals")],
+                [InlineKeyboardButton(_tr(language, "🏠 Menú principal", "🏠 Main menu"), callback_data="back_menu")],
+            ]),
+        )
+    except Exception as e:
+        logger.error(f"Error en handle_copy_ref_code: {e}", exc_info=True)
+        await query.edit_message_text("❌ Error.")
+async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Maneja todos los mensajes de texto, decidiendo el flujo correcto"""
+
+    try:
+        user_id = update.effective_user.id
+        user = users_collection().find_one({"user_id": user_id})
+        if user and user.get("banned"):
+            await update.message.reply_text(_banned_message(_get_user_language(user)))
+            return
+    except Exception:
+        pass
+
+    # Watchlist: capturar símbolos escritos por el usuario
+    if context.user_data.get("watchlist_active"):
+        await handle_watchlist_text_input(update, context)
+        return
+
+    if context.user_data.get("awaiting_user_id") or context.user_data.get("awaiting_delete_user_id") or context.user_data.get("awaiting_plan_days"):
+        await handle_admin_text_input(update, context)
+        return
+    
+    if context.user_data.get("awaiting_exchange"):
+        await handle_exchange_text_input(update, context)
+        return
+
+    if context.user_data.get("awaiting_risk_field"):
+        await handle_risk_text_input(update, context)
+        return
+
+
+# ======================================================
+# WATCHLIST (MENSAJES DE TEXTO)
+# ======================================================
+
+async def handle_watchlist_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Mientras el usuario está en ⭐ Watchlist, cualquier texto se interpreta como símbolos
+    para añadir (ej: BTC, ETHUSDT, SOL/USDT, BTC,ETH,SOL).
+    """
+    try:
+        msg = update.effective_message
+        user = update.effective_user
+        if not msg or not user:
+            return
+
+        raw = (msg.text or "").strip()
+        if not raw:
+            return
+
+        lang = _get_user_language(users_collection().find_one({"user_id": int(user.id)}) or {})
+
+        from app.watchlist import normalize_many, add_symbol, get_symbols
+        from app.watchlist_ui import render_watchlist_view
+
+        symbols = normalize_many(raw)
+        if not symbols:
+            await msg.reply_text(_tr(lang, "❌ Símbolo inválido. Ej: BTCUSDT", "❌ Invalid symbol. Example: BTCUSDT"))
+            return
+
+        try:
+            udoc = users_collection().find_one({"user_id": int(user.id)}) or {}
+        except Exception:
+            udoc = {}
+        plan = (udoc.get("plan") or "FREE").upper()
+
+        last_res = None
+        for s in symbols:
+            last_res = add_symbol(int(user.id), s, plan=plan)
+
+        current = get_symbols(int(user.id))
+        text, kb = render_watchlist_view(current, lang=lang)
+
+        prefix = ""
+        if last_res:
+            if isinstance(last_res, tuple):
+                ok = bool(last_res[0])
+                msg_text = str(last_res[1]) if len(last_res) > 1 else ""
+                prefix = (msg_text + "\n\n") if msg_text else ""
+                if not ok and not msg_text:
+                    prefix = _tr(lang, "❌ No pude añadir ese símbolo.\n\n", "❌ I could not add that symbol.\n\n")
+            else:
+                msg_text = getattr(last_res, "message", "")
+                prefix = (msg_text + "\n\n") if msg_text else ""
+
+        await msg.reply_text(prefix + text, reply_markup=kb)
+
+    except Exception:
+        logging.exception("Watchlist text input error")
+        try:
+            lang = _get_user_language(users_collection().find_one({"user_id": int(update.effective_user.id)}) or {})
+            await update.effective_message.reply_text(_tr(lang, "❌ No pude añadir ese símbolo. Intenta de nuevo.", "❌ I could not add that symbol. Try again."))
+        except Exception:
+            pass
+
+# ======================================================
+# HANDLER REGISTRAR EXCHANGE (MENSAJE CONFIRMACIÓN)
+# ======================================================
+
+async def handle_exchange_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        context.user_data["awaiting_exchange"] = False
+        exchange_name = update.message.text.strip()
+        users_col = users_collection()
+        user_id = update.effective_user.id
+        
+        loop = asyncio.get_event_loop()
+        user = await loop.run_in_executor(
+            None,
+            lambda: users_col.find_one({"user_id": user_id})
+        )
+
+        if not user:
+            await update.message.reply_text("❌ Usuario no encontrado.")
+            return
+
+        await loop.run_in_executor(
+            None,
+            lambda: users_col.update_one(
+                {"user_id": user_id},
+                {"$set": {"exchange": exchange_name}}
+            )
+        )
+
+        await update.message.reply_text(
+            f"✅ Exchange confirmado: {exchange_name}\nMenú principal:",
+            reply_markup=main_menu(language=_get_user_language(user)),
+        )
+
+    except Exception as e:
+        logger.error(f"Error en handle_exchange_text: {e}", exc_info=True)
+        await update.message.reply_text("❌ Error al registrar exchange.")
+        context.user_data["awaiting_exchange"] = False
+
+
+
+async def _show_risk_management(query, user):
+    profile = get_user_risk_profile(user["user_id"])
+    plan = user.get("plan", PLAN_FREE)
+    language = _get_user_language(user)
+    await query.edit_message_text(
+        build_risk_management_text(profile, plan=plan, language=language),
+        reply_markup=build_risk_management_keyboard(plan=plan, language=language),
+    )
+
+
+async def _show_signal_detail(query, user, signal_id: str, source: str = "live"):
+    language = _get_user_language(user)
+    user_signal = get_user_signal_by_signal_id(user["user_id"], signal_id)
+    if not user_signal:
+        await query.edit_message_text(
+            _tr(language, "❌ No pude encontrar esa señal en la base de datos.", "❌ I could not find that signal in the database."),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="history" if source == "hist" else "view_signals")]]),
+        )
+        return
+
+    await query.edit_message_text(
+        build_signal_detail_text(user_signal, source=source, language=language),
+        reply_markup=build_signal_detail_keyboard(signal_id, source=source, plan=user.get("plan", PLAN_FREE), language=language),
+    )
+
+
+async def _show_signal_analysis(query, user, signal_id: str, source: str = "live"):
+    language = _get_user_language(user)
+    profile_name = _effective_risk_profile_name(user)
+    analysis = get_signal_analysis_for_user(user["user_id"], signal_id, profile_name=profile_name)
+    if not analysis:
+        await query.edit_message_text(
+            _tr(language, "❌ No pude cargar el análisis de esa señal.", "❌ I could not load the analysis for that signal."),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="history" if source == "hist" else "view_signals")]]),
+        )
+        return
+
+    plan = user.get("plan", PLAN_FREE)
+    await query.edit_message_text(
+        build_signal_analysis_text(analysis, plan=plan, language=language),
+        reply_markup=build_signal_analysis_keyboard(signal_id, source=source, plan=plan, language=language),
+    )
+
+
+
+
+async def _show_signal_tracking(query, user, signal_id: str, source: str = "live"):
+    language = _get_user_language(user)
+    profile_name = _effective_risk_profile_name(user)
+    payload = get_signal_tracking_for_user(user["user_id"], signal_id, profile_name=profile_name)
+    if not payload:
+        await query.edit_message_text(
+            _tr(language, "❌ No pude cargar el seguimiento de esa señal.", "❌ I could not load tracking for that signal."),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="history" if source == "hist" else "view_signals")]]),
+        )
+        return
+
+    await query.edit_message_text(
+        build_signal_tracking_text(payload, plan=user.get("plan", PLAN_FREE), language=language),
+        reply_markup=build_signal_tracking_keyboard(signal_id, source=source, plan=user.get("plan", PLAN_FREE), language=language),
+    )
+
+async def _show_risk_result(query, user, signal_id: str, source: str = "live", profile_name: str | None = None):
+    language = _get_user_language(user)
+    user_signal = get_user_signal_by_signal_id(user["user_id"], signal_id)
+    if not user_signal:
+        await query.edit_message_text(
+            _tr(language, "❌ No pude cargar la señal para calcular el riesgo.", "❌ I could not load the signal to calculate risk."),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="history" if source == "hist" else "view_signals")]]),
+        )
+        return
+
+    plan = user.get("plan", PLAN_FREE)
+    effective_profile = _effective_risk_profile_name(user, requested=profile_name)
+
+    try:
+        calc = build_risk_preview_from_user_signal(
+            user_signal,
+            risk_profile=get_user_risk_profile(user["user_id"]),
+            profile_name=effective_profile,
+        )
+    except RiskConfigurationError as exc:
+        back_cb = f"sig_detail:{signal_id}" if source == "live" else (f"hist_detail:{signal_id}" if source == "hist" else "risk_menu")
+        await query.edit_message_text(
+            _tr(language,
+                f"⚠️ No pude calcular el riesgo todavía.\n\n{exc}\n\nConfigura primero tu perfil de riesgo.",
+                f"⚠️ I could not calculate risk yet.\n\n{exc}\n\nPlease configure your risk profile first.",
+            ),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(_tr(language, "⚙️ Gestión de riesgo", "⚙️ Risk settings"), callback_data="risk_menu")],
+                [InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data=back_cb)],
+            ]),
+        )
+        return
+    except (SignalProfileError, SignalRiskError) as exc:
+        back_cb = f"sig_detail:{signal_id}" if source == "live" else (f"hist_detail:{signal_id}" if source == "hist" else "risk_menu")
+        rows = []
+        if signal_id and _risk_feature_tier(plan) == "full":
+            rows.append([InlineKeyboardButton("🧭 Elegir perfil", callback_data=f"risk_pf:{source}:{signal_id}")])
+        elif signal_id and _risk_feature_tier(plan) == "basic":
+            rows.append([InlineKeyboardButton("💼 Ver planes", callback_data="plans")])
+        rows.append([InlineKeyboardButton("⬅️ Volver", callback_data=back_cb)])
+        await query.edit_message_text(
+            _tr(language,
+                f"⚠️ No pude calcular el riesgo para esta señal.\n\n{exc}\n\nLa configuración del usuario sí está cargada, pero esta señal o el perfil elegido no son coherentes para el cálculo.",
+                f"⚠️ I could not calculate risk for this signal.\n\n{exc}\n\nYour risk profile is loaded, but this signal or the selected profile is inconsistent for calculation.",
+            ),
+            reply_markup=InlineKeyboardMarkup(rows),
+        )
+        return
+
+    await query.edit_message_text(
+        build_risk_result_text(calc, plan=plan, language=language),
+        reply_markup=build_risk_result_keyboard(signal_id, source=source, plan=plan, language=language),
+    )
+
+
+async def _handle_risk_dynamic_callbacks(query, context, user, action: str) -> bool:
+    user_id = user["user_id"]
+
+    if action == "risk_menu":
+        await _show_risk_management(query, user)
+        return True
+
+    if action == "risk_set_capital":
+        context.user_data["awaiting_risk_field"] = "capital_usdt"
+        await query.edit_message_text(
+            _tr(_get_user_language(user), RISK_INPUT_FIELDS["capital_usdt"]["prompt"], "💰 Send your available capital in USDT.\nExample: 500"),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(_tr(_get_user_language(user), "⬅️ Volver", "⬅️ Back"), callback_data="risk_menu")]]),
+        )
+        return True
+
+    if action == "risk_set_risk":
+        context.user_data["awaiting_risk_field"] = "risk_percent"
+        await query.edit_message_text(
+            _tr(_get_user_language(user), RISK_INPUT_FIELDS["risk_percent"]["prompt"], "🎯 Send the percentage you risk per trade.\nExample: 1 or 1.5"),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(_tr(_get_user_language(user), "⬅️ Volver", "⬅️ Back"), callback_data="risk_menu")]]),
+        )
+        return True
+
+    if action == "risk_set_fee":
+        context.user_data["awaiting_risk_field"] = "fee_percent_per_side"
+        await query.edit_message_text(
+            _tr(_get_user_language(user), RISK_INPUT_FIELDS["fee_percent_per_side"]["prompt"], "💸 Send the fee per side in percentage.\nExample: 0.02"),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(_tr(_get_user_language(user), "⬅️ Volver", "⬅️ Back"), callback_data="risk_menu")]]),
+        )
+        return True
+
+    if action == "risk_set_slippage":
+        context.user_data["awaiting_risk_field"] = "slippage_percent"
+        await query.edit_message_text(
+            _tr(_get_user_language(user), RISK_INPUT_FIELDS["slippage_percent"]["prompt"], "📉 Send the estimated slippage in percentage.\nExample: 0.03"),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(_tr(_get_user_language(user), "⬅️ Volver", "⬅️ Back"), callback_data="risk_menu")]]),
+        )
+        return True
+
+    if action == "risk_set_leverage":
+        context.user_data["awaiting_risk_field"] = "default_leverage"
+        await query.edit_message_text(
+            _tr(_get_user_language(user), RISK_INPUT_FIELDS["default_leverage"]["prompt"], "📈 Send the default leverage.\nExample: 20 or 35"),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(_tr(_get_user_language(user), "⬅️ Volver", "⬅️ Back"), callback_data="risk_menu")]]),
+        )
+        return True
+
+    if action == "risk_set_exchange":
+        profile = get_user_risk_profile(user_id)
+        await query.edit_message_text(
+            build_exchange_selection_text(profile.get("exchange"), language=_get_user_language(user)),
+            reply_markup=build_exchange_selection_keyboard(profile.get("exchange"), language=_get_user_language(user)),
+        )
+        return True
+
+    if action.startswith("risk_pick_exchange:"):
+        exchange = action.split(":", 1)[1]
+        current = get_user_risk_profile(user_id)
+        preset = get_exchange_fee_preset(exchange, current.get("entry_mode"))
+        save_user_risk_profile(
+            user_id,
+            {
+                "exchange": preset["exchange"],
+                "fee_percent_per_side": preset["fee_percent_per_side"],
+                "slippage_percent": preset["slippage_percent"],
+            },
+        )
+        updated = get_user_risk_profile(user_id)
+        await query.edit_message_text(
+            _tr(_get_user_language(user),
+                "✅ Exchange actualizado. También recargué fee y slippage estimados.\n\n",
+                "✅ Exchange updated. I also reloaded the estimated fee and slippage.\n\n",
+            ) + build_risk_management_text(updated, plan=user.get("plan", PLAN_FREE), language=_get_user_language(user)),
+            reply_markup=build_risk_management_keyboard(plan=user.get("plan", PLAN_FREE), language=_get_user_language(user)),
+        )
+        return True
+
+    if action == "risk_set_profile":
+        if _risk_feature_tier(user.get("plan", PLAN_FREE)) == "basic":
+            await query.edit_message_text(
+                _tr(_get_user_language(user),
+                    "🔒 Perfil base avanzado\n\nEn FREE la calculadora usa el perfil Moderado.\n\nSube a PLUS o PREMIUM para elegir Conservador, Moderado o Agresivo.",
+                    "🔒 Advanced default profile\n\nIn FREE, the calculator uses the Moderate profile.\n\nUpgrade to PLUS or PREMIUM to choose Conservative, Moderate, or Aggressive.",
+                ),
+                reply_markup=_build_risk_plan_upgrade_markup("risk_menu"),
+            )
+            return True
+
+        profile = get_user_risk_profile(user_id)
+        await query.edit_message_text(
+            build_default_profile_selection_text(profile.get("default_profile"), language=_get_user_language(user)),
+            reply_markup=build_default_profile_selection_keyboard(profile.get("default_profile"), language=_get_user_language(user)),
+        )
+        return True
+
+    if action.startswith("risk_pick_profile:"):
+        profile_name = action.split(":", 1)[1]
+        save_user_risk_profile(user_id, {"default_profile": profile_name})
+        updated = get_user_risk_profile(user_id)
+        await query.edit_message_text(
+            _tr(_get_user_language(user),
+                "✅ Perfil base actualizado.\n\n",
+                "✅ Default profile updated.\n\n",
+            ) + build_risk_management_text(updated, plan=user.get("plan", PLAN_FREE), language=_get_user_language(user)),
+            reply_markup=build_risk_management_keyboard(plan=user.get("plan", PLAN_FREE), language=_get_user_language(user)),
+        )
+        return True
+
+    if action == "risk_test":
+        recent = get_recent_user_signals_for_user(user_id, limit=1, active_only=False)
+        if not recent:
+            await query.edit_message_text(
+                _tr(_get_user_language(user), "📭 No tienes señales todavía para probar la calculadora.", "📭 You do not have any signals yet to test the calculator."),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(_tr(_get_user_language(user), "⬅️ Volver", "⬅️ Back"), callback_data="risk_menu")]]),
+            )
+            return True
+        signal_id = recent[0].get("signal_id") or str(recent[0].get("_id") or "")
+        await _show_risk_result(query, user, signal_id, source="test")
+        return True
+
+    if action.startswith("sig_detail:"):
+        signal_id = action.split(":", 1)[1]
+        await _show_signal_detail(query, user, signal_id, source="live")
+        return True
+
+    if action.startswith("hist_detail:"):
+        signal_id = action.split(":", 1)[1]
+        await _show_signal_detail(query, user, signal_id, source="hist")
+        return True
+
+    if action.startswith("risk_calc:"):
+        _, source, signal_id = action.split(":", 2)
+        await _show_risk_result(query, user, signal_id, source=source)
+        return True
+
+    if action.startswith("sig_an:"):
+        _, source, signal_id = action.split(":", 2)
+        await _show_signal_analysis(query, user, signal_id, source=source)
+        return True
+
+    if action.startswith("sig_trk:"):
+        _, source, signal_id = action.split(":", 2)
+        await _show_signal_tracking(query, user, signal_id, source=source)
+        return True
+
+    if action.startswith("risk_pf:"):
+        _, source, signal_id = action.split(":", 2)
+        current = get_user_risk_profile(user_id)
+        await query.edit_message_text(
+            build_signal_profile_picker_text(current.get("default_profile"), source=source, plan=user.get("plan", PLAN_FREE), language=_get_user_language(user)),
+            reply_markup=build_signal_profile_picker_keyboard(signal_id, source=source, selected_profile=current.get("default_profile"), plan=user.get("plan", PLAN_FREE), language=_get_user_language(user)),
+        )
+        return True
+
+    if action.startswith("risk_cp:"):
+        _, source, signal_id, profile_code = action.split(":", 3)
+        if _risk_feature_tier(user.get("plan", PLAN_FREE)) == "basic":
+            back_cb = f"sig_detail:{signal_id}" if source == "live" else (f"hist_detail:{signal_id}" if source == "hist" else "risk_menu")
+            await query.edit_message_text(
+                _tr(_get_user_language(user),
+                    "🔒 Cambio de perfil\n\nEn FREE la calculadora usa el perfil Moderado.\n\nSube a PLUS o PREMIUM para elegir otros perfiles.",
+                    "🔒 Profile change\n\nIn FREE, the calculator uses the Moderate profile.\n\nUpgrade to PLUS or PREMIUM to choose other profiles.",
+                ),
+                reply_markup=_build_risk_plan_upgrade_markup(back_cb),
+            )
+            return True
+        profile_name = PROFILE_CODE_TO_NAME.get(profile_code)
+        if not profile_name:
+            await query.answer(_tr(_get_user_language(user), "Perfil inválido", "Invalid profile"), show_alert=False)
+            return True
+        await _show_risk_result(query, user, signal_id, source=source, profile_name=profile_name)
+        return True
+
+    return False
+
+
+async def handle_risk_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    field = context.user_data.get("awaiting_risk_field")
+    if field not in RISK_INPUT_FIELDS:
+        return
+
+    raw = (update.effective_message.text or "").strip()
+    user_id = update.effective_user.id
+
+    try:
+        if field == "default_leverage":
+            value = float(raw.lower().replace("x", "").replace(",", "."))
+            if value < 1:
+                raise ValueError
+        else:
+            value = float(raw.replace(",", "."))
+            if field in {"capital_usdt", "risk_percent"} and value <= 0:
+                raise ValueError
+            if field in {"fee_percent_per_side", "slippage_percent"} and value < 0:
+                raise ValueError
+    except Exception:
+        lang = _get_user_language(users_collection().find_one({"user_id": user_id}) or {})
+        prompts_en = {
+            "capital_usdt": "💰 Send your available capital in USDT.\nExample: 500",
+            "risk_percent": "🎯 Send the percentage you risk per trade.\nExample: 1 or 1.5",
+            "fee_percent_per_side": "💸 Send the fee per side in percentage.\nExample: 0.02",
+            "slippage_percent": "📉 Send the estimated slippage in percentage.\nExample: 0.03",
+            "default_leverage": "📈 Send the default leverage.\nExample: 20 or 35",
+        }
+        labels_en = {
+            "capital_usdt": "capital",
+            "risk_percent": "risk per trade",
+            "fee_percent_per_side": "fee per side",
+            "slippage_percent": "slippage",
+            "default_leverage": "default leverage",
+        }
+        await update.effective_message.reply_text(
+            _tr(lang,
+                f"❌ Valor inválido para {RISK_INPUT_FIELDS[field]['label']}.\n\n{RISK_INPUT_FIELDS[field]['prompt']}",
+                f"❌ Invalid value for {labels_en.get(field, field)}.\n\n{prompts_en.get(field, '')}",
+            ),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(_tr(lang, "⬅️ Volver", "⬅️ Back"), callback_data="risk_menu")]]),
+        )
+        return
+
+    context.user_data["awaiting_risk_field"] = None
+    try:
+        profile = save_user_risk_profile(user_id, {field: value})
+    except RiskConfigurationError as exc:
+        lang = _get_user_language(users_collection().find_one({"user_id": user_id}) or {})
+        await update.effective_message.reply_text(_tr(lang, f"❌ {exc}", f"❌ {exc}"))
+        return
+
+    lang = _get_user_language(users_collection().find_one({"user_id": user_id}) or {})
+    await update.effective_message.reply_text(
+        _tr(lang, "✅ Ajuste guardado.\n\n", "✅ Setting saved.\n\n") + build_risk_management_text(profile, plan=(users_collection().find_one({"user_id": user_id}) or {}).get("plan", PLAN_FREE), language=lang),
+        reply_markup=build_risk_management_keyboard(plan=(users_collection().find_one({"user_id": user_id}) or {}).get("plan", PLAN_FREE), language=lang),
+    )
+
+
+# ======================================================
+# HANDLER VIEW SIGNALS (CORREGIDO SIN LÍMITE)
+# ======================================================
+
+async def handle_view_signals(query, user, admin, users_col):
+    language = _get_user_language(user)
+    try:
+        user_id = user["user_id"]
+        plan = PLAN_PREMIUM if admin else user.get("plan", PLAN_FREE)
+
+        if not admin and not (is_plan_active(user) or is_trial_active(user)):
+            await query.edit_message_text(
+                _tr(language, "⛔ Acceso expirado.", "⛔ Access expired."),
+                reply_markup=back_to_menu(language=language),
+            )
+            return
+
+        user_signals = get_latest_base_signal_for_plan(user_id, plan)
+        if not user_signals:
+            await query.edit_message_text(
+                _tr(language, "📭 No hay señales activas disponibles.", "📭 There are no active signals available."),
+                reply_markup=back_to_menu(language=language),
+            )
+            return
+
+        await query.edit_message_text(
+            build_active_signals_list_text(user_signals, language=language),
+            reply_markup=build_active_signals_list_keyboard(user_signals, language=language),
+        )
+
+        users_col.update_one({"user_id": user_id}, {"$set": update_timestamp(user)})
+
+    except Exception as e:
+        logger.error(f"Error en handle_view_signals: {e}", exc_info=True)
+        await query.edit_message_text(
+            _tr(language, "❌ Error al obtener señales.", "❌ Error while loading signals."),
+            reply_markup=back_to_menu(language=language),
+        )
+
+# ======================================================
+# HANDLER PLANS
+# ======================================================
+
+async def handle_plans(query, user):
+    language = _get_user_language(user)
+    plan = str(user.get("plan", PLAN_FREE)).upper()
+    user_id = user.get("user_id")
+    whatsapps = get_admin_whatsapps()
+
+    if language == "en":
+        message = (
+            "💼 HADES ALPHA PLANS\n\n"
+            f"📊 Your current plan: {plan}\n\n"
+            "🟢 FREE\n• Basic access to the bot\n• Limited features\n\n"
+            "🟡 PLUS\n• Full signals\n• Futures Radar\n• Movers\n• PRO Watchlist\n• History\n\n"
+            "🔴 PREMIUM\n• Everything in PLUS\n• 🔔 Premium alerts\n• Opportunities before the signal\n• Full ecosystem access\n\n"
+            "👇 Select the plan you want to activate:"
+        )
+        plus_msg = f"Hello, I want to activate the PLUS plan of HADES ALPHA. My Telegram ID is: {user_id}"
+        premium_msg = f"Hello, I want to activate the PREMIUM plan of HADES ALPHA. My Telegram ID is: {user_id}"
+    else:
+        message = (
+            "💼 PLANES HADES ALPHA\n\n"
+            f"📊 Tu plan actual: {plan}\n\n"
+            "🟢 FREE\n• Acceso básico al bot\n• Funciones limitadas\n\n"
+            "🟡 PLUS\n• Señales completas\n• Radar Futures\n• Movers\n• Watchlist PRO\n• Historial\n\n"
+            "🔴 PREMIUM\n• Todo lo de PLUS\n• 🔔 Alertas premium\n• Oportunidades antes de la señal\n• Acceso completo al ecosistema\n\n"
+            "👇 Selecciona el plan que deseas activar:"
+        )
+        plus_msg = f"Hola, quiero activar el plan PLUS de HADES ALPHA. Mi ID de Telegram es: {user_id}"
+        premium_msg = f"Hola, quiero activar el plan PREMIUM de HADES ALPHA. Mi ID de Telegram es: {user_id}"
+
+    keyboard_rows = []
+    if len(whatsapps) >= 1:
+        keyboard_rows.append([InlineKeyboardButton("💬 PLUS · Admin 1", url=_wa_link(whatsapps[0], plus_msg))])
+        keyboard_rows.append([InlineKeyboardButton("💬 PREMIUM · Admin 1", url=_wa_link(whatsapps[0], premium_msg))])
+    if len(whatsapps) >= 2:
+        keyboard_rows.append([InlineKeyboardButton("💬 PLUS · Admin 2", url=_wa_link(whatsapps[1], plus_msg))])
+        keyboard_rows.append([InlineKeyboardButton("💬 PREMIUM · Admin 2", url=_wa_link(whatsapps[1], premium_msg))])
+    if not keyboard_rows:
+        message += _tr(language, "\n\n⚠️ No hay contactos de WhatsApp configurados todavía.", "\n\n⚠️ No WhatsApp contacts are configured yet.")
+    keyboard_rows.append([InlineKeyboardButton(_tr(language, "⬅️ Volver al menú", "⬅️ Back to menu"), callback_data="back_menu")])
+    await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup(keyboard_rows))
+async def handle_my_account(query, user, admin=False):
+    language = _get_user_language(user)
+    now = datetime.utcnow()
+    plan = user.get("plan", PLAN_FREE)
+    plan_end = user.get("plan_end")
+    trial_end = user.get("trial_end")
+    days_left = None
+    expires_str = "—"
+    if plan_end:
+        try:
+            delta = plan_end - now; days_left = max(delta.days, 0); expires_str = plan_end.strftime("%Y-%m-%d %H:%M UTC")
+        except Exception:
+            pass
+    elif trial_end:
+        try:
+            delta = trial_end - now; days_left = max(delta.days, 0); expires_str = trial_end.strftime("%Y-%m-%d %H:%M UTC")
+        except Exception:
+            pass
+    risk_profile = get_user_risk_profile(user["user_id"])
+    if language == "en":
+        message = f"👤 MY ACCOUNT\n\nID: {user['user_id']}\nPlan: {str(plan).upper()}\n"
+        if days_left is not None:
+            message += f"📅 Days remaining: {days_left}\n⏳ Expires: {expires_str}\n"
+        message += "\nRisk configuration:\n"
+        message += f"• Capital: {risk_profile.get('capital_usdt', 0):,.2f} USDT\n"
+        message += f"• Risk/trade: {float(risk_profile.get('risk_percent') or 0):.2f}%\n"
+        message += f"• Default profile: {risk_profile.get('default_profile', 'moderado').title()}\n"
+        message += f"• Exchange: {str(risk_profile.get('exchange') or '—').upper()}\n"
+    else:
+        message = f"👤 MI CUENTA\n\nID: {user['user_id']}\nPlan: {str(plan).upper()}\n"
+        if days_left is not None:
+            message += f"📅 Días restantes: {days_left}\n⏳ Expira: {expires_str}\n"
+        message += "\nConfiguración de riesgo:\n"
+        message += f"• Capital: {risk_profile.get('capital_usdt', 0):,.2f} USDT\n"
+        message += f"• Riesgo/trade: {float(risk_profile.get('risk_percent') or 0):.2f}%\n"
+        message += f"• Perfil base: {risk_profile.get('default_profile', 'moderado').title()}\n"
+        message += f"• Exchange: {str(risk_profile.get('exchange') or '—').upper()}\n"
+    await query.edit_message_text(text=message, reply_markup=my_account_menu(language=language))
+async def handle_history(query, user):
+    language = _get_user_language(user)
+    plan = user.get("plan", PLAN_FREE)
+    if _plan_rank(plan) < _plan_rank(PLAN_PLUS):
+        await query.edit_message_text(
+            _tr(language, "🔒 🧾 Historial\n\nDisponible para *PLUS* y *PREMIUM*.", "🔒 🧾 History\n\nAvailable for *PLUS* and *PREMIUM*."),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(_tr(language, "💼 Planes", "💼 Plans"), callback_data="plans")],
+                [InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="back_menu")],
+            ]),
+            parse_mode="Markdown",
+        )
+        return
+
+    try:
+        docs = get_recent_user_signals_for_user(user["user_id"], limit=10, active_only=False)
+
+        if not docs:
+            try:
+                await query.edit_message_text(
+                    _tr(language, "🧾 HISTORIAL\n\nAún no tienes señales registradas en tu historial.", "🧾 HISTORY\n\nYou do not have any signals in your history yet."),
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton(_tr(language, "🔄 Actualizar", "🔄 Refresh"), callback_data="history_refresh")],
+                        [InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="back_menu")],
+                    ]),
+                )
+            except BadRequest as e:
+                if "Message is not modified" in str(e):
+                    await query.answer(_tr(language, "✅ Actualizado", "✅ Updated"), show_alert=False)
+                else:
+                    raise
+            return
+
+        try:
+            await query.edit_message_text(
+                build_history_list_text(docs, language=language),
+                reply_markup=build_history_list_keyboard(docs, language=language),
+            )
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                await query.answer(_tr(language, "✅ Actualizado", "✅ Updated"), show_alert=False)
+            else:
+                raise
+
+    except Exception as e:
+        logger.error(f"Error en handle_history: {e}", exc_info=True)
+        await query.edit_message_text(
+            _tr(language, "❌ No pude cargar tu historial ahora mismo.", "❌ I could not load your history right now."),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="back_menu")]]),
+        )
+
+
+async def handle_alerts(query, user):
+    language = _get_user_language(user)
+    plan = user.get("plan", PLAN_FREE)
+
+    if _plan_rank(plan) < _plan_rank(PLAN_PREMIUM):
+        await query.edit_message_text(
+            _tr(language, "🔒 ALERTAS PREMIUM\n\nDisponible solo para *PREMIUM*.", "🔒 PREMIUM ALERTS\n\nAvailable only for *PREMIUM*."),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(_tr(language, "💼 Planes", "💼 Plans"), callback_data="plans")],
+                [InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="back_menu")],
+            ]),
+            parse_mode="Markdown",
+        )
+        return
+
+    def _momentum_label(op):
+        raw = op.get("momentum")
+        if raw not in (None, "", "—", "-"):
+            return str(raw)
+        change = op.get("priceChangePercent", op.get("change_24h", op.get("change")))
+        try:
+            change = abs(float(change))
+            if change >= 6:
+                return _tr(language, "Muy alto", "Very high")
+            if change >= 3:
+                return _tr(language, "Alto", "High")
+            if change >= 1.5:
+                return _tr(language, "Medio", "Medium")
+            return _tr(language, "Bajo", "Low")
+        except Exception:
+            pass
+        try:
+            score_val = float(op.get("score", 0))
+            if score_val >= 95:
+                return _tr(language, "Muy alto", "Very high")
+            if score_val >= 85:
+                return _tr(language, "Alto", "High")
+            if score_val >= 75:
+                return _tr(language, "Medio", "Medium")
+            return _tr(language, "Bajo", "Low")
+        except Exception:
+            return _tr(language, "Medio", "Medium")
+
+    try:
+        opportunities = get_radar_opportunities()
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(_tr(language, "🔄 Actualizar", "🔄 Refresh"), callback_data="alerts_refresh")],
+            [InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="back_menu")],
+        ])
+        if not opportunities:
+            try:
+                await query.edit_message_text(
+                    _tr(language, "🔔 ALERTAS\n\nNo hay oportunidades detectadas ahora mismo.", "🔔 ALERTS\n\nNo opportunities detected right now."),
+                    reply_markup=keyboard,
+                )
+            except BadRequest as e:
+                if "Message is not modified" in str(e):
+                    await query.answer(_tr(language, "✅ Actualizado", "✅ Updated"), show_alert=False)
+                else:
+                    raise
+            return
+        lines = [_tr(language, "🔔 ALERTAS PREMIUM", "🔔 PREMIUM ALERTS"), ""]
+        for i, o in enumerate(opportunities[:5], 1):
+            symbol = o.get("symbol", "—")
+            score = o.get("score", "—")
+            momentum = _momentum_label(o)
+            lines.append(f"{i}. {symbol}")
+            lines.append(f"   Score: {score} | Momentum: {momentum}")
+            lines.append("")
+        try:
+            await query.edit_message_text("\n".join(lines).strip(), reply_markup=keyboard)
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                await query.answer(_tr(language, "✅ Actualizado", "✅ Updated"), show_alert=False)
+            else:
+                raise
+    except Exception as e:
+        logger.error(f"Error en alerts: {e}", exc_info=True)
+        await query.edit_message_text(
+            _tr(language, "❌ No pude cargar alertas ahora mismo.", "❌ I could not load alerts right now."),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="back_menu")]]),
+        )
+
+async def handle_support(query, user=None):
+    language = _get_user_language(user)
+    await query.edit_message_text(
+        f"{_tr(language, '📩 SOPORTE', '📩 SUPPORT')}\n\n{format_whatsapp_contacts()}",
+        reply_markup=back_to_menu(language=language),
+    )
+def _plan_rank(plan: str) -> int:
+    if plan == PLAN_PREMIUM:
+        return 3
+    if plan == PLAN_PLUS:
+        return 2
+    return 1
+
+
+
+def _risk_feature_tier(plan: str) -> str:
+    return "basic" if _plan_rank(plan) < _plan_rank(PLAN_PLUS) else "full"
+
+
+def _effective_risk_profile_name(user: dict, requested: str | None = None) -> str:
+    plan = user.get("plan", PLAN_FREE)
+    if _risk_feature_tier(plan) == "basic":
+        return "moderado"
+    requested_value = str(requested or "").strip().lower()
+    if requested_value in {"conservador", "moderado", "agresivo"}:
+        return requested_value
+    return get_user_risk_profile(user["user_id"]).get("default_profile") or "moderado"
+
+
+def _build_risk_plan_upgrade_markup(back_cb: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💼 Ver planes", callback_data="plans")],
+        [InlineKeyboardButton("⬅️ Volver", callback_data=back_cb)],
+    ])
+
+
+async def handle_locked_or_soon(query, user, feature: str, required_plan: str):
+    """Muestra mensaje de bloqueado por plan o "próximamente" si aún no está implementado."""
+    plan = user.get("plan", PLAN_FREE)
+
+    # Bloqueo por plan (si requiere PLUS/PREMIUM)
+    if _plan_rank(plan) < _plan_rank(required_plan):
+        await query.edit_message_text(
+            f"🔒 {feature}\n\nDisponible en plan {required_plan.upper()}.\n\nPulsa *Planes* para activar tu acceso.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("💼 Planes", callback_data="plans")],
+                [InlineKeyboardButton("⬅️ Volver", callback_data="back_menu")],
+            ]),
+            parse_mode="Markdown",
+        )
+        return
+
+    # Si el plan permite, pero aún no está implementado
+    await query.edit_message_text(
+        f"🚧 {feature}\n\nEsta función está en desarrollo y se activará muy pronto.",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Volver", callback_data="back_menu")],
+        ]),
+    )
+
+async def handle_performance(query, user):
+    language = _get_user_language(user)
+    plan = user.get("plan", PLAN_FREE)
+    admin = is_admin(user.get("user_id"))
+
+    if _plan_rank(plan) < _plan_rank(PLAN_PLUS):
+        await query.edit_message_text(
+            _tr(language, "🔒 🎯 Rendimiento\n\nDisponible para *PLUS* y *PREMIUM*.\n\nActiva tu plan para ver estadísticas reales del bot.", "🔒 🎯 Performance\n\nAvailable for *PLUS* and *PREMIUM*.\n\nActivate your plan to view real bot statistics."),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(_tr(language, "💼 Planes", "💼 Plans"), callback_data="plans")],
+                [InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="back_menu")],
+            ]),
+            parse_mode="Markdown",
+        )
+        return
+
+    snapshot = None
+    try:
+        if callable(get_performance_snapshot):
+            snapshot = get_performance_snapshot(short_days=7, long_days=30, worst_symbols_limit=3, worst_symbols_min_resolved=3)
+    except Exception as e:
+        logger.error(f"Error construyendo snapshot de performance: {e}", exc_info=True)
+        snapshot = None
+
+    if snapshot:
+        s7 = snapshot.get("summary_7d", {})
+        s30 = snapshot.get("summary_30d", {})
+        by_plan_30 = snapshot.get("by_plan_30d", {})
+        act7 = snapshot.get("activity_7d", {})
+        act30 = snapshot.get("activity_30d", {})
+        act_by_plan_30 = snapshot.get("activity_by_plan_30d", {})
+        by_score_30 = snapshot.get("by_score_30d", {})
+        diagnostics_30 = snapshot.get("diagnostics_30d", {})
+        direction_30 = snapshot.get("direction_30d", [])
+        worst_symbols_30 = snapshot.get("worst_symbols_30d", [])
+        setup_groups_30 = snapshot.get("setup_groups_30d", [])
+    else:
+        s7 = s30 = act7 = act30 = None
+        by_plan_30 = None
+        act_by_plan_30 = None
+        by_score_30 = None
+        diagnostics_30 = None
+        direction_30 = []
+        worst_symbols_30 = []
+        setup_groups_30 = []
+        if callable(get_last_days_stats):
+            s7 = get_last_days_stats(7)
+            s30 = get_last_days_stats(30)
+        else:
+            from app.statistics import get_weekly_stats, get_monthly_stats
+            s7 = get_weekly_stats(); s30 = get_monthly_stats()
+        if callable(get_last_days_stats_by_plan):
+            try: by_plan_30 = get_last_days_stats_by_plan(30)
+            except Exception: by_plan_30 = None
+        if callable(get_signal_activity_stats):
+            act7 = get_signal_activity_stats(7); act30 = get_signal_activity_stats(30)
+        if callable(get_signal_activity_stats_by_plan):
+            try: act_by_plan_30 = get_signal_activity_stats_by_plan(30)
+            except Exception: act_by_plan_30 = None
+        if callable(get_winrate_by_score):
+            try: by_score_30 = get_winrate_by_score(30)
+            except Exception: by_score_30 = None
+
+    def _fmt_stats(label_es, label_en, s):
+        total=s.get('total',0); won=s.get('won',0); lost=s.get('lost',0); expired=s.get('expired',0); resolved=s.get('resolved', won+lost); winrate=s.get('winrate',0.0)
+        label = label_en if language == 'en' else label_es
+        return f"**{label}**\n• {_tr(language,'Evaluadas','Evaluated')}: {total}\n• {_tr(language,'Ganadas','Won')}: {won} | {_tr(language,'Perdidas','Lost')}: {lost} | {_tr(language,'Expiradas','Expired')}: {expired}\n• {_tr(language,'Resueltas','Resolved')}: {resolved} | Win rate: {winrate}%\n"
+
+    def _plan_stats_line(title, emoji, key):
+        stats=(by_plan_30 or {}).get(key,{}) if by_plan_30 else {}
+        act=(act_by_plan_30 or {}).get(key,{}) if act_by_plan_30 else {}
+        return [f"{emoji} {title}", f"• {_tr(language,'Evaluadas','Evaluated')}: {stats.get('total',0)}", f"• {_tr(language,'Ganadas','Won')}: {stats.get('won',0)} | {_tr(language,'Perdidas','Lost')}: {stats.get('lost',0)} | {_tr(language,'Expiradas','Expired')}: {stats.get('expired',0)}", f"• {_tr(language,'Resueltas','Resolved')}: {stats.get('resolved', stats.get('won',0)+stats.get('lost',0))} | Win rate: {stats.get('winrate',0.0)}%", f"• {_tr(language,'Señales scanner','Scanner signals')}: {act.get('signals_total',0)} | {_tr(language,'Score prom (raw)','Avg score (raw)')}: {act.get('avg_score','—')}", ""]
+
+    parts=[f"🎯 **{_tr(language,'RENDIMIENTO DEL BOT','BOT PERFORMANCE')}**\n"]
+    parts.append(_fmt_stats('Últimos 7 días','Last 7 days', s7 or {}))
+    parts.append(_fmt_stats('Últimos 30 días','Last 30 days', s30 or {}))
+    if diagnostics_30:
+        parts.append(f"🧪 **{_tr(language,'Diagnóstico rápido (30D)','Quick diagnostics (30D)')}**")
+        parts.append(f"• {_tr(language,'Evaluadas','Evaluated')}: {diagnostics_30.get('evaluated_total',0)} | {_tr(language,'Resueltas','Resolved')}: {diagnostics_30.get('resolved_total',0)} | {_tr(language,'Pendientes','Pending')}: {diagnostics_30.get('pending_to_evaluate',0)}")
+        parts.append(f"• {_tr(language,'Loss rate resuelto','Resolved loss rate')}: {diagnostics_30.get('loss_rate',0.0)}% | {_tr(language,'Expiry rate total','Total expiry rate')}: {diagnostics_30.get('expiry_rate',0.0)}%")
+        parts.append(f"• {_tr(language,'Score prom resultados (raw)','Avg result score (raw)')}: {diagnostics_30.get('avg_result_score','—')} | {_tr(language,'Señales scanner','Scanner signals')}: {diagnostics_30.get('scanner_signals_total',0)}")
+        parts.append("")
+    parts.append(f"📊 **{_tr(language,'Rendimiento por plan (30D)','Performance by plan (30D)')}**")
+    parts.extend(_plan_stats_line('FREE','🟢','free'))
+    parts.extend(_plan_stats_line('PLUS','🟡','plus'))
+    parts.extend(_plan_stats_line('PREMIUM','🔴','premium'))
+    if direction_30:
+        parts.append(f"🧭 **{_tr(language,'Rendimiento por dirección (30D)','Performance by direction (30D)')}**")
+        for row in direction_30:
+            parts.append(f"• {row.get('direction','—')}: {row.get('winrate',0.0)}% ({row.get('resolved',0)}) | {_tr(language,'Losses','Losses')}: {row.get('lost',0)} | {_tr(language,'Expiradas','Expired')}: {row.get('expired',0)}")
+        parts.append("")
+    if worst_symbols_30:
+        parts.append(f"🚨 **{_tr(language,'Símbolos más débiles (30D)','Weakest symbols (30D)')}**")
+        for row in worst_symbols_30:
+            parts.append(f"• {row.get('symbol','—')}: {row.get('winrate',0.0)}% ({row.get('resolved',0)}) | {_tr(language,'Losses','Losses')}: {row.get('lost',0)} | Exp: {row.get('expired',0)}")
+        parts.append("")
+    if setup_groups_30:
+        parts.append(f"🧩 **{_tr(language,'Rendimiento por setup group (30D)','Performance by setup group (30D)')}**")
+        for row in setup_groups_30:
+            parts.append(f"• {str(row.get('setup_group','—')).upper()}: {row.get('winrate',0.0)}% ({row.get('resolved',0)})")
+        parts.append("")
+    parts.append(f"📈 **{_tr(language,'Actividad de señales (scanner)','Signal activity (scanner)')}**")
+    if act7: parts.append(f"• 7D: {act7.get('signals_total',0)} {_tr(language,'señales','signals')} | {_tr(language,'Score prom (raw)','Avg score (raw)')}: {act7.get('avg_score','—')}")
+    if act30: parts.append(f"• 30D: {act30.get('signals_total',0)} {_tr(language,'señales','signals')} | {_tr(language,'Score prom (raw)','Avg score (raw)')}: {act30.get('avg_score','—')}")
+    if by_score_30 and by_score_30.get('buckets',[]):
+        parts.append("")
+        parts.append(f"🏷️ **{_tr(language,'Win rate por raw score (30D)','Win rate by raw score (30D)')}**")
+        for row in by_score_30.get('buckets',[]): parts.append(f"• {row.get('label','—')}: {row.get('winrate',0.0)}% ({row.get('n',0)})")
+    if (s7 or {}).get('total',0)==0 and (act7 or {}).get('signals_total',0)>0:
+        parts.append("")
+        parts.append(_tr(language, 'ℹ️ Aún no hay resultados evaluados en la base de estadísticas. Las señales del scanner sí están registradas.', 'ℹ️ There are no evaluated results in the statistics database yet. Scanner signals are registered.'))
+    parts.append("")
+    parts.append(_tr(language, '⬅️ Usa *Volver* para regresar al menú.', '⬅️ Use *Back* to return to the menu.'))
+
+    buttons=[]
+    if admin: buttons.append([InlineKeyboardButton(_tr(language,'♻️ Restablecer todo','♻️ Reset all'), callback_data='reset_stats')])
+    buttons.append([InlineKeyboardButton(_tr(language,'⬅️ Volver','⬅️ Back'), callback_data='back_menu')])
+    await query.edit_message_text("\n".join(parts), reply_markup=InlineKeyboardMarkup(buttons), parse_mode='Markdown')
+
+async def handle_reset_stats(query, user, confirmed: bool = False):
+    language = _get_user_language(user)
+
+    if not is_admin(user.get("user_id")):
+        await query.answer(_tr(language, "No autorizado", "Unauthorized"), show_alert=True)
+        return
+
+    if not confirmed:
+        await query.edit_message_text(
+            _tr(
+                language,
+                "⚠️ Esta acción borrará todo el histórico de señales, señales por usuario y resultados.\n\n¿Confirmas el reinicio total?",
+                "⚠️ This action will delete the full history of base signals, user signals, and results.\n\nDo you confirm the full reset?",
+            ),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(_tr(language, "✅ Confirmar reinicio", "✅ Confirm reset"), callback_data="confirm_reset_stats")],
+                [InlineKeyboardButton(_tr(language, "❌ Cancelar", "❌ Cancel"), callback_data="cancel_reset_stats")],
+            ]),
+        )
+        return
+
+    try:
+        summary = reset_statistics(preserve_signals=False) if callable(reset_statistics) else None
+        logger.warning("[ADMIN] Reset total de estadísticas ejecutado | admin=%s summary=%s", user.get("user_id"), summary)
+
+        if isinstance(summary, dict):
+            deleted_results = summary.get("deleted_results", 0)
+            deleted_base = summary.get("deleted_base_signals", 0)
+            deleted_user = summary.get("deleted_user_signals", 0)
+            message = _tr(
+                language,
+                "♻️ Reinicio total ejecutado correctamente.\n\n"
+                f"• Señales base borradas: {deleted_base}\n"
+                f"• Señales usuario borradas: {deleted_user}\n"
+                f"• Resultados borrados: {deleted_results}\n\n"
+                "Se eliminó todo el histórico del módulo de señales y rendimiento.",
+                "♻️ Full reset executed successfully.\n\n"
+                f"• Base signals deleted: {deleted_base}\n"
+                f"• User signals deleted: {deleted_user}\n"
+                f"• Results deleted: {deleted_results}\n\n"
+                "All history for the signals and performance module was deleted.",
+            )
+        else:
+            message = _tr(
+                language,
+                "♻️ Reinicio total ejecutado correctamente.\n\nSe eliminó todo el histórico del módulo de señales y rendimiento.",
+                "♻️ Full reset executed successfully.\n\nAll history for the signals and performance module was deleted.",
+            )
+
+        await query.edit_message_text(
+            message,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(_tr(language, "🎯 Ver rendimiento", "🎯 View performance"), callback_data="performance")],
+                [InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="back_menu")],
+            ]),
+        )
+    except Exception as e:
+        logger.error(f"Error reseteando estadísticas: {e}", exc_info=True)
+        await query.edit_message_text(
+            _tr(language, "❌ No pude restablecer las estadísticas.", "❌ I could not reset the statistics."),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(_tr(language, "🎯 Ver rendimiento", "🎯 View performance"), callback_data="performance")],
+                [InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="back_menu")],
+            ]),
+        )
+
+async def handle_market(query, user):
+    """Estado de mercado futures: sesgo, régimen, volatilidad y lectura operativa."""
+    language = _get_user_language(user)
+    try:
+        text, keyboard = render_market_state(plan=(user.get("plan") or PLAN_FREE), language=language)
+        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            await query.answer(_tr(language, "✅ Actualizado", "✅ Updated"), show_alert=False)
+        else:
+            raise
+    except Exception as e:
+        logger.exception("Error construyendo estado de mercado: %s", e)
+        await query.edit_message_text(_tr(language, "⚠️ No pude cargar Mercado ahora mismo. Intenta de nuevo en unos segundos.", "⚠️ I could not load Market right now. Try again in a few seconds."), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="back_menu")]]))
+async def handle_movers(query, user):
+    """Muestra Top Movers 24h de Binance USDT-M Futures."""
+    language = _get_user_language(user)
+    try:
+        movers = get_top_movers_usdtm(limit=10)
+    except Exception as e:
+        logger.exception("Error obteniendo movers de Binance: %s", e)
+        await query.edit_message_text(_tr(language, "⚠️ No pude obtener los movers ahora mismo. Intenta de nuevo en unos segundos.", "⚠️ I could not get movers right now. Try again in a few seconds."), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="back_menu")]]))
+        return
+    if not movers:
+        await query.edit_message_text(_tr(language, "⚠️ No hay datos disponibles ahora mismo. Intenta de nuevo.", "⚠️ No data available right now. Try again."), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="back_menu")]]))
+        return
+    lines_out = [_tr(language, "🔥 TOP MOVERS FUTURES (24h)", "🔥 TOP FUTURES MOVERS (24h)"), "", "*Binance USDT-M*", f"🕒 {_tr(language, 'Actualizado', 'Updated')}: {datetime.utcnow():%H:%M:%S} UTC", ""]
+    for i, m in enumerate(movers, start=1):
+        symbol = str(m.get("symbol", ""))
+        try: change = float(m.get("priceChangePercent", 0.0))
+        except Exception: change = 0.0
+        try: qv = float(m.get("quoteVolume", 0.0))
+        except Exception: qv = 0.0
+        try: last = float(m.get("lastPrice", 0.0))
+        except Exception: last = 0.0
+        sign = "+" if change >= 0 else ""
+        lines_out.append(f"{i}. *{symbol}*  —  {sign}{change:.2f}%")
+        if last > 0:
+            lines_out.append(_tr(language, f"   Precio: `{last}`", f"   Price: `{last}`"))
+        if qv > 0:
+            lines_out.append(_tr(language, f"   Volumen (USDT): `{qv:,.0f}`", f"   Volume (USDT): `{qv:,.0f}`"))
+        lines_out.append("")
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(_tr(language, "🔄 Actualizar", "🔄 Refresh"), callback_data="movers")],[InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="back_menu")]])
+    await query.edit_message_text("\n".join(lines_out).strip(), reply_markup=keyboard, parse_mode="Markdown")
+async def handle_radar(query, user, plan: str):
+    language = _get_user_language(user)
+    try:
+        opportunities = get_radar_opportunities(limit=8)
+    except Exception as e:
+        logging.exception("Radar error")
+        text = _tr(language, "📡 RADAR FUTURES\n\n❌ No pude cargar el radar ahora mismo. Intenta de nuevo.", "📡 FUTURES RADAR\n\n❌ I could not load radar right now. Try again.")
+        if user and is_admin(user.get('user_id', 0)):
+            text += _tr(language, f"\n\n(Admin) Detalle: {type(e).__name__}", f"\n\n(Admin) Detail: {type(e).__name__}")
+        keyboard = [[InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="back_menu")]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    if not opportunities:
+        text = _tr(language, "📡 RADAR FUTURES\n\nNo pude cargar oportunidades ahora mismo. Intenta de nuevo.", "📡 FUTURES RADAR\n\nI could not load opportunities right now. Try again.")
+        keyboard = [[InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="back_menu")]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    lines_out = [_tr(language, "📡 RADAR FUTURES", "📡 FUTURES RADAR"), "", _tr(language, "Top oportunidades (USDT-M):", "Top opportunities (USDT-M):"), ""]
+    for idx, o in enumerate(opportunities, start=1):
+        sym = o["symbol"]; score = o["score"]; change = o["change_pct"]; vol = o["quote_volume"]; trades = o["trades"]; direction = o["direction"]
+        lines_out.append(f"{idx}️⃣ {sym} — {direction}")
+        lines_out.append(f"Score: {score} | 24h: {change:+.2f}%")
+        lines_out.append(_tr(language, f"Volumen 24h: ${vol:,.0f} | Trades: {trades:,.0f}", f"24h Volume: ${vol:,.0f} | Trades: {trades:,.0f}"))
+        if plan == PLAN_PREMIUM:
+            try:
+                fr = float(get_premium_index(sym).get("lastFundingRate", 0.0))
+            except Exception:
+                fr = 0.0
+            try:
+                oi_val = float(get_open_interest(sym).get("openInterest", 0.0))
+            except Exception:
+                oi_val = 0.0
+            lines_out.append(f"Funding: {fr:+.4f} | Open Interest: {oi_val:,.0f}")
+        lines_out.append("")
+    keyboard = [[InlineKeyboardButton(_tr(language, "🔄 Actualizar", "🔄 Refresh"), callback_data="radar_refresh"), InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="back_menu")]]
+    try:
+        await query.edit_message_text("\n".join(lines_out), reply_markup=InlineKeyboardMarkup(keyboard))
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            return
+        raise
+async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        target_user_id_str = update.message.text.strip()
+
+        if context.user_data.get("awaiting_plan_days"):
+            try:
+                days = int(target_user_id_str)
+            except ValueError:
+                await update.message.reply_text("❌ Días inválidos. Debe ser un número entero.")
+                return
+
+            if days <= 0:
+                await update.message.reply_text("❌ La cantidad de días debe ser mayor que 0.")
+                return
+
+            if days > 3650:
+                await update.message.reply_text("❌ La cantidad de días es demasiado alta.")
+                return
+
+            if not is_admin(update.effective_user.id):
+                await update.message.reply_text("❌ Permisos revocados.")
+                context.user_data["awaiting_plan_days"] = False
+                context.user_data.pop("custom_plan_type", None)
+                context.user_data.pop("target_user_id", None)
+                return
+
+            target_user_id = context.user_data.get("target_user_id")
+            custom_plan_type = context.user_data.get("custom_plan_type")
+            if not target_user_id or custom_plan_type not in {PLAN_PLUS, PLAN_PREMIUM}:
+                context.user_data["awaiting_plan_days"] = False
+                context.user_data.pop("custom_plan_type", None)
+                context.user_data.pop("target_user_id", None)
+                await update.message.reply_text("❌ No hay una activación personalizada pendiente.")
+                return
+
+            loop = asyncio.get_event_loop()
+            if custom_plan_type == PLAN_PLUS:
+                success = await loop.run_in_executor(None, partial(activate_plus, target_user_id, days))
+                plan_name = "PLUS"
+            else:
+                success = await loop.run_in_executor(None, partial(activate_premium, target_user_id, days))
+                plan_name = "PREMIUM"
+
+            context.user_data["awaiting_plan_days"] = False
+            context.user_data.pop("custom_plan_type", None)
+            context.user_data.pop("awaiting_plan_choice", None)
+            context.user_data.pop("target_user_id", None)
+
+            if success:
+                await update.message.reply_text(
+                    f"✅ Plan {plan_name} activado correctamente por {days} días."
+                )
+            else:
+                await update.message.reply_text(
+                    f"❌ No se pudo activar el plan {plan_name} por días."
+                )
+            return
+
+        if context.user_data.get("awaiting_delete_user_id"):
+            language = _get_user_language(users_collection().find_one({"user_id": update.effective_user.id}) or {})
+            try:
+                target_user_id = int(target_user_id_str)
+            except ValueError:
+                await update.message.reply_text(_tr(language, "❌ ID inválido.", "❌ Invalid ID."))
+                context.user_data["awaiting_delete_user_id"] = False
+                return
+
+            if not is_admin(update.effective_user.id):
+                await update.message.reply_text(_tr(language, "❌ Permisos revocados.", "❌ Permissions revoked."))
+                context.user_data["awaiting_delete_user_id"] = False
+                return
+
+            if target_user_id == update.effective_user.id:
+                context.user_data["awaiting_delete_user_id"] = False
+                await update.message.reply_text(_tr(language, "❌ No puedes banearte a ti mismo.", "❌ You cannot ban yourself."))
+                return
+
+            if is_admin(target_user_id):
+                context.user_data["awaiting_delete_user_id"] = False
+                await update.message.reply_text(_tr(language, "❌ No puedes banear a otro administrador.", "❌ You cannot ban another administrator."))
+                return
+
+            users_col = users_collection()
+            loop = asyncio.get_event_loop()
+            target_user = await loop.run_in_executor(
+                None,
+                lambda: users_col.find_one({"user_id": target_user_id})
+            )
+
+            if not target_user:
+                context.user_data["awaiting_delete_user_id"] = False
+                await update.message.reply_text(_tr(language, "❌ Usuario no encontrado.", "❌ User not found."))
+                return
+
+            context.user_data["awaiting_delete_user_id"] = False
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton(_tr(language, "✅ Confirmar bloqueo", "✅ Confirm block"), callback_data=f"confirm_delete_user:{target_user_id}")],
+                [InlineKeyboardButton(_tr(language, "❌ Cancelar", "❌ Cancel"), callback_data="cancel_admin_delete")],
+            ])
+            await update.message.reply_text(
+                _tr(
+                    language,
+                    f"⚠️ Vas a bloquear al usuario {target_user_id}. Esta acción revoca su acceso al bot y detiene señales futuras.\n\n¿Confirmas?",
+                    f"⚠️ You are about to block user {target_user_id}. This revokes bot access and stops future signals.\n\nDo you confirm?",
+                ),
+                reply_markup=keyboard,
+            )
+            return
+        logger.info(f"[ADMIN] Recibido User ID: {target_user_id_str}")
+        
+        try:
+            target_user_id = int(target_user_id_str)
+        except ValueError:
+            await update.message.reply_text("❌ ID inválido. Debe ser un número.")
+            context.user_data["awaiting_user_id"] = False
+            return
+
+        if not is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ Permisos revocados.")
+            context.user_data["awaiting_user_id"] = False
+            return
+
+        users_col = users_collection()
+        loop = asyncio.get_event_loop()
+        
+        target_user = await loop.run_in_executor(
+            None,
+            lambda: users_col.find_one({"user_id": target_user_id})
+        )
+        
+        if not target_user:
+            await update.message.reply_text("❌ Usuario no encontrado en la base de datos.")
+            context.user_data["awaiting_user_id"] = False
+            return
+
+        context.user_data["awaiting_user_id"] = False
+        context.user_data["awaiting_plan_choice"] = True
+        context.user_data["target_user_id"] = target_user_id
+
+        keyboard = [
+            [InlineKeyboardButton("🟡 Activar PLAN PLUS · 30 días", callback_data="choose_plus_plan")],
+            [InlineKeyboardButton("🔴 Activar PLAN PREMIUM · 30 días", callback_data="choose_premium_plan")],
+            [InlineKeyboardButton("🟡 Activar PLAN PLUS por días", callback_data="choose_plus_plan_days")],
+            [InlineKeyboardButton("🔴 Activar PLAN PREMIUM por días", callback_data="choose_premium_plan_days")],
+            [InlineKeyboardButton("❌ Cancelar", callback_data="back_menu")]
+        ]
+
+        await update.message.reply_text(
+            f"✅ Usuario encontrado: {target_user_id}\nSeleccione el plan a activar:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    except Exception as e:
+        logger.error(f"[ADMIN] Error en handle_admin_text: {e}", exc_info=True)
+        await update.message.reply_text("❌ Error procesando la solicitud.")
+        context.user_data["awaiting_user_id"] = False
+
+# ======================================================
+# REGISTRO DE HANDLERS
+# ======================================================
+
+def get_handlers():
+    return [
+        CommandHandler("start", handle_start),
+        CallbackQueryHandler(
+            handle_menu,
+            pattern=r"^(view_signals|radar|radar_refresh|performance|reset_stats|confirm_reset_stats|cancel_reset_stats|movers|market|market_refresh|watchlist|wl_refresh|wl_clear|wl_rm:[A-Z0-9]+|alerts|alerts_refresh|history|history_refresh|plans|my_account|referrals|support|admin_panel|admin_activate_plan|admin_delete_user|confirm_delete_user:[0-9]+|cancel_admin_delete|back_menu|choose_plus_plan|choose_premium_plan|choose_plus_plan_days|choose_premium_plan_days|register_exchange|risk_menu|risk_set_capital|risk_set_risk|risk_set_exchange|risk_set_fee|risk_set_slippage|risk_set_leverage|risk_set_profile|risk_pick_exchange:[a-z]+|risk_pick_profile:[a-z]+|risk_test|sig_detail:[A-Za-z0-9]+|hist_detail:[A-Za-z0-9]+|risk_calc:(live|hist|test):[A-Za-z0-9]+|sig_an:(live|hist|test):[A-Za-z0-9]+|sig_trk:(live|hist|test):[A-Za-z0-9]+|risk_pf:(live|hist|test):[A-Za-z0-9]+|risk_cp:(live|hist|test):[A-Za-z0-9]+:[cma]|lang:(es|en)|ob:[A-Za-z_]+(?::[A-Za-z_]+)?)$"
+        ),
+        CallbackQueryHandler(handle_copy_ref_code, pattern="^copy_ref_code$"),
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages),
+    ]
