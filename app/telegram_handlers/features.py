@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from html import escape
 from datetime import datetime
 from functools import partial
 
@@ -43,10 +42,6 @@ def _format_price(value: float) -> str:
     if float(value).is_integer():
         return str(int(value))
     return f"{value:.2f}".rstrip("0").rstrip(".")
-
-
-def _format_payment_amount(value: float) -> str:
-    return f"{float(value):.3f}"
 
 
 def _build_plan_selector_keyboard(language: str) -> InlineKeyboardMarkup:
@@ -201,48 +196,65 @@ async def handle_plan_duration(query, user, plan: str, days: int):
         await query.edit_message_text(text, reply_markup=_build_plan_duration_keyboard(language, plan))
         return
 
-    order = create_payment_order(user_id, plan, days)
-    price = _format_payment_amount(float(order["amount_usdt"]))
-    base_price = _format_price(float(order["base_price_usdt"]))
-    plan_name = get_plan_name(plan)
-    expires_at = order["expires_at"].strftime("%Y-%m-%d %H:%M UTC")
-    deposit_address = str(order["deposit_address"]).strip()
-    address_link = f'<a href="https://bscscan.com/address/{escape(deposit_address)}">{escape(deposit_address)}</a>'
+    try:
+        order = create_payment_order(user_id, plan, days)
+        price = _format_payment_amount(float(order["amount_usdt"]))
+        base_price = _format_price(float(order["base_price_usdt"]))
+        plan_name = get_plan_name(plan)
+        expires_at = order["expires_at"].strftime("%Y-%m-%d %H:%M UTC")
+        deposit_address = str(order["deposit_address"]).strip()
+        address_link = f'<a href="https://bscscan.com/address/{escape(deposit_address)}">{escape(deposit_address)}</a>'
 
-    if language == "en":
-        message = (
-            f"💳 {escape(plan_name)} · {days} days\n\n"
-            f"Base plan price: {base_price} USDT\n"
-            f"Your unique payment amount: <b>{price} USDT</b>\n"
-            f"Network: <b>BEP-20</b>\n"
-            f"Deposit address: {address_link}\n"
-            f"Copy only the address: <code>{escape(deposit_address)}</code>\n"
-            f"Order ID: <code>{escape(order['order_id'])}</code>\n"
-            f"Expires: {escape(expires_at)}\n\n"
-            "Send exactly that amount of USDT on BEP-20 to the address above.\n"
-            "Then tap Confirm payment to verify the transfer on-chain automatically."
+        if language == "en":
+            message = (
+                f"💳 {escape(plan_name)} · {days} days\n\n"
+                f"Base plan price: {base_price} USDT\n"
+                f"Your unique payment amount: <b>{price} USDT</b>\n"
+                f"Network: <b>BEP-20</b>\n"
+                f"Deposit address: {address_link}\n"
+                f"Copy only the address: <code>{escape(deposit_address)}</code>\n"
+                f"Order ID: <code>{escape(order['order_id'])}</code>\n"
+                f"Expires: {escape(expires_at)}\n\n"
+                "Send exactly that amount of USDT on BEP-20 to the address above.\n"
+                "Then tap Confirm payment to verify the transfer on-chain automatically."
+            )
+        else:
+            message = (
+                f"💳 {escape(plan_name)} · {days} días\n\n"
+                f"Precio base del plan: {base_price} USDT\n"
+                f"Tu monto único de pago: <b>{price} USDT</b>\n"
+                f"Red: <b>BEP-20</b>\n"
+                f"Dirección de depósito: {address_link}\n"
+                f"Copia solo la dirección: <code>{escape(deposit_address)}</code>\n"
+                f"ID de orden: <code>{escape(order['order_id'])}</code>\n"
+                f"Expira: {escape(expires_at)}\n\n"
+                "Envía exactamente ese monto de USDT por BEP-20 a la dirección anterior.\n"
+                "Luego toca Confirmar pago para verificar la transferencia on-chain automáticamente."
+            )
+
+        try:
+            await query.edit_message_text(
+                message,
+                reply_markup=_build_payment_order_keyboard(language, order["order_id"], plan),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            import re as _re
+            fallback = _re.sub(r"<[^>]+>", "", message)
+            await query.edit_message_text(
+                fallback,
+                reply_markup=_build_payment_order_keyboard(language, order["order_id"], plan),
+                disable_web_page_preview=True,
+            )
+    except Exception as exc:
+        logger.error("❌ Error creando orden de pago | user=%s plan=%s days=%s: %s", user_id, plan, days, exc, exc_info=True)
+        text = _tr(
+            language,
+            "❌ Ocurrió un error inesperado al generar la orden de pago. Inténtalo otra vez.",
+            "❌ An unexpected error occurred while generating the payment order. Please try again.",
         )
-    else:
-        message = (
-            f"💳 {escape(plan_name)} · {days} días\n\n"
-            f"Precio base del plan: {base_price} USDT\n"
-            f"Tu monto único de pago: <b>{price} USDT</b>\n"
-            f"Red: <b>BEP-20</b>\n"
-            f"Dirección de depósito: {address_link}\n"
-            f"Copia solo la dirección: <code>{escape(deposit_address)}</code>\n"
-            f"ID de orden: <code>{escape(order['order_id'])}</code>\n"
-            f"Expira: {escape(expires_at)}\n\n"
-            "Envía exactamente ese monto de USDT por BEP-20 a la dirección anterior.\n"
-            "Luego toca Confirmar pago para verificar la transferencia on-chain automáticamente."
-        )
-
-    await query.edit_message_text(
-        message,
-        reply_markup=_build_payment_order_keyboard(language, order["order_id"], plan),
-        parse_mode="HTML",
-        disable_web_page_preview=True,
-    )
-
+        await query.edit_message_text(text, reply_markup=_build_plan_duration_keyboard(language, plan))
 
 async def handle_confirm_payment(query, user, order_id: str):
     language = _get_user_language(user)
