@@ -73,20 +73,74 @@ def _score_value(result_doc: Dict[str, Any]) -> Optional[float]:
 
 
 
+def _resolution_key(result_doc: Dict[str, Any]) -> str:
+    resolution = str(result_doc.get("resolution") or "").lower().strip()
+    if resolution:
+        return resolution
+    outcome = str(result_doc.get("result") or "").lower().strip()
+    return outcome
+
+
+
+def _is_win_result(result_doc: Dict[str, Any]) -> bool:
+    return _resolution_key(result_doc) in {"tp1", "tp2", "won"}
+
+
+
+def _is_loss_result(result_doc: Dict[str, Any]) -> bool:
+    return _resolution_key(result_doc) in {"sl", "lost"}
+
+
+
+def _is_expired_clean(result_doc: Dict[str, Any]) -> bool:
+    return _resolution_key(result_doc) in {"expired", "expired_clean"}
+
+
+
+def _resolved_r_bucket(result_doc: Dict[str, Any]) -> Optional[str]:
+    resolution = _resolution_key(result_doc)
+    if resolution in {"tp1", "tp2", "sl"}:
+        return resolution
+    if resolution == "won":
+        r_multiple = _r_multiple_value(result_doc)
+        if r_multiple is None:
+            return "tp1"
+        return "tp2" if r_multiple >= 1.5 else "tp1"
+    if resolution == "lost":
+        return "sl"
+    return None
+
+
+
 def _r_multiple_value(result_doc: Dict[str, Any]) -> Optional[float]:
+    resolution = _resolution_key(result_doc)
+    if resolution == "tp1":
+        return 1.0
+    if resolution == "tp2":
+        return 2.0
+    if resolution == "sl":
+        return -1.0
+    if resolution in {"expired", "expired_clean"}:
+        return None
+
     value = _safe_float(result_doc.get("r_multiple"))
     if value is not None:
-        return value
-    outcome = result_doc.get("result")
+        outcome = str(result_doc.get("result") or "").lower().strip()
+        if outcome == "won":
+            return 2.0 if value >= 1.5 else 1.0
+        if outcome == "lost":
+            return -1.0
+        return None
+
+    outcome = str(result_doc.get("result") or "").lower().strip()
     if outcome == "lost":
         return -1.0
-    if outcome == "expired":
-        return 0.0
     if outcome == "won":
         reward_pct = _safe_float(result_doc.get("reward_pct"))
         risk_pct = _safe_float(result_doc.get("risk_pct"))
         if reward_pct is not None and risk_pct not in (None, 0):
-            return reward_pct / risk_pct
+            ratio = reward_pct / risk_pct
+            return 2.0 if ratio >= 1.5 else 1.0
     return None
 
 
@@ -102,7 +156,7 @@ def _max_drawdown_from_r(results: Iterable[Dict[str, Any]]) -> float:
     )
 
     for result in ordered:
-        if result.get("result") not in {"won", "lost"}:
+        if not (_is_win_result(result) or _is_loss_result(result)):
             continue
         r_multiple = _r_multiple_value(result)
         if r_multiple is None:
@@ -122,6 +176,9 @@ def _calculate_stats_from_results(results: Iterable[Dict[str, Any]]) -> Dict[str
     won = 0
     lost = 0
     expired = 0
+    tp1_hits = 0
+    tp2_hits = 0
+    sl_hits = 0
     gross_profit_r = 0.0
     gross_loss_r = 0.0
     total_r = 0.0
@@ -131,16 +188,21 @@ def _calculate_stats_from_results(results: Iterable[Dict[str, Any]]) -> Dict[str
 
     for row in rows:
         total += 1
-        outcome = row.get("result")
-        if outcome == "won":
+        bucket = _resolved_r_bucket(row)
+        if _is_win_result(row):
             won += 1
-        elif outcome == "lost":
+            if bucket == "tp2":
+                tp2_hits += 1
+            else:
+                tp1_hits += 1
+        elif _is_loss_result(row):
             lost += 1
-        elif outcome == "expired":
+            sl_hits += 1
+        elif _is_expired_clean(row):
             expired += 1
 
         r_multiple = _r_multiple_value(row)
-        if outcome in {"won", "lost"} and r_multiple is not None:
+        if (_is_win_result(row) or _is_loss_result(row)) and r_multiple is not None:
             resolved_r_count += 1
             total_r += r_multiple
             if r_multiple > 0:
@@ -175,6 +237,9 @@ def _calculate_stats_from_results(results: Iterable[Dict[str, Any]]) -> Dict[str
         "lost": lost,
         "expired": expired,
         "resolved": resolved,
+        "tp1": tp1_hits,
+        "tp2": tp2_hits,
+        "sl": sl_hits,
         "winrate": winrate,
         "loss_rate": loss_rate,
         "expiry_rate": expiry_rate,
