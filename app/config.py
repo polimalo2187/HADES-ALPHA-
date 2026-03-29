@@ -154,3 +154,41 @@ def get_payment_lookback_blocks() -> int:
 
 def is_payment_configuration_ready() -> bool:
     return bool(get_bsc_rpc_http_url() and get_payment_token_contract() and get_payment_receiver_address())
+
+
+# ======================================================
+# MINI APP / WEB APP
+# ======================================================
+
+def get_mini_app_url() -> str:
+    return os.getenv("MINI_APP_URL", "").strip()
+
+
+def is_mini_app_enabled() -> bool:
+    value = os.getenv("ENABLE_MINI_APP_SERVER", "false").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def get_mini_app_session_secret() -> str:
+    value = os.getenv("MINI_APP_SESSION_SECRET", "").strip()
+    if value:
+        return value
+    return os.getenv("BOT_TOKEN", "").strip()
+
+
+def get_mini_app_session_ttl_seconds() -> int:
+    try:
+        return max(int(os.getenv("MINI_APP_SESSION_TTL_SECONDS", "43200")), 900)
+    except Exception:
+        return 43200
+
+
+def get_mini_app_dev_user_id() -> int | None:
+    raw = os.getenv("MINI_APP_DEV_USER_ID", "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except Exception:
+        return None
+    return value if value > 0 else None
