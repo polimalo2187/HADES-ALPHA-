@@ -7,7 +7,6 @@ from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from pymongo import ReturnDocument
-from pymongo.errors import DuplicateKeyError
 
 from app.bep20_verifier import VerificationConfigError, verify_payment
 from app.config import (
@@ -19,6 +18,7 @@ from app.config import (
 )
 from app.database import payment_orders_collection, payment_verification_logs_collection
 from app.models import new_payment_order, new_payment_verification_log, update_timestamp, utcnow
+from app.observability import heartbeat, record_audit_event
 from app.plans import activate_plan_purchase, get_plan_price, normalize_plan
 
 logger = logging.getLogger(__name__)
@@ -31,12 +31,22 @@ def _quantize_amount(value: Decimal) -> Decimal:
     return value.quantize(_DECIMAL_QUANT, rounding=ROUND_DOWN)
 
 
-def _next_unique_amount(base_price: float) -> Decimal:
+def _next_unique_amount(base_price: float, user_id: int) -> Decimal:
     orders = payment_orders_collection()
     base = Decimal(str(base_price))
-    for suffix_int in range(1, 1000):
+    # Arranca desde un sufijo derivado del user_id para que usuarios distintos
+    # tiendan a recibir montos distintos desde el primer intento.
+    start_suffix = int(user_id) % 999
+    if start_suffix <= 0:
+        start_suffix = 1
+
+    for offset in range(0, 999):
+        suffix_int = ((start_suffix + offset - 1) % 999) + 1
         amount = _quantize_amount(base + (Decimal(suffix_int) / Decimal("1000")))
-        exists = orders.find_one({"amount_usdt": float(amount), "status": {"$in": list(OPEN_ORDER_STATUSES)}})
+        exists = orders.find_one({
+            "amount_usdt": float(amount),
+            "status": {"$in": list(OPEN_ORDER_STATUSES)},
+        })
         if not exists:
             return amount
     raise RuntimeError("No se pudo generar un monto único de pago")
@@ -52,7 +62,7 @@ def create_payment_order(user_id: int, plan: str, days: int) -> Dict[str, Any]:
 
     cancel_open_orders_for_user(user_id, reason="superseded_by_new_order")
 
-    amount = _next_unique_amount(base_price)
+    amount = _next_unique_amount(base_price, user_id)
     now = utcnow()
     order = new_payment_order(
         order_id=uuid4().hex[:12],
@@ -67,10 +77,9 @@ def create_payment_order(user_id: int, plan: str, days: int) -> Dict[str, Any]:
         deposit_address=get_payment_receiver_address(),
         expires_at=now + timedelta(minutes=get_payment_order_ttl_minutes()),
     )
-    # Avoid writing nullable fields that collide with sparse unique indexes
-    # (e.g. matched_tx_hash=None on new pending orders).
-    order = {k: v for k, v in order.items() if v is not None}
     payment_orders_collection().insert_one(order)
+    heartbeat("payments", status="ok", details={"stage": "order_created", "user_id": user_id, "order_id": order["order_id"]})
+    record_audit_event(event_type="payment_order_created", status="info", module="payments", user_id=user_id, order_id=order["order_id"], message="payment_order_created", metadata={"plan": plan, "days": days, "amount_usdt": float(amount)})
     logger.info("💳 Orden de pago creada | user=%s plan=%s days=%s amount=%s", user_id, plan, days, amount)
     return order
 
@@ -103,7 +112,10 @@ def cancel_payment_order(order_id: str, user_id: int) -> bool:
         {"order_id": str(order_id), "user_id": int(user_id), "status": {"$in": list(OPEN_ORDER_STATUSES)}},
         {"$set": {"status": "cancelled", "last_verification_reason": "cancelled_by_user", "updated_at": utcnow()}},
     )
-    return bool(result.modified_count)
+    cancelled = bool(result.modified_count)
+    if cancelled:
+        record_audit_event(event_type="payment_order_cancelled", status="info", module="payments", user_id=user_id, order_id=order_id, message="payment_order_cancelled")
+    return cancelled
 
 
 def _write_verification_log(order: Dict[str, Any], verification: Dict[str, Any]) -> None:
@@ -128,7 +140,10 @@ def expire_stale_payment_orders() -> int:
         {"status": {"$in": list(OPEN_ORDER_STATUSES)}, "expires_at": {"$lt": now}},
         {"$set": {"status": "expired", "last_verification_reason": "order_expired", "updated_at": now}},
     )
-    return int(result.modified_count or 0)
+    expired_count = int(result.modified_count or 0)
+    if expired_count:
+        heartbeat("payments", status="degraded", details={"expired_orders": expired_count})
+    return expired_count
 
 
 def confirm_payment_order(order_id: str, user_id: int) -> Dict[str, Any]:
@@ -153,11 +168,14 @@ def confirm_payment_order(order_id: str, user_id: int) -> Dict[str, Any]:
         {"order_id": order_id},
         {"$set": {"status": "verification_in_progress", "updated_at": utcnow()}, "$inc": {"verification_attempts": 1}},
     )
+    record_audit_event(event_type="payment_verification_started", status="info", module="payments", user_id=user_id, order_id=order_id, message="payment_verification_started")
     order = get_payment_order(order_id, user_id=user_id) or order
 
     try:
         verification = verify_payment(order)
     except VerificationConfigError as exc:
+        heartbeat("payments", status="error", details={"error": str(exc), "order_id": order_id})
+        record_audit_event(event_type="payment_verification_failed", status="error", module="payments", user_id=user_id, order_id=order_id, message=str(exc), metadata={"reason": "payment_config_missing"})
         logger.error("Configuración de pagos incompleta: %s", exc)
         payment_orders_collection().update_one(
             {"order_id": order_id},
@@ -165,6 +183,8 @@ def confirm_payment_order(order_id: str, user_id: int) -> Dict[str, Any]:
         )
         return {"ok": False, "reason": "payment_config_missing", "message": str(exc)}
     except Exception as exc:
+        heartbeat("payments", status="error", details={"error": str(exc), "order_id": order_id})
+        record_audit_event(event_type="payment_verification_failed", status="error", module="payments", user_id=user_id, order_id=order_id, message=str(exc), metadata={"reason": "verification_error"})
         logger.error("Error verificando pago %s: %s", order_id, exc, exc_info=True)
         payment_orders_collection().update_one(
             {"order_id": order_id},
@@ -173,6 +193,7 @@ def confirm_payment_order(order_id: str, user_id: int) -> Dict[str, Any]:
         return {"ok": False, "reason": "verification_error"}
 
     _write_verification_log(order, verification)
+    record_audit_event(event_type="payment_verification_result", status="info", module="payments", user_id=user_id, order_id=order_id, message=verification.get("reason"), metadata={"status": verification.get("status"), "confirmations": verification.get("confirmations"), "tx_hash": verification.get("tx_hash")})
 
     status = verification.get("status")
     if status == "not_found":
@@ -180,6 +201,7 @@ def confirm_payment_order(order_id: str, user_id: int) -> Dict[str, Any]:
             {"order_id": order_id},
             {"$set": {"status": "awaiting_payment", "last_verification_reason": verification.get("reason"), "updated_at": utcnow()}},
         )
+        heartbeat("payments", status="degraded", details={"order_id": order_id, "reason": verification.get("reason")})
         return {"ok": False, "reason": verification.get("reason"), "order": get_payment_order(order_id, user_id=user_id)}
 
     if status == "unconfirmed":
@@ -198,6 +220,7 @@ def confirm_payment_order(order_id: str, user_id: int) -> Dict[str, Any]:
                 }
             },
         )
+        heartbeat("payments", status="degraded", details={"order_id": order_id, "reason": verification.get("reason")})
         return {"ok": False, "reason": verification.get("reason"), "order": get_payment_order(order_id, user_id=user_id)}
 
     tx_hash = verification.get("tx_hash")
@@ -211,6 +234,7 @@ def confirm_payment_order(order_id: str, user_id: int) -> Dict[str, Any]:
             {"order_id": order_id},
             {"$set": {"status": "awaiting_payment", "last_verification_reason": "tx_already_used", "updated_at": utcnow()}},
         )
+        record_audit_event(event_type="payment_duplicate_tx", status="warning", module="payments", user_id=user_id, order_id=order_id, message="tx_already_used", metadata={"tx_hash": tx_hash})
         return {"ok": False, "reason": "tx_already_used"}
 
     success = activate_plan_purchase(
@@ -233,6 +257,8 @@ def confirm_payment_order(order_id: str, user_id: int) -> Dict[str, Any]:
             {"order_id": order_id},
             {"$set": {"status": "awaiting_payment", "last_verification_reason": "activation_failed", "updated_at": utcnow()}},
         )
+        heartbeat("payments", status="error", details={"order_id": order_id, "reason": "activation_failed"})
+        record_audit_event(event_type="payment_activation_failed", status="error", module="payments", user_id=user_id, order_id=order_id, message="activation_failed", metadata={"tx_hash": tx_hash})
         return {"ok": False, "reason": "activation_failed"}
 
     updated = payment_orders_collection().find_one_and_update(
@@ -252,5 +278,7 @@ def confirm_payment_order(order_id: str, user_id: int) -> Dict[str, Any]:
         },
         return_document=ReturnDocument.AFTER,
     )
+    heartbeat("payments", status="ok", details={"order_id": order_id, "tx_hash": tx_hash, "user_id": user_id})
+    record_audit_event(event_type="payment_confirmed", status="success", module="payments", user_id=user_id, order_id=order_id, message="payment_confirmed", metadata={"tx_hash": tx_hash, "amount_usdt": float(order["amount_usdt"]), "plan": order["plan"], "days": int(order["days"])})
     logger.info("✅ Pago confirmado y plan activado | user=%s order=%s tx=%s", user_id, order_id, tx_hash)
     return {"ok": True, "reason": "payment_confirmed", "order": updated, "verification": verification}
