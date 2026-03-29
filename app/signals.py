@@ -913,37 +913,47 @@ def _fetch_klines_between(symbol: str, start_dt: datetime, end_dt: datetime, int
     return all_rows
 
 
-def _evaluate_signal_result(signal_doc: Dict) -> str:
+def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
     direction = str(signal_doc.get("direction", "")).upper()
     symbol = signal_doc.get("symbol")
 
     stop_loss = signal_doc.get("stop_loss")
-    take_profits = signal_doc.get("take_profits", [])
+    take_profits = list(signal_doc.get("take_profits") or [])
 
     # Fallback por compatibilidad si existe estructura por perfiles
     if (stop_loss is None or not take_profits) and signal_doc.get("profiles"):
         conservador = signal_doc.get("profiles", {}).get("conservador", {})
         stop_loss = conservador.get("stop_loss")
-        take_profits = conservador.get("take_profits", [])
+        take_profits = list(conservador.get("take_profits") or [])
 
-    tp1 = take_profits[0] if take_profits else None
+    tp1 = take_profits[0] if len(take_profits) > 0 else None
+    tp2 = take_profits[1] if len(take_profits) > 1 else None
     created_at = signal_doc.get("created_at")
     valid_until = _get_evaluation_valid_until(signal_doc)
 
+    expired_clean = {
+        "result": "expired",
+        "resolution": "expired_clean",
+        "completed": False,
+        "tp_used": None,
+        "sl_used": stop_loss,
+    }
+
     if not symbol or not direction or stop_loss is None or tp1 is None or not created_at or not valid_until:
-        return "expired"
+        return expired_clean
 
     try:
         stop_loss = float(stop_loss)
         tp1 = float(tp1)
+        tp2 = float(tp2) if tp2 is not None else None
     except Exception:
-        return "expired"
+        return expired_clean
 
     try:
         klines = _fetch_klines_between(symbol, created_at, valid_until, interval="1m")
     except Exception as e:
         logger.error(f"❌ Error descargando velas para evaluar {symbol}: {e}")
-        return "expired"
+        return expired_clean
 
     for row in klines:
         try:
@@ -953,29 +963,82 @@ def _evaluate_signal_result(signal_doc: Dict) -> str:
             continue
 
         if direction == "LONG":
-            if low <= stop_loss and high >= tp1:
-                return "lost"
+            tp_hit = (tp2 is not None and high >= tp2) or high >= tp1
+            if low <= stop_loss and tp_hit:
+                return {
+                    "result": "lost",
+                    "resolution": "sl",
+                    "completed": True,
+                    "tp_used": None,
+                    "sl_used": stop_loss,
+                }
+            if tp2 is not None and high >= tp2:
+                return {
+                    "result": "won",
+                    "resolution": "tp2",
+                    "completed": True,
+                    "tp_used": tp2,
+                    "sl_used": stop_loss,
+                }
             if high >= tp1:
-                return "won"
+                return {
+                    "result": "won",
+                    "resolution": "tp1",
+                    "completed": True,
+                    "tp_used": tp1,
+                    "sl_used": stop_loss,
+                }
             if low <= stop_loss:
-                return "lost"
+                return {
+                    "result": "lost",
+                    "resolution": "sl",
+                    "completed": True,
+                    "tp_used": None,
+                    "sl_used": stop_loss,
+                }
 
         elif direction == "SHORT":
-            if high >= stop_loss and low <= tp1:
-                return "lost"
+            tp_hit = (tp2 is not None and low <= tp2) or low <= tp1
+            if high >= stop_loss and tp_hit:
+                return {
+                    "result": "lost",
+                    "resolution": "sl",
+                    "completed": True,
+                    "tp_used": None,
+                    "sl_used": stop_loss,
+                }
+            if tp2 is not None and low <= tp2:
+                return {
+                    "result": "won",
+                    "resolution": "tp2",
+                    "completed": True,
+                    "tp_used": tp2,
+                    "sl_used": stop_loss,
+                }
             if low <= tp1:
-                return "won"
+                return {
+                    "result": "won",
+                    "resolution": "tp1",
+                    "completed": True,
+                    "tp_used": tp1,
+                    "sl_used": stop_loss,
+                }
             if high >= stop_loss:
-                return "lost"
+                return {
+                    "result": "lost",
+                    "resolution": "sl",
+                    "completed": True,
+                    "tp_used": None,
+                    "sl_used": stop_loss,
+                }
 
-    return "expired"
+    return expired_clean
 
 
-def _result_r_metrics(signal_doc: Dict, result: str) -> Dict[str, Optional[float]]:
+def _result_r_metrics(signal_doc: Dict, evaluation: Dict[str, Any]) -> Dict[str, Optional[float]]:
     try:
         entry_price = float(signal_doc.get("entry_price"))
         stop_loss = float(signal_doc.get("stop_loss"))
-        take_profits = [float(v) for v in (signal_doc.get("take_profits") or []) if v is not None]
     except Exception:
         return {
             "entry_price": None,
@@ -993,17 +1056,22 @@ def _result_r_metrics(signal_doc: Dict, result: str) -> Dict[str, Optional[float
         }
 
     risk_pct = abs(entry_price - stop_loss) / entry_price if stop_loss is not None else None
-    tp1 = take_profits[0] if take_profits else None
-    reward_pct = abs(tp1 - entry_price) / entry_price if tp1 is not None else None
+    tp_used = evaluation.get("tp_used")
+    reward_pct = None
+    if tp_used is not None:
+        try:
+            reward_pct = abs(float(tp_used) - entry_price) / entry_price
+        except Exception:
+            reward_pct = None
 
+    resolution = str(evaluation.get("resolution") or "").lower()
     r_multiple = None
-    if risk_pct and risk_pct > 0:
-        if result == "won" and reward_pct is not None:
-            r_multiple = round(reward_pct / risk_pct, 4)
-        elif result == "lost":
-            r_multiple = -1.0
-        elif result == "expired":
-            r_multiple = 0.0
+    if resolution == "tp1":
+        r_multiple = 1.0
+    elif resolution == "tp2":
+        r_multiple = 2.0
+    elif resolution == "sl":
+        r_multiple = -1.0
 
     return {
         "entry_price": round(entry_price, 8),
@@ -1040,12 +1108,13 @@ def evaluate_expired_signals(limit: int = 100) -> int:
 
     for s in pending:
         try:
-            result = _evaluate_signal_result(s)
+            evaluation = _evaluate_signal_result(s)
+            result = evaluation.get("result", "expired")
             evaluated_at = datetime.utcnow()
 
             evaluation_valid_until = _get_evaluation_valid_until(s)
 
-            metrics = _result_r_metrics(s, result)
+            metrics = _result_r_metrics(s, evaluation)
             created_at = s.get("created_at")
             resolution_minutes = None
             if isinstance(created_at, datetime):
@@ -1066,8 +1135,8 @@ def evaluate_expired_signals(limit: int = 100) -> int:
                 evaluated_profile="conservador",
                 evaluation_scope="base",
                 evaluation_scope_version=s.get("evaluation_scope_version", MARKET_EVALUATION_VERSION),
-                tp_used=(s.get("take_profits") or [None])[0],
-                sl_used=s.get("stop_loss"),
+                tp_used=evaluation.get("tp_used"),
+                sl_used=evaluation.get("sl_used", s.get("stop_loss")),
                 entry_price=metrics.get("entry_price"),
                 risk_pct=metrics.get("risk_pct"),
                 reward_pct=metrics.get("reward_pct"),
@@ -1082,7 +1151,19 @@ def evaluate_expired_signals(limit: int = 100) -> int:
             result_doc["evaluated_at"] = evaluated_at
 
             insert_result = signal_results_collection().insert_one(result_doc)
+            result_doc["resolution"] = evaluation.get("resolution")
+            result_doc["completed"] = bool(evaluation.get("completed"))
+            result_doc["completed_at_level"] = evaluation.get("resolution")
             result_doc["_id"] = insert_result.inserted_id
+
+            signal_results_collection().update_one(
+                {"_id": result_doc["_id"]},
+                {"$set": {
+                    "resolution": result_doc["resolution"],
+                    "completed": result_doc["completed"],
+                    "completed_at_level": result_doc["completed_at_level"],
+                }}
+            )
 
             signals_collection().update_one(
                 {"_id": s["_id"]},
@@ -1090,6 +1171,8 @@ def evaluate_expired_signals(limit: int = 100) -> int:
                     "$set": {
                         "evaluated": True,
                         "result": result,
+                        "resolution": evaluation.get("resolution"),
+                        "completed": bool(evaluation.get("completed")),
                         "evaluated_at": evaluated_at,
                         "evaluated_profile": "conservador",
                         "evaluation_scope_version": s.get("evaluation_scope_version", MARKET_EVALUATION_VERSION),
