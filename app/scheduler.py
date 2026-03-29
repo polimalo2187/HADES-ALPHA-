@@ -10,6 +10,7 @@ from app.plans import PLAN_FREE, SUBSCRIPTION_STATUS_EXPIRED
 from app.stats_engine import run_statistics_cycle
 from app.database import signal_history_collection, signal_results_collection
 from app.history_service import backfill_signal_history
+from app.observability import heartbeat, log_event, record_audit_event
 from app.payment_service import expire_stale_payment_orders
 
 logger = logging.getLogger(__name__)
@@ -39,22 +40,19 @@ async def check_expired_plans() -> int:
     """
     users_col = users_collection()
     now = datetime.utcnow()
-    
-    # Consulta optimizada: solo usuarios con plan activo que hayan expirado
+
     expired_users = users_col.find(
         {
             "plan_end": {"$lt": now, "$ne": None},
-            "plan": {"$ne": PLAN_FREE}  # Solo usuarios con plan activo
+            "plan": {"$ne": PLAN_FREE}
         }
     ).limit(BATCH_SIZE)
-    
+
     processed_count = 0
-    
+
     for user in expired_users:
         try:
             user_id = user["user_id"]
-            
-            # Actualizar a FREE
             result = users_col.update_one(
                 {"user_id": user_id},
                 {
@@ -67,14 +65,14 @@ async def check_expired_plans() -> int:
                     }
                 }
             )
-            
+
             if result.modified_count > 0:
                 logger.info(f"📋 Plan expirado para usuario {user_id}, actualizado a FREE")
                 processed_count += 1
-                
+
         except Exception as e:
             logger.error(f"❌ Error procesando usuario {user.get('user_id', 'unknown')}: {e}")
-    
+
     return processed_count
 
 # ======================================================
@@ -112,36 +110,48 @@ async def cleanup_old_signals():
                 result_results.deleted_count,
                 result_history.deleted_count,
             )
+            heartbeat(
+                "scheduler",
+                status="ok",
+                details={
+                    "cleanup_base": result_base.deleted_count,
+                    "cleanup_user": result_user.deleted_count,
+                    "cleanup_results": result_results.deleted_count,
+                    "cleanup_history": result_history.deleted_count,
+                },
+            )
 
     except Exception as e:
         logger.error(f"❌ Error en cleanup_old_signals: {e}")
+        heartbeat("scheduler", status="degraded", details={"cleanup_error": str(e)})
+
 
 async def check_database_health():
     """Verifica la salud de la base de datos."""
     try:
         from app.database import get_client
-        
+
         client = get_client()
-        
-        # Verificar conexión
         client.admin.command('ping')
-        
-        # Verificar colecciones principales (las críticas)
+
         db = client.get_default_database()
         collections = db.list_collection_names()
-        
-        required_collections = ['users', 'signals', 'user_signals']
+
+        required_collections = ['users', 'signals', 'user_signals', 'payment_orders']
         missing = [col for col in required_collections if col not in collections]
-        
+
         if missing:
             logger.warning(f"⚠️ Colecciones faltantes: {missing}")
-        else:
-            logger.debug("✅ Base de datos saludable")
-            
+            heartbeat("database", status="degraded", details={"missing_collections": missing})
+            return False
+
+        heartbeat("database", status="ok", details={"collections": len(collections)})
+        logger.debug("✅ Base de datos saludable")
         return True
-        
+
     except Exception as e:
         logger.error(f"❌ Error en check_database_health: {e}")
+        heartbeat("database", status="error", details={"error": str(e)})
         return False
 
 # ======================================================
@@ -151,14 +161,14 @@ async def check_database_health():
 async def scheduler_loop():
     """Loop principal del scheduler - SIN USAR BOT para evitar errores de event loop."""
     logger.info("⏰ Scheduler iniciado correctamente (modo seguro)")
-    
+    heartbeat("scheduler", status="ok", details={"stage": "started"})
+
     iteration = 0
     errors_in_row = 0
     max_errors_in_row = 5
-    
+
     while True:
         try:
-            # Tarea 1: Revisar planes expirados (sin notificaciones por ahora)
             expired_orders = expire_stale_payment_orders()
             if expired_orders > 0:
                 logger.info("💳 Órdenes de pago expiradas | count=%s", expired_orders)
@@ -166,50 +176,62 @@ async def scheduler_loop():
             processed = await check_expired_plans()
             if processed > 0:
                 logger.info(f"📋 Procesados {processed} planes expirados (actualizados a FREE)")
-            
-            # Tarea 2: evaluación automática y snapshots de estadísticas.
-            # Se ejecuta siempre para que el módulo de rendimiento no dependa
-            # de que un usuario abra una pantalla.
+                record_audit_event(
+                    event_type="expired_plans_processed",
+                    status="info",
+                    module="scheduler",
+                    message=f"processed={processed}",
+                    metadata={"processed": processed},
+                )
+
             refresh_now = (iteration % STATS_REFRESH_EVERY_LOOPS == 0)
             if refresh_now:
                 run_statistics_cycle(evaluation_limit=EVALUATION_LIMIT)
+                heartbeat("statistics", status="ok", details={"mode": "refresh_cycle", "iteration": iteration})
             else:
                 from app.signals import evaluate_expired_signals
                 evaluated = evaluate_expired_signals(limit=EVALUATION_LIMIT)
                 if evaluated:
                     logger.info("📊 Evaluación automática completada | evaluated=%s", evaluated)
+                heartbeat("statistics", status="ok", details={"mode": "evaluate_only", "iteration": iteration, "evaluated": evaluated or 0})
 
             if iteration % HISTORY_BACKFILL_EVERY_LOOPS == 0:
                 backfilled = backfill_signal_history(limit=EVALUATION_LIMIT)
                 if backfilled:
                     logger.info("🧾 Backfill de histórico ejecutado | processed=%s", backfilled)
+                heartbeat("history", status="ok", details={"iteration": iteration, "backfilled": backfilled or 0})
 
-            # Tarea 3: Cada hora: limpiar señales antiguas (5 min * 12 = 60 min)
             if iteration % 12 == 0:
                 await cleanup_old_signals()
 
-            # Tarea 4: Cada 6 horas: verificar salud de base de datos (5 min * 72 = 6 horas)
             if iteration % 72 == 0:
                 await check_database_health()
 
             iteration += 1
-            errors_in_row = 0  # Reset error counter
-            
-            # Esperar intervalo
+            errors_in_row = 0
+            heartbeat("scheduler", status="ok", details={"iteration": iteration, "interval_seconds": CHECK_INTERVAL_SECONDS})
+
             await asyncio.sleep(CHECK_INTERVAL_SECONDS)
-            
+
         except asyncio.CancelledError:
             logger.info("🛑 Scheduler cancelado")
+            heartbeat("scheduler", status="stopped", details={"reason": "cancelled"})
             break
         except Exception as e:
             errors_in_row += 1
             logger.error(f"❌ Error en scheduler loop (error #{errors_in_row}): {e}", exc_info=True)
-            
+            record_audit_event(
+                event_type="scheduler_loop_error",
+                status="error",
+                module="scheduler",
+                message=str(e),
+                metadata={"errors_in_row": errors_in_row},
+            )
+            heartbeat("scheduler", status="error", details={"error": str(e), "errors_in_row": errors_in_row})
+
             if errors_in_row >= max_errors_in_row:
                 logger.critical(f"🚨 Demasiados errores consecutivos ({errors_in_row}), reiniciando scheduler...")
-                # Pequeño delay antes de continuar
                 await asyncio.sleep(60)
                 errors_in_row = 0
             else:
-                # Esperar antes de reintentar
                 await asyncio.sleep(30)
