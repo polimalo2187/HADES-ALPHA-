@@ -7,12 +7,13 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
 
 from app.binance_api import get_open_interest, get_premium_index, get_radar_opportunities, get_top_movers_usdtm
-from app.config import get_admin_whatsapps, is_admin
+from app.config import is_admin, is_payment_configuration_ready
 from app.database import users_collection
 from app.market_ui import render_market_state
 from app.menus import back_to_menu, my_account_menu, main_menu
 from app.models import is_plan_active, is_trial_active, update_timestamp
 from app.plans import PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM, activate_plus, activate_premium, get_plan_catalog, get_plan_name, get_plan_price
+from app.payment_service import cancel_payment_order, confirm_payment_order, create_payment_order
 from app.risk import get_user_risk_profile
 from app.risk_ui import (
     build_active_signals_list_keyboard,
@@ -32,7 +33,7 @@ from app.statistics import (
     reset_statistics,
 )
 from app.i18n import language_label, tr
-from app.telegram_handlers.common import _get_user_language, _plan_rank, _tr, _wa_link, build_language_settings_keyboard, format_whatsapp_contacts
+from app.telegram_handlers.common import _get_user_language, _plan_rank, _tr, build_language_settings_keyboard, format_whatsapp_contacts
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,16 @@ def _build_plan_duration_keyboard(language: str, plan: str) -> InlineKeyboardMar
         rows.append([InlineKeyboardButton(label, callback_data=f"plan_duration:{plan}:{int(option['days'])}")])
     rows.append([InlineKeyboardButton(_tr(language, "⬅️ Volver a planes", "⬅️ Back to plans"), callback_data="plans")])
     return InlineKeyboardMarkup(rows)
+
+
+def _build_payment_order_keyboard(language: str, order_id: str, plan: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(_tr(language, "✅ Confirmar pago", "✅ Confirm payment"), callback_data=f"confirm_payment:{order_id}")],
+        [InlineKeyboardButton(_tr(language, "🔁 Verificar otra vez", "🔁 Check again"), callback_data=f"confirm_payment:{order_id}")],
+        [InlineKeyboardButton(_tr(language, "❌ Cancelar orden", "❌ Cancel order"), callback_data=f"cancel_payment:{order_id}")],
+        [InlineKeyboardButton(_tr(language, "⬅️ Volver a subplanes", "⬅️ Back to subplans"), callback_data=f"plan_select:{plan}")],
+    ])
+
 
 
 async def handle_view_signals(query, user, admin, users_col):
@@ -102,8 +113,8 @@ async def handle_view_signals(query, user, admin, users_col):
 async def handle_plans(query, user):
     language = _get_user_language(user)
     status_plan = str(user.get("plan", PLAN_FREE)).upper()
-    user_id = user.get("user_id")
     current_status = user.get("subscription_status") or ("active" if user.get("plan_end") else "trial")
+    payment_ready = is_payment_configuration_ready()
 
     if language == "en":
         message = (
@@ -112,8 +123,11 @@ async def handle_plans(query, user):
             f"📌 Subscription status: {str(current_status).upper()}\n\n"
             "PLUS monthly base price: 15 USDT\n"
             "PREMIUM monthly base price: 20 USDT\n\n"
+            "All purchases are now automatic via USDT BEP-20.\n"
             "Choose a tier to view the available subplans (7 / 15 / 21 / 30 days)."
         )
+        if not payment_ready:
+            message += "\n\n⚠️ Automatic payment is not configured on the server yet."
     else:
         message = (
             "💼 PLANES HADES ALPHA\n\n"
@@ -121,8 +135,11 @@ async def handle_plans(query, user):
             f"📌 Estado de suscripción: {str(current_status).upper()}\n\n"
             "PLUS precio base mensual: 15 USDT\n"
             "PREMIUM precio base mensual: 20 USDT\n\n"
+            "Todas las compras ahora se procesan automáticamente por USDT BEP-20.\n"
             "Elige un tier para ver sus subplanes disponibles (7 / 15 / 21 / 30 días)."
         )
+        if not payment_ready:
+            message += "\n\n⚠️ El pago automático todavía no está configurado en el servidor."
 
     await query.edit_message_text(message, reply_markup=_build_plan_selector_keyboard(language))
 
@@ -145,7 +162,7 @@ async def handle_plan_subplans(query, user, plan: str):
             lines.append(f"• {int(option['days'])} days → {_format_price(float(option['price_usdt']))} USDT")
         lines.extend([
             "",
-            "Tap a duration to generate the activation contact message.",
+            "Tap a duration to create an automatic BEP-20 payment order.",
         ])
     else:
         lines.extend([
@@ -158,7 +175,7 @@ async def handle_plan_subplans(query, user, plan: str):
             lines.append(f"• {int(option['days'])} días → {_format_price(float(option['price_usdt']))} USDT")
         lines.extend([
             "",
-            "Toca una duración para generar el mensaje de activación.",
+            "Toca una duración para crear una orden de pago automática BEP-20.",
         ])
 
     await query.edit_message_text("\n".join(lines), reply_markup=_build_plan_duration_keyboard(language, plan))
@@ -166,44 +183,111 @@ async def handle_plan_subplans(query, user, plan: str):
 
 async def handle_plan_duration(query, user, plan: str, days: int):
     language = _get_user_language(user)
-    user_id = user.get("user_id")
-    whatsapps = get_admin_whatsapps()
+    user_id = int(user.get("user_id"))
     plan = PLAN_PLUS if plan == PLAN_PLUS else PLAN_PREMIUM
     days = int(days)
-    price = _format_price(get_plan_price(plan, days))
+
+    if not is_payment_configuration_ready():
+        text = _tr(
+            language,
+            "⚠️ El pago automático todavía no está configurado en el servidor. Contacta soporte si esto persiste.",
+            "⚠️ Automatic payment is not configured on the server yet. Contact support if this persists.",
+        )
+        await query.edit_message_text(text, reply_markup=_build_plan_duration_keyboard(language, plan))
+        return
+
+    order = create_payment_order(user_id, plan, days)
+    price = _format_price(float(order["amount_usdt"]))
+    base_price = _format_price(float(order["base_price_usdt"]))
     plan_name = get_plan_name(plan)
+    expires_at = order["expires_at"].strftime("%Y-%m-%d %H:%M UTC")
 
     if language == "en":
         message = (
             f"💳 {plan_name} · {days} days\n\n"
-            f"Price: {price} USDT\n"
-            f"Telegram ID: {user_id}\n\n"
-            "Select an admin contact to continue with the activation."
-        )
-        wa_message = (
-            f"Hello, I want to activate the {plan_name} plan for {days} days in HADES ALPHA. "
-            f"My Telegram ID is: {user_id}. Price reference: {price} USDT."
+            f"Base plan price: {base_price} USDT\n"
+            f"Your unique payment amount: {price} USDT\n"
+            f"Network: BEP-20\n"
+            f"Deposit address: `{order['deposit_address']}`\n"
+            f"Order ID: `{order['order_id']}`\n"
+            f"Expires: {expires_at}\n\n"
+            "Send exactly that amount of USDT on BEP-20 to the address above.\n"
+            "Then tap Confirm payment to verify the transfer on-chain automatically."
         )
     else:
         message = (
             f"💳 {plan_name} · {days} días\n\n"
-            f"Precio: {price} USDT\n"
-            f"ID de Telegram: {user_id}\n\n"
-            "Selecciona un contacto administrador para continuar con la activación."
-        )
-        wa_message = (
-            f"Hola, quiero activar el plan {plan_name} por {days} días en HADES ALPHA. "
-            f"Mi ID de Telegram es: {user_id}. Precio de referencia: {price} USDT."
+            f"Precio base del plan: {base_price} USDT\n"
+            f"Tu monto único de pago: {price} USDT\n"
+            f"Red: BEP-20\n"
+            f"Dirección de depósito: `{order['deposit_address']}`\n"
+            f"ID de orden: `{order['order_id']}`\n"
+            f"Expira: {expires_at}\n\n"
+            "Envía exactamente ese monto de USDT por BEP-20 a la dirección anterior.\n"
+            "Luego toca Confirmar pago para verificar la transferencia on-chain automáticamente."
         )
 
-    keyboard_rows = []
-    for idx, whatsapp in enumerate(whatsapps, start=1):
-        keyboard_rows.append([InlineKeyboardButton(f"💬 Admin {idx}", url=_wa_link(whatsapp, wa_message))])
-    if not keyboard_rows:
-        message += _tr(language, "\n\n⚠️ No hay contactos de WhatsApp configurados todavía.", "\n\n⚠️ No WhatsApp contacts are configured yet.")
-    keyboard_rows.append([InlineKeyboardButton(_tr(language, "⬅️ Volver a subplanes", "⬅️ Back to subplans"), callback_data=f"plan_select:{plan}")])
-    keyboard_rows.append([InlineKeyboardButton(_tr(language, "⬅️ Volver al menú", "⬅️ Back to menu"), callback_data="back_menu")])
-    await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup(keyboard_rows))
+    await query.edit_message_text(
+        message,
+        reply_markup=_build_payment_order_keyboard(language, order["order_id"], plan),
+        parse_mode="Markdown",
+    )
+
+
+async def handle_confirm_payment(query, user, order_id: str):
+    language = _get_user_language(user)
+    result = confirm_payment_order(order_id, int(user.get("user_id")))
+    order = result.get("order") or {"order_id": order_id, "plan": PLAN_PLUS}
+    plan = str(order.get("plan") or PLAN_PLUS)
+
+    if result.get("ok"):
+        plan_name = get_plan_name(order.get("plan"))
+        days = int(order.get("days") or 0)
+        amount = _format_price(float(order.get("amount_usdt") or 0))
+        tx_hash = (result.get("verification") or {}).get("tx_hash") or order.get("matched_tx_hash") or "—"
+        if language == "en":
+            text = (
+                f"✅ Payment confirmed\n\n"
+                f"Plan activated: {plan_name}\n"
+                f"Duration: {days} days\n"
+                f"Amount received: {amount} USDT\n"
+                f"Tx: `{tx_hash}`"
+            )
+        else:
+            text = (
+                f"✅ Pago confirmado\n\n"
+                f"Plan activado: {plan_name}\n"
+                f"Duración: {days} días\n"
+                f"Monto recibido: {amount} USDT\n"
+                f"Tx: `{tx_hash}`"
+            )
+        await query.edit_message_text(text, reply_markup=back_to_menu(language=language), parse_mode="Markdown")
+        return
+
+    reason = result.get("reason") or "verification_error"
+    messages = {
+        "order_not_found": _tr(language, "❌ No encontré esa orden de pago.", "❌ I could not find that payment order."),
+        "order_cancelled": _tr(language, "❌ Esa orden ya fue cancelada.", "❌ That order was already cancelled."),
+        "order_expired": _tr(language, "⌛ Esa orden expiró. Crea una nueva desde Planes.", "⌛ That order expired. Create a new one from Plans."),
+        "payment_not_found": _tr(language, "⏳ Aún no encontré ese depósito. Revisa la red, el monto exacto y vuelve a confirmar en unos minutos.", "⏳ I still could not find that deposit. Check the network, exact amount and try again in a few minutes."),
+        "payment_waiting_confirmations": _tr(language, "⏳ Encontré la transacción, pero todavía no tiene suficientes confirmaciones. Vuelve a confirmar en un momento.", "⏳ I found the transaction, but it does not have enough confirmations yet. Check again shortly."),
+        "tx_already_used": _tr(language, "❌ Esa transacción ya fue usada en otra orden.", "❌ That transaction was already used for another order."),
+        "payment_config_missing": _tr(language, "⚠️ Falta configurar el sistema de pago en el servidor.", "⚠️ The payment system is not fully configured on the server."),
+        "activation_failed": _tr(language, "❌ Encontré el pago, pero falló la activación del plan. Contacta soporte.", "❌ I found the payment, but plan activation failed. Contact support."),
+        "verification_error": _tr(language, "❌ Ocurrió un error verificando el pago. Inténtalo otra vez.", "❌ There was an error verifying the payment. Please try again."),
+    }
+    text = messages.get(reason, messages["verification_error"])
+    await query.edit_message_text(text, reply_markup=_build_payment_order_keyboard(language, order_id, plan))
+
+
+async def handle_cancel_payment(query, user, order_id: str):
+    language = _get_user_language(user)
+    cancelled = cancel_payment_order(order_id, int(user.get("user_id")))
+    if cancelled:
+        text = _tr(language, "✅ Orden cancelada. Puedes crear una nueva desde Planes.", "✅ Order cancelled. You can create a new one from Plans.")
+    else:
+        text = _tr(language, "ℹ️ Esa orden ya no estaba activa.", "ℹ️ That order was no longer active.")
+    await query.edit_message_text(text, reply_markup=back_to_menu(language=language))
 
 
 async def handle_my_account(query, user, admin=False):
@@ -745,6 +829,16 @@ async def handle_standard_menu_action(query, context, user, action: str, admin: 
     if action.startswith("plan_duration:"):
         _, plan, days = action.split(":", 2)
         await handle_plan_duration(query, user, plan, int(days))
+        return True
+
+    if action.startswith("confirm_payment:"):
+        _, order_id = action.split(":", 1)
+        await handle_confirm_payment(query, user, order_id)
+        return True
+
+    if action.startswith("cancel_payment:"):
+        _, order_id = action.split(":", 1)
+        await handle_cancel_payment(query, user, order_id)
         return True
 
     if action == "my_account":
