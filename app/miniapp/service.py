@@ -8,7 +8,7 @@ from app.database import payment_orders_collection, users_collection, user_signa
 from app.history_service import get_history_entries_for_user
 from app.market import get_market_state_snapshot
 from app.payment_service import get_active_payment_order_for_user
-from app.plans import get_plan_catalog, get_plan_name, plan_status
+from app.plans import get_plan_catalog, get_plan_name, normalize_plan, plan_status
 from app.statistics import get_performance_snapshot
 from app.user_service import get_or_create_user
 
@@ -108,15 +108,26 @@ def ensure_mini_app_user(*, user_id: int, username: Optional[str], telegram_lang
 
 def build_me_payload(user: Dict[str, Any]) -> Dict[str, Any]:
     status = plan_status(user)
+    raw_plan = normalize_plan(user.get("plan"))
+    effective_plan = normalize_plan(status.get("plan") or raw_plan)
+    subscription_status = str(status.get("status") or user.get("subscription_status") or "free").lower()
+
+    if bool(user.get("banned")):
+        effective_plan = raw_plan
+        subscription_status = "banned"
+
+    plan_for_display = raw_plan if raw_plan != "free" else effective_plan
+    expires_at = status.get("expires") or user.get("plan_end") or user.get("trial_end")
+
     return {
         "user_id": int(user.get("user_id") or 0),
         "username": user.get("username"),
         "language": user.get("language") or "es",
-        "plan": user.get("plan") or "free",
-        "plan_name": get_plan_name(user.get("plan") or "free"),
-        "subscription_status": user.get("subscription_status") or status.get("status"),
+        "plan": plan_for_display,
+        "plan_name": get_plan_name(plan_for_display),
+        "subscription_status": subscription_status,
         "days_left": int(status.get("days_left") or 0),
-        "expires_at": _iso(status.get("expires")),
+        "expires_at": _iso(expires_at),
         "banned": bool(user.get("banned")),
         "ref_code": user.get("ref_code"),
         "valid_referrals_total": int(user.get("valid_referrals_total") or 0),
@@ -127,9 +138,10 @@ def build_me_payload(user: Dict[str, Any]) -> Dict[str, Any]:
 def build_dashboard_payload(user: Dict[str, Any]) -> Dict[str, Any]:
     user_id = int(user.get("user_id") or 0)
     snapshot = get_performance_snapshot()
+    active_query = {"user_id": user_id, "telegram_valid_until": {"$gte": datetime.utcnow()}}
     active_signals = list(
         user_signals_collection()
-        .find({"user_id": user_id})
+        .find(active_query)
         .sort("created_at", -1)
         .limit(5)
     )
@@ -139,7 +151,7 @@ def build_dashboard_payload(user: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "summary_7d": snapshot.get("summary_7d", {}),
         "summary_30d": snapshot.get("summary_30d", {}),
-        "active_signals_count": len(active_signals),
+        "active_signals_count": int(user_signals_collection().count_documents(active_query)),
         "recent_signals": [_serialize_signal(doc) for doc in active_signals],
         "recent_history": [_serialize_history(doc) for doc in recent_history],
         "active_payment_order": serialize_order_public(active_order),
