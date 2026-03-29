@@ -652,13 +652,13 @@ async def handle_performance(query, user):
             f"• {_tr(language,'Evaluadas','Evaluated')}: {total}\n"
             f"• {_tr(language,'Ganadas','Won')}: {won} | {_tr(language,'Perdidas','Lost')}: {lost} | {_tr(language,'Expiradas','Expired')}: {expired}\n"
             f"• {_tr(language,'Resueltas','Resolved')}: {resolved} | Win rate: {winrate}%\n"
-            f"• PF: {_fmt_ratio(s.get('profit_factor',0.0))} | Exp R: {s.get('expectancy_r',0.0)} | DD R: {s.get('max_drawdown_r',0.0)}\n"
+            f"• PF {_tr(language,'señales (R)','signals (R)')}: {_fmt_ratio(s.get('profit_factor',0.0))} | Exp R: {s.get('expectancy_r',0.0)} | DD R: {s.get('max_drawdown_r',0.0)}\n"
         )
 
     def _plan_stats_line(title, emoji, key):
         stats=(by_plan_30 or {}).get(key,{}) if by_plan_30 else {}
         act=(act_by_plan_30 or {}).get(key,{}) if act_by_plan_30 else {}
-        return [f"{emoji} {title}", f"• {_tr(language,'Evaluadas','Evaluated')}: {stats.get('total',0)}", f"• {_tr(language,'Ganadas','Won')}: {stats.get('won',0)} | {_tr(language,'Perdidas','Lost')}: {stats.get('lost',0)} | {_tr(language,'Expiradas','Expired')}: {stats.get('expired',0)}", f"• {_tr(language,'Resueltas','Resolved')}: {stats.get('resolved', stats.get('won',0)+stats.get('lost',0))} | Win rate: {stats.get('winrate',0.0)}%", f"• {_tr(language,'Señales scanner','Scanner signals')}: {act.get('signals_total',0)} | {_tr(language,'Score prom (raw)','Avg score (raw)')}: {act.get('avg_score','—')}", ""]
+        return [f"{emoji} {title}", f"• {_tr(language,'Evaluadas','Evaluated')}: {stats.get('total',0)}", f"• TP1: {stats.get('tp1',0)} | TP2: {stats.get('tp2',0)} | SL: {stats.get('sl',0)} | {_tr(language,'Expiradas','Expired')}: {stats.get('expired',0)}", f"• {_tr(language,'Resueltas','Resolved')}: {stats.get('resolved', stats.get('won',0)+stats.get('lost',0))} | Win rate: {stats.get('winrate',0.0)}%", f"• {_tr(language,'Señales scanner','Scanner signals')}: {act.get('signals_total',0)} | {_tr(language,'Score prom (raw)','Avg score (raw)')}: {act.get('avg_score','—')}", ""]
 
     parts=[f"🎯 **{_tr(language,'RENDIMIENTO DEL BOT','BOT PERFORMANCE')}**\n"]
     parts.append(_fmt_stats('Últimos 7 días','Last 7 days', s7 or {}))
@@ -667,7 +667,7 @@ async def handle_performance(query, user):
         parts.append(f"🧪 **{_tr(language,'Diagnóstico rápido (30D)','Quick diagnostics (30D)')}**")
         parts.append(f"• {_tr(language,'Evaluadas','Evaluated')}: {diagnostics_30.get('evaluated_total',0)} | {_tr(language,'Resueltas','Resolved')}: {diagnostics_30.get('resolved_total',0)} | {_tr(language,'Pendientes','Pending')}: {diagnostics_30.get('pending_to_evaluate',0)}")
         parts.append(f"• {_tr(language,'Loss rate resuelto','Resolved loss rate')}: {diagnostics_30.get('loss_rate',0.0)}% | {_tr(language,'Expiry rate total','Total expiry rate')}: {diagnostics_30.get('expiry_rate',0.0)}%")
-        parts.append(f"• PF: {_fmt_ratio(diagnostics_30.get('profit_factor',0.0))} | Exp R: {diagnostics_30.get('expectancy_r',0.0)} | DD R: {diagnostics_30.get('max_drawdown_r',0.0)}")
+        parts.append(f"• PF {_tr(language,'señales (R)','signals (R)')}: {_fmt_ratio(diagnostics_30.get('profit_factor',0.0))} | Exp R: {diagnostics_30.get('expectancy_r',0.0)} | DD R: {diagnostics_30.get('max_drawdown_r',0.0)}")
         parts.append(f"• {_tr(language,'Tiempo prom resolución (min)','Avg resolution time (min)')}: {diagnostics_30.get('avg_resolution_minutes','—')} | {_tr(language,'Score prom resultados (raw)','Avg result score (raw)')}: {diagnostics_30.get('avg_result_score','—')}")
         parts.append(f"• {_tr(language,'Señales scanner','Scanner signals')}: {diagnostics_30.get('scanner_signals_total',0)}")
         parts.append("")
