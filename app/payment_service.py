@@ -30,12 +30,22 @@ def _quantize_amount(value: Decimal) -> Decimal:
     return value.quantize(_DECIMAL_QUANT, rounding=ROUND_DOWN)
 
 
-def _next_unique_amount(base_price: float) -> Decimal:
+def _next_unique_amount(base_price: float, user_id: int) -> Decimal:
     orders = payment_orders_collection()
     base = Decimal(str(base_price))
-    for suffix_int in range(1, 1000):
+    # Arranca desde un sufijo derivado del user_id para que usuarios distintos
+    # tiendan a recibir montos distintos desde el primer intento.
+    start_suffix = int(user_id) % 999
+    if start_suffix <= 0:
+        start_suffix = 1
+
+    for offset in range(0, 999):
+        suffix_int = ((start_suffix + offset - 1) % 999) + 1
         amount = _quantize_amount(base + (Decimal(suffix_int) / Decimal("1000")))
-        exists = orders.find_one({"amount_usdt": float(amount), "status": {"$in": list(OPEN_ORDER_STATUSES)}})
+        exists = orders.find_one({
+            "amount_usdt": float(amount),
+            "status": {"$in": list(OPEN_ORDER_STATUSES)},
+        })
         if not exists:
             return amount
     raise RuntimeError("No se pudo generar un monto único de pago")
@@ -51,7 +61,7 @@ def create_payment_order(user_id: int, plan: str, days: int) -> Dict[str, Any]:
 
     cancel_open_orders_for_user(user_id, reason="superseded_by_new_order")
 
-    amount = _next_unique_amount(base_price)
+    amount = _next_unique_amount(base_price, user_id)
     now = utcnow()
     order = new_payment_order(
         order_id=uuid4().hex[:12],
