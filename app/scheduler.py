@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta
 
 from app.database import users_collection, signals_collection, user_signals_collection
-from app.plans import PLAN_FREE
+from app.plans import PLAN_FREE, SUBSCRIPTION_STATUS_EXPIRED
 from app.stats_engine import run_statistics_cycle
 from app.database import signal_history_collection, signal_results_collection
 from app.history_service import backfill_signal_history
@@ -60,6 +60,8 @@ async def check_expired_plans() -> int:
                     "$set": {
                         "plan": PLAN_FREE,
                         "plan_end": None,
+                        "subscription_status": SUBSCRIPTION_STATUS_EXPIRED,
+                        "last_plan_change_at": now,
                         "updated_at": now,
                     }
                 }
