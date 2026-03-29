@@ -14,6 +14,7 @@ from app.telegram_handlers.risk import _handle_risk_dynamic_callbacks
 from app.telegram_handlers.start import handle_start
 from app.telegram_handlers.text_router import handle_text_messages
 from app.telegram_handlers.watchlist import handle_watchlist_callback
+from app.observability import record_audit_event, log_event
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,8 @@ async def handle_menu(update, context):
             return
 
     except Exception as e:
+        log_event("telegram.handle_menu_error", level=logging.ERROR, callback=getattr(query, "data", None), user_id=getattr(getattr(query, "from_user", None), "id", None), error=str(e))
+        record_audit_event(event_type="handle_menu_error", status="error", module="handlers", user_id=getattr(getattr(query, "from_user", None), "id", None), callback=getattr(query, "data", None), message=str(e))
         logger.error(f"Error en handle_menu: {e}", exc_info=True)
         await query.edit_message_text(
             "❌ Ocurrió un error inesperado.",
@@ -76,7 +79,7 @@ def get_handlers():
         CommandHandler("start", handle_start),
         CallbackQueryHandler(
             handle_menu,
-            pattern=r"^(view_signals|radar|radar_refresh|performance|reset_stats|confirm_reset_stats|cancel_reset_stats|movers|market|market_refresh|watchlist|wl_refresh|wl_clear|wl_rm:[A-Z0-9]+|alerts|alerts_refresh|history|history_refresh|plans|plan_select:(plus|premium)|plan_duration:(plus|premium):(7|15|21|30)|confirm_payment:[A-Za-z0-9]+|cancel_payment:[A-Za-z0-9]+|my_account|language_menu|set_lang:(es|en)|referrals|support|admin_panel|admin_activate_plan|admin_delete_user|confirm_delete_user:[0-9]+|cancel_admin_delete|back_menu|choose_plus_plan|choose_premium_plan|choose_plus_plan_days|choose_premium_plan_days|register_exchange|risk_menu|risk_set_capital|risk_set_risk|risk_set_exchange|risk_set_fee|risk_set_slippage|risk_set_leverage|risk_set_profile|risk_pick_exchange:[a-z]+|risk_pick_profile:[a-z]+|risk_test|sig_detail:[A-Za-z0-9]+|hist_detail:[A-Za-z0-9]+|risk_calc:(live|hist|test):[A-Za-z0-9]+|sig_an:(live|hist|test):[A-Za-z0-9]+|sig_trk:(live|hist|test):[A-Za-z0-9]+|risk_pf:(live|hist|test):[A-Za-z0-9]+|risk_cp:(live|hist|test):[A-Za-z0-9]+:[cma]|lang:(es|en)|ob:[A-Za-z_]+(?::[A-Za-z_]+)?)$"
+            pattern=r"^(view_signals|radar|radar_refresh|performance|reset_stats|confirm_reset_stats|cancel_reset_stats|movers|market|market_refresh|watchlist|wl_refresh|wl_clear|wl_rm:[A-Z0-9]+|alerts|alerts_refresh|history|history_refresh|plans|plan_select:(plus|premium)|plan_duration:(plus|premium):(7|15|21|30)|confirm_payment:[A-Za-z0-9]+|cancel_payment:[A-Za-z0-9]+|my_account|language_menu|set_lang:(es|en)|referrals|support|admin_panel|admin_activate_plan|admin_delete_user|admin_health|confirm_delete_user:[0-9]+|cancel_admin_delete|back_menu|choose_plus_plan|choose_premium_plan|choose_plus_plan_days|choose_premium_plan_days|register_exchange|risk_menu|risk_set_capital|risk_set_risk|risk_set_exchange|risk_set_fee|risk_set_slippage|risk_set_leverage|risk_set_profile|risk_pick_exchange:[a-z]+|risk_pick_profile:[a-z]+|risk_test|sig_detail:[A-Za-z0-9]+|hist_detail:[A-Za-z0-9]+|risk_calc:(live|hist|test):[A-Za-z0-9]+|sig_an:(live|hist|test):[A-Za-z0-9]+|sig_trk:(live|hist|test):[A-Za-z0-9]+|risk_pf:(live|hist|test):[A-Za-z0-9]+|risk_cp:(live|hist|test):[A-Za-z0-9]+:[cma]|lang:(es|en)|ob:[A-Za-z_]+(?::[A-Za-z_]+)?)$"
         ),
         CallbackQueryHandler(handle_copy_ref_code, pattern="^copy_ref_code$"),
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages),
