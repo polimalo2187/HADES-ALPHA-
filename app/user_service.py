@@ -8,6 +8,18 @@ from app.i18n import normalize_language
 from app.models import USER_SCHEMA_VERSION, new_user, user_backfill_patch
 
 
+
+
+def ensure_valid_user_id(user_id: int) -> int:
+    try:
+        value = int(user_id)
+    except Exception as exc:
+        raise ValueError("user_id inválido") from exc
+    if value <= 0:
+        raise ValueError("user_id inválido")
+    return value
+
+
 DEFAULT_EXISTING_USER_FIELDS = {
     "plan": "free",
     "trial_end": None,
@@ -45,6 +57,7 @@ def build_user_patch(
     telegram_language: Optional[str],
     referred_by: Optional[int],
 ) -> Dict[str, Any]:
+    user_id = ensure_valid_user_id(user_id)
     now = datetime.utcnow()
     patch: Dict[str, Any] = {}
     normalized_language = normalize_language(telegram_language)
@@ -89,6 +102,7 @@ def get_or_create_user(
     telegram_language: Optional[str],
     referred_by: Optional[int] = None,
 ) -> Tuple[Dict[str, Any], bool]:
+    user_id = ensure_valid_user_id(user_id)
     users_col = users_collection()
     existing_user = users_col.find_one({"user_id": user_id})
     normalized_language = normalize_language(telegram_language)
