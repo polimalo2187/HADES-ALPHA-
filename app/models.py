@@ -18,6 +18,8 @@ SIGNAL_DELIVERY_SCHEMA_VERSION = 1
 STATS_SNAPSHOT_SCHEMA_VERSION = 1
 SIGNAL_HISTORY_SCHEMA_VERSION = 1
 SUBSCRIPTION_EVENT_SCHEMA_VERSION = 1
+PAYMENT_ORDER_SCHEMA_VERSION = 1
+PAYMENT_VERIFICATION_LOG_SCHEMA_VERSION = 1
 
 
 def utcnow() -> datetime:
@@ -190,6 +192,87 @@ def new_subscription_event(
         "updated_at": now,
     }
 
+
+
+
+# =========================
+# PAYMENT ORDER MODEL
+# =========================
+def new_payment_order(
+    *,
+    order_id: str,
+    user_id: int,
+    plan: str,
+    days: int,
+    base_price_usdt: float,
+    amount_usdt: float,
+    network: str,
+    token_symbol: str,
+    token_contract: str,
+    deposit_address: str,
+    expires_at: datetime,
+) -> Dict[str, Any]:
+    now = utcnow()
+    return {
+        "order_id": str(order_id),
+        "user_id": int(user_id),
+        "plan": str(plan),
+        "days": int(days),
+        "base_price_usdt": float(base_price_usdt),
+        "amount_usdt": float(amount_usdt),
+        "network": str(network),
+        "token_symbol": str(token_symbol),
+        "token_contract": str(token_contract).lower(),
+        "deposit_address": str(deposit_address).lower(),
+        "declared_sender_address": None,
+        "status": "awaiting_payment",
+        "verification_attempts": 0,
+        "last_verification_reason": None,
+        "matched_tx_hash": None,
+        "matched_from": None,
+        "matched_to": None,
+        "matched_amount": None,
+        "confirmations": 0,
+        "confirmed_at": None,
+        "expires_at": expires_at,
+        "schema_version": PAYMENT_ORDER_SCHEMA_VERSION,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+# =========================
+# PAYMENT VERIFICATION LOG MODEL
+# =========================
+def new_payment_verification_log(
+    *,
+    order_id: str,
+    user_id: int,
+    status: str,
+    reason: str,
+    tx_hash: Optional[str] = None,
+    from_address: Optional[str] = None,
+    to_address: Optional[str] = None,
+    amount_usdt: Optional[float] = None,
+    confirmations: Optional[int] = None,
+    raw: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    now = utcnow()
+    return {
+        "order_id": str(order_id),
+        "user_id": int(user_id),
+        "status": str(status),
+        "reason": str(reason),
+        "tx_hash": tx_hash,
+        "from_address": (from_address or "").lower() or None,
+        "to_address": (to_address or "").lower() or None,
+        "amount_usdt": float(amount_usdt) if amount_usdt is not None else None,
+        "confirmations": int(confirmations) if confirmations is not None else None,
+        "raw": raw or {},
+        "schema_version": PAYMENT_VERIFICATION_LOG_SCHEMA_VERSION,
+        "created_at": now,
+        "updated_at": now,
+    }
 
 # =========================
 # SIGNAL MODEL
