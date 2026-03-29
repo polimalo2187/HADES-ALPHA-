@@ -99,6 +99,11 @@ def signal_history_collection():
     return get_db()["signal_history"]
 
 
+def subscription_events_collection():
+    """Auditoría comercial de activaciones, upgrades, rewards y expiraciones"""
+    return get_db()["subscription_events"]
+
+
 UNIQUE_INDEX_DUPLICATE_QUERIES = {
     "users.user_id": ["user_id"],
     "users.ref_code": ["ref_code"],
@@ -116,6 +121,7 @@ COLLECTION_INDEX_MODELS = {
         IndexModel([("user_id", ASCENDING)], name="user_id_unique", unique=True),
         IndexModel([("ref_code", ASCENDING)], name="ref_code_unique", unique=True, sparse=True),
         IndexModel([("plan", ASCENDING), ("plan_end", ASCENDING)], name="plan_status_idx"),
+        IndexModel([("subscription_status", ASCENDING), ("plan_end", ASCENDING)], name="subscription_status_idx"),
         IndexModel([("banned", ASCENDING), ("user_id", ASCENDING)], name="banned_user_idx"),
         IndexModel([("schema_version", ASCENDING)], name="schema_version_idx"),
         IndexModel([("updated_at", DESCENDING)], name="updated_at_idx"),
@@ -178,6 +184,12 @@ COLLECTION_INDEX_MODELS = {
         IndexModel([("setup_group", ASCENDING), ("signal_created_at", DESCENDING)], name="setup_created_idx"),
         IndexModel([("schema_version", ASCENDING)], name="schema_version_idx"),
     ],
+    "subscription_events": [
+        IndexModel([("user_id", ASCENDING), ("created_at", DESCENDING)], name="user_created_idx"),
+        IndexModel([("event_type", ASCENDING), ("created_at", DESCENDING)], name="event_created_idx"),
+        IndexModel([("plan", ASCENDING), ("created_at", DESCENDING)], name="plan_created_idx"),
+        IndexModel([("schema_version", ASCENDING)], name="schema_version_idx"),
+    ],
 }
 
 
@@ -192,6 +204,7 @@ COLLECTION_GETTERS = {
     "signal_deliveries": signal_deliveries_collection,
     "stats_snapshots": stats_snapshots_collection,
     "signal_history": signal_history_collection,
+    "subscription_events": subscription_events_collection,
 }
 
 
