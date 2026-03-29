@@ -21,6 +21,7 @@ from app.database import (
 )
 from app.models import new_signal_delivery, new_signal_job
 from app.notifier import _eligible_users_for_alert, send_signal_alerts
+from app.observability import heartbeat, record_audit_event
 from app.signals import build_user_signal_document
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ def initialize_signal_pipeline(bot: Bot) -> None:
     )
     _worker_thread.start()
     _started = True
+    heartbeat("signal_pipeline", status="ok", details={"stage": "started"})
     logger.info("✅ Signal pipeline en tiempo real iniciada")
 
 
@@ -98,6 +100,7 @@ def _recover_pending_jobs() -> None:
         _dispatch_queue.put(str(job["_id"]))
         recovered += 1
     if recovered:
+        heartbeat("signal_pipeline", status="degraded", details={"recovered_jobs": recovered})
         logger.warning("♻️ Signal pipeline recuperó %s jobs pendientes", recovered)
 
 
@@ -107,6 +110,8 @@ def _run_pipeline_loop() -> None:
         try:
             _process_job(job_id)
         except Exception as exc:
+            heartbeat("signal_pipeline", status="error", details={"job_id": job_id, "error": str(exc)})
+            record_audit_event(event_type="signal_pipeline_job_error", status="error", module="signal_pipeline", signal_id=None, order_id=None, message=str(exc), metadata={"job_id": job_id})
             logger.error("❌ Error no controlado en pipeline job=%s: %s", job_id, exc, exc_info=True)
         finally:
             _dispatch_queue.task_done()
@@ -204,6 +209,8 @@ def _schedule_retry(job: Dict, error: str) -> None:
             },
         )
         _mark_signal_dispatch(job["signal_id"], dispatch_status="failed", dispatch_error=error)
+        heartbeat("signal_pipeline", status="error", details={"signal_id": job["signal_id"], "error": error})
+        record_audit_event(event_type="signal_dispatch_failed", status="error", module="signal_pipeline", signal_id=job["signal_id"], message=error, metadata={"job_id": str(job["_id"]), "attempts": attempt_count})
         return
 
     delay_seconds = PIPELINE_RETRY_BASE_SECONDS * attempt_count
@@ -229,6 +236,7 @@ def _schedule_retry(job: Dict, error: str) -> None:
     timer = threading.Timer(delay_seconds, _requeue)
     timer.daemon = True
     timer.start()
+    heartbeat("signal_pipeline", status="degraded", details={"job_id": str(job["_id"]), "retry_in_seconds": delay_seconds, "attempt": attempt_count})
     logger.warning(
         "🔁 Job %s programado para retry en %ss (attempt=%s)",
         job["_id"],
