@@ -190,6 +190,9 @@ h1 {
   gap: 10px;
   margin-top: 14px;
 }
+.action-row.compact {
+  margin-top: 10px;
+}
 .button {
   appearance: none;
   border: none;
@@ -295,9 +298,65 @@ h1 {
   color: #93c5fd;
   text-decoration: none;
 }
+.payment-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.payment-box {
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.03);
+  padding: 14px;
+}
+.payment-box-accent {
+  border-color: rgba(245,158,11,0.35);
+  background: rgba(245,158,11,0.08);
+}
+.payment-address-box {
+  margin-top: 12px;
+}
+.payment-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.payment-value {
+  margin-top: 8px;
+  font-size: 24px;
+  font-weight: 800;
+}
+.payment-hint {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.wallet-link {
+  display: block;
+  margin-top: 10px;
+  color: #93c5fd;
+  text-decoration: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  word-break: break-all;
+}
+.notice-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+.notice-item {
+  border-left: 3px solid rgba(245,158,11,0.45);
+  padding-left: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
 @keyframes spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 720px) {
   .card-span-6, .card-span-4, .card-span-3 { grid-column: span 12; }
+  .payment-grid { grid-template-columns: 1fr; }
   h1 { font-size: 24px; }
 }
