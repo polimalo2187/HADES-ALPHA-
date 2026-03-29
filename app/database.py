@@ -115,6 +115,16 @@ def payment_verification_logs_collection():
     """Auditoría de verificaciones on-chain de pagos"""
     return get_db()["payment_verification_logs"]
 
+
+def audit_logs_collection():
+    """Auditoría operacional y de errores críticos"""
+    return get_db()["audit_logs"]
+
+
+def system_health_collection():
+    """Estado y heartbeat de componentes internos"""
+    return get_db()["system_health"]
+
 UNIQUE_INDEX_DUPLICATE_QUERIES = {
     "users.user_id": ["user_id"],
     "users.ref_code": ["ref_code"],
@@ -126,6 +136,7 @@ UNIQUE_INDEX_DUPLICATE_QUERIES = {
     "stats_snapshots.key": ["key"],
     "payment_orders.order_id": ["order_id"],
     "payment_orders.matched_tx_hash": ["matched_tx_hash"],
+    "system_health.component": ["component"],
 }
 
 
@@ -216,6 +227,21 @@ COLLECTION_INDEX_MODELS = {
         IndexModel([("plan", ASCENDING), ("created_at", DESCENDING)], name="plan_created_idx"),
         IndexModel([("schema_version", ASCENDING)], name="schema_version_idx"),
     ],
+    "audit_logs": [
+        IndexModel([("created_at", DESCENDING)], name="created_at_idx"),
+        IndexModel([("event_type", ASCENDING), ("created_at", DESCENDING)], name="event_created_idx"),
+        IndexModel([("status", ASCENDING), ("created_at", DESCENDING)], name="status_created_idx"),
+        IndexModel([("module", ASCENDING), ("created_at", DESCENDING)], name="module_created_idx"),
+        IndexModel([("user_id", ASCENDING), ("created_at", DESCENDING)], name="user_created_idx", sparse=True),
+        IndexModel([("order_id", ASCENDING), ("created_at", DESCENDING)], name="order_created_idx", sparse=True),
+        IndexModel([("signal_id", ASCENDING), ("created_at", DESCENDING)], name="signal_created_idx", sparse=True),
+        IndexModel([("schema_version", ASCENDING)], name="schema_version_idx"),
+    ],
+    "system_health": [
+        IndexModel([("component", ASCENDING)], name="component_unique", unique=True),
+        IndexModel([("status", ASCENDING), ("updated_at", DESCENDING)], name="status_updated_idx"),
+        IndexModel([("schema_version", ASCENDING)], name="schema_version_idx"),
+    ],
 }
 
 
@@ -233,6 +259,8 @@ COLLECTION_GETTERS = {
     "subscription_events": subscription_events_collection,
     "payment_orders": payment_orders_collection,
     "payment_verification_logs": payment_verification_logs_collection,
+    "audit_logs": audit_logs_collection,
+    "system_health": system_health_collection,
 }
 
 
