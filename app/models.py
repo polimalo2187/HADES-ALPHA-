@@ -7,8 +7,8 @@ from typing import Any, Dict, List, Optional
 # CONSTANTES CONFIGURABLES
 # =========================
 TRIAL_DAYS = 7
-USER_SCHEMA_VERSION = 2
-REFERRAL_SCHEMA_VERSION = 1
+USER_SCHEMA_VERSION = 3
+REFERRAL_SCHEMA_VERSION = 2
 SIGNAL_SCHEMA_VERSION = 1
 USER_SIGNAL_SCHEMA_VERSION = 1
 SIGNAL_RESULT_SCHEMA_VERSION = 1
@@ -17,6 +17,7 @@ SIGNAL_JOB_SCHEMA_VERSION = 1
 SIGNAL_DELIVERY_SCHEMA_VERSION = 1
 STATS_SNAPSHOT_SCHEMA_VERSION = 1
 SIGNAL_HISTORY_SCHEMA_VERSION = 1
+SUBSCRIPTION_EVENT_SCHEMA_VERSION = 1
 
 
 def utcnow() -> datetime:
@@ -40,6 +41,13 @@ def new_user(
         "plan": "free",
         "trial_end": now + timedelta(days=TRIAL_DAYS),
         "plan_end": None,
+        "subscription_status": "trial",
+        "plan_started_at": None,
+        "last_plan_change_at": now,
+        "last_purchase_at": None,
+        "last_purchase_plan": None,
+        "last_purchase_days": 0,
+        "last_entitlement_source": None,
         "ref_code": f"ref_{user_id}",
         "referred_by": referred_by,
         "ref_plus_valid": 0,
@@ -102,6 +110,12 @@ def activate_plan(user: Dict[str, Any], plan: str, days: int = 30) -> Dict[str, 
 
     user["plan"] = plan
     user["trial_end"] = None
+    user["subscription_status"] = "active"
+    user["plan_started_at"] = user.get("plan_started_at") or now
+    user["last_plan_change_at"] = now
+    user["last_purchase_at"] = now
+    user["last_purchase_plan"] = plan
+    user["last_purchase_days"] = int(days)
     user["schema_version"] = USER_SCHEMA_VERSION
     return update_timestamp(user)
 
@@ -128,15 +142,50 @@ def new_referral(
     referred_id: int,
     activated_plan: str,
     reward_days_applied: int = 7,
+    activated_days: int = 30,
+    reward_plan_applied: Optional[str] = None,
 ) -> Dict[str, Any]:
     now = utcnow()
     return {
         "referrer_id": referrer_id,
         "referred_id": referred_id,
         "activated_plan": activated_plan,
+        "activated_days": int(activated_days),
         "activated_at": now,
-        "reward_days_applied": reward_days_applied,
+        "reward_days_applied": int(reward_days_applied),
+        "reward_plan_applied": reward_plan_applied or activated_plan,
         "schema_version": REFERRAL_SCHEMA_VERSION,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+
+
+# =========================
+# SUBSCRIPTION EVENT MODEL
+# =========================
+def new_subscription_event(
+    user_id: int,
+    event_type: str,
+    plan: Optional[str],
+    days: int,
+    source: str,
+    before_plan: Optional[str],
+    after_plan: Optional[str],
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    now = utcnow()
+    return {
+        "user_id": int(user_id),
+        "event_type": str(event_type),
+        "plan": plan,
+        "days": int(days),
+        "source": str(source),
+        "before_plan": before_plan,
+        "after_plan": after_plan,
+        "metadata": metadata or {},
+        "schema_version": SUBSCRIPTION_EVENT_SCHEMA_VERSION,
         "created_at": now,
         "updated_at": now,
     }
