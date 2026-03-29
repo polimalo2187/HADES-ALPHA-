@@ -3,11 +3,11 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_DOWN
-from random import randint
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 from app.bep20_verifier import VerificationConfigError, verify_payment
 from app.config import (
@@ -31,20 +31,12 @@ def _quantize_amount(value: Decimal) -> Decimal:
     return value.quantize(_DECIMAL_QUANT, rounding=ROUND_DOWN)
 
 
-def _next_unique_amount(base_price: float, user_id: int) -> Decimal:
+def _next_unique_amount(base_price: float) -> Decimal:
     orders = payment_orders_collection()
     base = Decimal(str(base_price))
-    # Arranca desde un sufijo pseudoaleatorio para que las órdenes no repitan
-    # visualmente el mismo monto entre usuarios distintos.
-    start_suffix = randint(1, 999)
-
-    for offset in range(0, 999):
-        suffix_int = ((start_suffix + offset - 1) % 999) + 1
+    for suffix_int in range(1, 1000):
         amount = _quantize_amount(base + (Decimal(suffix_int) / Decimal("1000")))
-        exists = orders.find_one({
-            "amount_usdt": float(amount),
-            "status": {"$in": list(OPEN_ORDER_STATUSES)},
-        })
+        exists = orders.find_one({"amount_usdt": float(amount), "status": {"$in": list(OPEN_ORDER_STATUSES)}})
         if not exists:
             return amount
     raise RuntimeError("No se pudo generar un monto único de pago")
@@ -60,7 +52,7 @@ def create_payment_order(user_id: int, plan: str, days: int) -> Dict[str, Any]:
 
     cancel_open_orders_for_user(user_id, reason="superseded_by_new_order")
 
-    amount = _next_unique_amount(base_price, user_id)
+    amount = _next_unique_amount(base_price)
     now = utcnow()
     order = new_payment_order(
         order_id=uuid4().hex[:12],
