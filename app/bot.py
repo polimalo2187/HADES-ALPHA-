@@ -76,7 +76,7 @@ async def application_error_handler(update: object, context) -> None:
 # RUN BOT (ENTRYPOINT ÚNICO)
 # ======================================================
 
-def run_bot():
+def run_bot(*, background: bool = False):
     initialize_database()
     heartbeat("database", status="ok", details={"stage": "initialized"})
 
@@ -167,9 +167,10 @@ def run_bot():
         logger.info("Bot detenido correctamente")
         sys.exit(0)
 
-    # Registrar manejadores de señales
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    # Registrar manejadores de señales solo en foreground
+    if not background:
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
 
     # ==============================
     # INICIAR POLLING
@@ -179,11 +180,19 @@ def run_bot():
     log_event("bot.starting", bot_name=get_bot_display_name())
 
     try:
-        application.run_polling(
-            poll_interval=0.5,
-            timeout=30,
-            drop_pending_updates=True
-        )
+        if background:
+            application.run_polling(
+                poll_interval=0.5,
+                timeout=30,
+                drop_pending_updates=True,
+                stop_signals=None,
+            )
+        else:
+            application.run_polling(
+                poll_interval=0.5,
+                timeout=30,
+                drop_pending_updates=True,
+            )
     except Exception as e:
         heartbeat("bot", status="error", details={"error": str(e)})
         record_audit_event(
