@@ -46,6 +46,7 @@ def _admin_panel_keyboard(language: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(_tr(language, "➕ Activar plan", "➕ Activate plan"), callback_data="admin_activate_plan")],
         [InlineKeyboardButton(_tr(language, "🗑 Eliminar usuario", "🗑 Delete user"), callback_data="admin_delete_user")],
+        [InlineKeyboardButton(_tr(language, "🩺 Salud del sistema", "🩺 System health"), callback_data="admin_health")],
         [InlineKeyboardButton(tr(language, "common.back"), callback_data="back_menu")],
     ])
 
