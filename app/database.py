@@ -104,6 +104,17 @@ def subscription_events_collection():
     return get_db()["subscription_events"]
 
 
+
+
+def payment_orders_collection():
+    """Órdenes de pago automáticas BEP-20"""
+    return get_db()["payment_orders"]
+
+
+def payment_verification_logs_collection():
+    """Auditoría de verificaciones on-chain de pagos"""
+    return get_db()["payment_verification_logs"]
+
 UNIQUE_INDEX_DUPLICATE_QUERIES = {
     "users.user_id": ["user_id"],
     "users.ref_code": ["ref_code"],
@@ -113,6 +124,8 @@ UNIQUE_INDEX_DUPLICATE_QUERIES = {
     "watchlists.user_id": ["user_id"],
     "signal_deliveries.signal_id_user_id": ["signal_id", "user_id"],
     "stats_snapshots.key": ["key"],
+    "payment_orders.order_id": ["order_id"],
+    "payment_orders.matched_tx_hash": ["matched_tx_hash"],
 }
 
 
@@ -184,6 +197,19 @@ COLLECTION_INDEX_MODELS = {
         IndexModel([("setup_group", ASCENDING), ("signal_created_at", DESCENDING)], name="setup_created_idx"),
         IndexModel([("schema_version", ASCENDING)], name="schema_version_idx"),
     ],
+    "payment_orders": [
+        IndexModel([("order_id", ASCENDING)], name="order_id_unique", unique=True),
+        IndexModel([("user_id", ASCENDING), ("status", ASCENDING), ("created_at", DESCENDING)], name="user_status_created_idx"),
+        IndexModel([("status", ASCENDING), ("expires_at", ASCENDING)], name="status_expires_idx"),
+        IndexModel([("matched_tx_hash", ASCENDING)], name="matched_tx_hash_unique", unique=True, sparse=True),
+        IndexModel([("schema_version", ASCENDING)], name="schema_version_idx"),
+    ],
+    "payment_verification_logs": [
+        IndexModel([("order_id", ASCENDING), ("created_at", DESCENDING)], name="order_created_idx"),
+        IndexModel([("tx_hash", ASCENDING)], name="tx_hash_idx", sparse=True),
+        IndexModel([("status", ASCENDING), ("created_at", DESCENDING)], name="status_created_idx"),
+        IndexModel([("schema_version", ASCENDING)], name="schema_version_idx"),
+    ],
     "subscription_events": [
         IndexModel([("user_id", ASCENDING), ("created_at", DESCENDING)], name="user_created_idx"),
         IndexModel([("event_type", ASCENDING), ("created_at", DESCENDING)], name="event_created_idx"),
@@ -205,6 +231,8 @@ COLLECTION_GETTERS = {
     "stats_snapshots": stats_snapshots_collection,
     "signal_history": signal_history_collection,
     "subscription_events": subscription_events_collection,
+    "payment_orders": payment_orders_collection,
+    "payment_verification_logs": payment_verification_logs_collection,
 }
 
 
