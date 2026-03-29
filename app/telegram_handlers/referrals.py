@@ -23,10 +23,36 @@ async def handle_referrals(query, user):
             return
 
         ref_link = get_referral_link(user_id)
-        valid_total = stats.get("valid_referrals_total")
-        if valid_total is None:
-            valid_total = stats.get("current_plus", 0) + stats.get("current_premium", 0)
-        reward_days_total = stats.get("reward_days_total", valid_total * 7)
+        valid_total = int(stats.get("valid_referrals_total", 0) or 0)
+        reward_days_total = int(stats.get("reward_days_total", 0) or 0)
+
+        reward_rules = (
+            "• 7 días comprados → 3 días de recompensa\n"
+            "• 15 días comprados → 7 días de recompensa\n"
+            "• 21 días comprados → 10 días de recompensa\n"
+            "• 30 días comprados → 15 días de recompensa"
+        )
+        reward_rules_en = (
+            "• 7-day plan → 3 reward days\n"
+            "• 15-day plan → 7 reward days\n"
+            "• 21-day plan → 10 reward days\n"
+            "• 30-day plan → 15 reward days"
+        )
+
+        recent_rows = stats.get("recent_rewards", [])
+        if recent_rows:
+            if language == "en":
+                recent_text = "\n".join(
+                    f"• {str(row.get('activated_plan', '')).upper()} {int(row.get('activated_days', 0) or 0)}d → +{int(row.get('reward_days_applied', 0) or 0)}d"
+                    for row in recent_rows
+                )
+            else:
+                recent_text = "\n".join(
+                    f"• {str(row.get('activated_plan', '')).upper()} {int(row.get('activated_days', 0) or 0)} días → +{int(row.get('reward_days_applied', 0) or 0)} días"
+                    for row in recent_rows
+                )
+        else:
+            recent_text = "—"
 
         if language == "en":
             message = (
@@ -37,15 +63,15 @@ async def handle_referrals(query, user):
                 f"• PLUS referrals: {stats.get('plus_referred', 0)}\n"
                 f"• PREMIUM referrals: {stats.get('premium_referred', 0)}\n\n"
                 "🎁 REWARDS:\n"
-                f"• Accumulated referral days: +{reward_days_total} days\n"
-                "• Each valid referral adds +7 days to your current plan\n\n"
-                "📢 HOW TO REFER:\n"
-                "1. Share your link\n"
-                "2. They join the bot\n"
-                "3. They activate a plan\n\n"
-                "📌 CURRENT RULE:\n"
-                "• Each valid referral adds +7 days to your current plan\n"
-                "• Referral type (PLUS/PREMIUM) is shown only as a statistic\n"
+                f"• Total reward days earned: +{reward_days_total} days\n"
+                f"{reward_rules_en}\n\n"
+                "📌 RULES:\n"
+                "• Only valid referrals count (users who actually buy a plan)\n"
+                "• Reward tier matches the purchased tier\n"
+                "• If you are on PLUS and your referral buys PREMIUM, you upgrade to PREMIUM\n"
+                "• Lower-tier rewards never downgrade a higher-tier plan\n\n"
+                "🕘 LAST REWARDS:\n"
+                f"{recent_text}"
             )
         else:
             message = (
@@ -57,14 +83,14 @@ async def handle_referrals(query, user):
                 f"• Referidos PREMIUM: {stats.get('premium_referred', 0)}\n\n"
                 "🎁 RECOMPENSAS:\n"
                 f"• Días acumulados por referidos: +{reward_days_total} días\n"
-                "• Cada referido válido suma +7 días a tu plan actual\n\n"
-                "📢 CÓMO REFERIR:\n"
-                "1. Comparte tu enlace\n"
-                "2. Ellos entran al bot\n"
-                "3. Activan un plan\n\n"
-                "📌 REGLA ACTUAL:\n"
-                "• Cada referido válido agrega +7 días a tu plan actual\n"
-                "• El tipo de referido (PLUS/PREMIUM) se muestra solo como estadística\n"
+                f"{reward_rules}\n\n"
+                "📌 REGLAS:\n"
+                "• Solo cuentan referidos válidos (usuarios que realmente compran un plan)\n"
+                "• El tier de la recompensa es el mismo tier comprado\n"
+                "• Si estás en PLUS y tu referido compra PREMIUM, subes a PREMIUM\n"
+                "• Una recompensa de tier menor nunca te baja de tier\n\n"
+                "🕘 ÚLTIMAS RECOMPENSAS:\n"
+                f"{recent_text}"
             )
 
         keyboard = [
