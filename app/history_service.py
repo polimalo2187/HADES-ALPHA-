@@ -60,6 +60,10 @@ def build_signal_history_record(base_signal: Dict, result_doc: Dict) -> Dict:
     )
     if isinstance(result_doc.get("evaluated_at"), datetime):
         record["evaluated_at"] = result_doc.get("evaluated_at")
+    if result_doc.get("resolution"):
+        record["resolution"] = result_doc.get("resolution")
+    if result_doc.get("completed") is not None:
+        record["completed"] = bool(result_doc.get("completed"))
     return record
 
 
@@ -137,6 +141,8 @@ def _enrich_user_signal_history_rows(rows: List[Dict]) -> List[Dict]:
 
         if result_doc:
             doc["result"] = result_doc.get("result")
+            doc["resolution"] = result_doc.get("resolution")
+            doc["completed"] = result_doc.get("completed")
             doc["evaluated_at"] = result_doc.get("evaluated_at")
             doc["risk_pct"] = result_doc.get("risk_pct")
             doc["reward_pct"] = result_doc.get("reward_pct")
