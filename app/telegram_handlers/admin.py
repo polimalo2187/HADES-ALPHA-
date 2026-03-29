@@ -1,20 +1,20 @@
 from __future__ import annotations
 
-from telegram import Update
-from app.database import users_collection
 import asyncio
 import logging
 from functools import partial
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from app.config import is_admin
+from app.observability import get_health_snapshot, record_audit_event
 from app.plans import PLAN_PLUS, PLAN_PREMIUM, activate_plus, activate_premium
 from app.services.admin_service import ban_user, can_block_target, get_user_by_id, validate_custom_plan_days
 from app.telegram_handlers.common import _admin_panel_keyboard, _get_user_language, _tr
 
 logger = logging.getLogger(__name__)
+
 
 async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -65,13 +65,18 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             context.user_data.pop("target_user_id", None)
 
             if success:
-                await update.message.reply_text(
-                    f"✅ Plan {plan_name} activado correctamente por {days} días."
+                record_audit_event(
+                    event_type="admin_plan_activated",
+                    status="success",
+                    module="admin",
+                    admin_id=update.effective_user.id,
+                    user_id=target_user_id,
+                    message=f"{plan_name} {days}d",
+                    metadata={"days": days, "plan": plan_name.lower()},
                 )
+                await update.message.reply_text(f"✅ Plan {plan_name} activado correctamente por {days} días.")
             else:
-                await update.message.reply_text(
-                    f"❌ No se pudo activar el plan {plan_name} por días."
-                )
+                await update.message.reply_text(f"❌ No se pudo activar el plan {plan_name} por días.")
             return
 
         if context.user_data.get("awaiting_delete_user_id"):
@@ -119,8 +124,9 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                 reply_markup=keyboard,
             )
             return
-        logger.info(f"[ADMIN] Recibido User ID: {target_user_id_str}")
-        
+
+        logger.info("[ADMIN] Recibido User ID: %s", target_user_id_str)
+
         try:
             target_user_id = int(target_user_id_str)
         except ValueError:
@@ -134,9 +140,8 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             return
 
         loop = asyncio.get_event_loop()
-
         target_user = await loop.run_in_executor(None, lambda: get_user_by_id(target_user_id))
-        
+
         if not target_user:
             await update.message.reply_text("❌ Usuario no encontrado en la base de datos.")
             context.user_data["awaiting_user_id"] = False
@@ -151,7 +156,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             [InlineKeyboardButton("🔴 Activar PLAN PREMIUM · 30 días", callback_data="choose_premium_plan")],
             [InlineKeyboardButton("🟡 Activar PLAN PLUS por días", callback_data="choose_plus_plan_days")],
             [InlineKeyboardButton("🔴 Activar PLAN PREMIUM por días", callback_data="choose_premium_plan_days")],
-            [InlineKeyboardButton("❌ Cancelar", callback_data="back_menu")]
+            [InlineKeyboardButton("❌ Cancelar", callback_data="back_menu")],
         ]
 
         await update.message.reply_text(
@@ -160,7 +165,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         )
 
     except Exception as e:
-        logger.error(f"[ADMIN] Error en handle_admin_text: {e}", exc_info=True)
+        logger.error("[ADMIN] Error en handle_admin_text: %s", e, exc_info=True)
         await update.message.reply_text("❌ Error procesando la solicitud.")
         context.user_data["awaiting_user_id"] = False
 
@@ -177,6 +182,24 @@ async def handle_admin_callback(query, context, user, action: str, admin: bool) 
             _tr(language, "👑 PANEL ADMINISTRADOR", "👑 ADMIN PANEL"),
             reply_markup=_admin_panel_keyboard(language),
         )
+        return True
+
+    if action == "admin_health":
+        snapshot = get_health_snapshot()
+        if not snapshot:
+            text = _tr(language, "🩺 No hay datos de salud todavía.", "🩺 No health data yet.")
+        else:
+            lines = [_tr(language, "🩺 Estado del sistema", "🩺 System health")]
+            for component, item in snapshot.items():
+                updated_at = item.get("updated_at")
+                updated_str = updated_at.strftime("%Y-%m-%d %H:%M:%S") if hasattr(updated_at, "strftime") else "n/a"
+                status = item.get("status") or "unknown"
+                details = item.get("details") or {}
+                detail_pairs = ", ".join(f"{k}={v}" for k, v in list(details.items())[:4])
+                suffix = f"\n   {detail_pairs}" if detail_pairs else ""
+                lines.append(f"• {component}: {status} ({updated_str}){suffix}")
+            text = "\n".join(lines)
+        await query.edit_message_text(text, reply_markup=_admin_panel_keyboard(language))
         return True
 
     if action == "admin_delete_user":
@@ -200,6 +223,14 @@ async def handle_admin_callback(query, context, user, action: str, admin: bool) 
             return True
 
         ban_user(target_user_id=target_user_id, banned_by=user_id)
+        record_audit_event(
+            event_type="admin_user_blocked",
+            status="warning",
+            module="admin",
+            admin_id=user_id,
+            user_id=target_user_id,
+            message="user_blocked",
+        )
         logger.warning("[ADMIN] Usuario baneado | admin=%s target=%s", user_id, target_user_id)
         await query.edit_message_text(
             _tr(language, f"🚫 Usuario {target_user_id} bloqueado correctamente.", f"🚫 User {target_user_id} blocked successfully."),
