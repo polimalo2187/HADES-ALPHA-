@@ -19,7 +19,7 @@ from app.config import (
 from app.database import payment_orders_collection, payment_verification_logs_collection
 from app.models import new_payment_order, new_payment_verification_log, update_timestamp, utcnow
 from app.observability import heartbeat, record_audit_event
-from app.plans import activate_plan_purchase, get_plan_price, normalize_plan
+from app.plans import activate_plan_purchase, get_plan_price, normalize_plan, validate_plan_duration
 
 logger = logging.getLogger(__name__)
 
@@ -31,18 +31,34 @@ def _quantize_amount(value: Decimal) -> Decimal:
     return value.quantize(_DECIMAL_QUANT, rounding=ROUND_DOWN)
 
 
-def _next_unique_amount(base_price: float, user_id: int) -> Decimal:
-    orders = payment_orders_collection()
-    base = Decimal(str(base_price))
-    # Arranca desde un sufijo derivado del user_id para que usuarios distintos
-    # tiendan a recibir montos distintos desde el primer intento.
-    start_suffix = int(user_id) % 999
+def format_payment_amount(value: Decimal | float | str) -> str:
+    return f"{_quantize_amount(Decimal(str(value))):.3f}"
+
+
+def build_unique_amount_candidates(base_price: float, user_id: int, *, limit: int = 999) -> list[Decimal]:
+    try:
+        base = Decimal(str(base_price))
+    except Exception as exc:
+        raise ValueError("Precio base inválido") from exc
+    if base <= 0:
+        raise ValueError("Precio base inválido")
+    user_id = int(user_id)
+    if user_id <= 0:
+        raise ValueError("user_id inválido")
+    max_candidates = max(1, min(int(limit), 999))
+    start_suffix = user_id % 999
     if start_suffix <= 0:
         start_suffix = 1
-
-    for offset in range(0, 999):
+    candidates: list[Decimal] = []
+    for offset in range(0, max_candidates):
         suffix_int = ((start_suffix + offset - 1) % 999) + 1
-        amount = _quantize_amount(base + (Decimal(suffix_int) / Decimal("1000")))
+        candidates.append(_quantize_amount(base + (Decimal(suffix_int) / Decimal("1000"))))
+    return candidates
+
+
+def _next_unique_amount(base_price: float, user_id: int) -> Decimal:
+    orders = payment_orders_collection()
+    for amount in build_unique_amount_candidates(base_price, user_id):
         exists = orders.find_one({
             "amount_usdt": float(amount),
             "status": {"$in": list(OPEN_ORDER_STATUSES)},
@@ -54,8 +70,9 @@ def _next_unique_amount(base_price: float, user_id: int) -> Decimal:
 
 def create_payment_order(user_id: int, plan: str, days: int) -> Dict[str, Any]:
     user_id = int(user_id)
-    plan = normalize_plan(plan)
-    days = int(days)
+    if user_id <= 0:
+        raise ValueError("user_id inválido")
+    plan, days = validate_plan_duration(plan, days)
     base_price = get_plan_price(plan, days)
     if base_price <= 0:
         raise ValueError("Precio inválido para el plan seleccionado")
