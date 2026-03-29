@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
 from app.binance_api import get_futures_24h_tickers, get_radar_opportunities
-from app.database import payment_orders_collection, users_collection, user_signals_collection, watchlists_collection
+from app.database import users_collection, user_signals_collection, watchlists_collection
 from app.history_service import get_history_entries_for_user
 from app.market import get_market_state_snapshot
 from app.payment_service import get_active_payment_order_for_user
@@ -144,12 +144,18 @@ def _serialize_watchlist(symbols: Iterable[str]) -> List[Dict[str, Any]]:
             change_pct = float(item.get("priceChangePercent", 0.0))
         except Exception:
             change_pct = 0.0
+        try:
+            quote_volume = float(item.get("quoteVolume", 0.0))
+        except Exception:
+            quote_volume = 0.0
         rows.append({
             "symbol": symbol,
             "last_price": last_price,
             "change_pct": change_pct,
+            "quote_volume": quote_volume,
+            "is_positive": change_pct >= 0,
         })
-    rows.sort(key=lambda row: row["symbol"])
+    rows.sort(key=lambda row: abs(row["change_pct"]), reverse=True)
     return rows
 
 
@@ -200,10 +206,27 @@ def build_dashboard_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         user_signals_collection()
         .find(active_query)
         .sort("created_at", -1)
-        .limit(5)
+        .limit(6)
+    )
+    latest_signals = list(
+        user_signals_collection()
+        .find({"user_id": user_id})
+        .sort("created_at", -1)
+        .limit(30)
     )
     recent_history = get_history_entries_for_user(user_id, user_plan=user.get("plan"), limit=5)
     active_order = get_active_payment_order_for_user(user_id)
+    watchlist_doc = watchlists_collection().find_one({"user_id": user_id}) or {}
+    signal_mix = {"free": 0, "plus": 0, "premium": 0}
+    active_mix = {"free": 0, "plus": 0, "premium": 0}
+    for doc in latest_signals:
+        visibility = normalize_plan(doc.get("visibility"))
+        if visibility in signal_mix:
+            signal_mix[visibility] += 1
+    for doc in active_signals:
+        visibility = normalize_plan(doc.get("visibility"))
+        if visibility in active_mix:
+            active_mix[visibility] += 1
 
     return {
         "summary_7d": snapshot.get("summary_7d", {}),
@@ -212,6 +235,9 @@ def build_dashboard_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         "recent_signals": [_serialize_signal(doc) for doc in active_signals],
         "recent_history": [_serialize_history(doc) for doc in recent_history],
         "active_payment_order": serialize_order_public(active_order),
+        "watchlist_count": len(watchlist_doc.get("symbols") or []),
+        "signal_mix": signal_mix,
+        "active_mix": active_mix,
     }
 
 
@@ -241,9 +267,15 @@ def build_market_payload() -> Dict[str, Any]:
             "direction": row.get("direction"),
             "change_pct": row.get("change_pct"),
             "last_price": row.get("last_price"),
+            "momentum": row.get("momentum"),
+            "quote_volume": row.get("quote_volume"),
         }
         for row in radar
     ]
+    snapshot["top_gainers"] = list(snapshot.get("top_gainers") or [])[:5]
+    snapshot["top_losers"] = list(snapshot.get("top_losers") or [])[:5]
+    snapshot["top_volume"] = list(snapshot.get("top_volume") or [])[:5]
+    snapshot["top_open_interest"] = list(snapshot.get("top_open_interest") or [])[:4]
     return snapshot
 
 
@@ -271,12 +303,13 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "me": build_me_payload(user),
         "dashboard": build_dashboard_payload(user),
-        "signals": build_signals_payload(user, limit=10),
+        "signals": build_signals_payload(user, limit=12),
         "history": build_history_payload(user, limit=10),
         "market": build_market_payload(),
         "watchlist": build_watchlist_payload(user),
         "plans": build_plans_payload(user.get("plan")),
         "support_url": "https://chat.whatsapp.com/JXxSGjaKtqRH9c0jTlGv2l?mode=gi_t",
+        "generated_at": datetime.utcnow().isoformat(),
     }
 
 
