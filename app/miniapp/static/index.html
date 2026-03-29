@@ -1,1 +1,55 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>HADES App</title>
+  <link rel="stylesheet" href="/miniapp/static/app.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <div id="loading" class="loading-screen">
+      <div class="spinner"></div>
+      <div class="loading-text">Cargando HADES App...</div>
+    </div>
 
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">HADES APP</div>
+        <h1 id="titleMain">Dashboard</h1>
+      </div>
+      <div class="topbar-right">
+        <span id="planBadge" class="plan-badge">FREE</span>
+        <span id="daysBadge" class="days-badge">0 días</span>
+      </div>
+    </header>
+
+    <main id="content" class="content hidden">
+      <section id="view-home" class="view active"></section>
+      <section id="view-signals" class="view"></section>
+      <section id="view-market" class="view"></section>
+      <section id="view-history" class="view"></section>
+      <section id="view-account" class="view"></section>
+    </main>
+
+    <nav class="bottom-nav hidden" id="bottomNav">
+      <button class="nav-item active" data-view="home">Inicio</button>
+      <button class="nav-item" data-view="signals">Señales</button>
+      <button class="nav-item" data-view="market">Mercado</button>
+      <button class="nav-item" data-view="history">Historial</button>
+      <button class="nav-item" data-view="account">Cuenta</button>
+    </nav>
+  </div>
+
+  <template id="metricCardTemplate">
+    <div class="card metric-card">
+      <div class="metric-label"></div>
+      <div class="metric-value"></div>
+      <div class="metric-subtitle"></div>
+    </div>
+  </template>
+
+  <script src="/miniapp/static/app.js"></script>
+</body>
+</html>
