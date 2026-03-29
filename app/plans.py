@@ -31,7 +31,8 @@ PLAN_BASE_PRICES = {
     PLAN_PREMIUM: 20.0,
 }
 
-# Precios comerciales confirmados para los subplanes actuales.
+# Precios por defecto: proporcionales al plan mensual base. Se pueden ajustar
+# más adelante con variables de entorno o una fase de checkout dedicada.
 PLAN_PRICE_TABLE = {
     PLAN_PLUS: {
         7: 3.5,
