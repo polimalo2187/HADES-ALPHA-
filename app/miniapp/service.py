@@ -4,13 +4,21 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
 from app.binance_api import get_futures_24h_tickers, get_radar_opportunities
-from app.database import payment_orders_collection, users_collection, user_signals_collection, watchlists_collection
+from app.database import users_collection, user_signals_collection, watchlists_collection
 from app.history_service import get_history_entries_for_user
 from app.market import get_market_state_snapshot
 from app.payment_service import get_active_payment_order_for_user
 from app.plans import get_plan_catalog, get_plan_name, normalize_plan, plan_status
-from app.statistics import get_performance_snapshot
 from app.user_service import get_or_create_user
+
+
+STATUS_LABELS = {
+    "free": "Free",
+    "trial": "Trial",
+    "active": "Activo",
+    "expired": "Expirado",
+    "banned": "Bloqueado",
+}
 
 
 def _iso(value: Any) -> Optional[str]:
@@ -22,16 +30,21 @@ def _iso(value: Any) -> Optional[str]:
 def serialize_order_public(order: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not order:
         return None
+    amount_usdt = order.get("amount_usdt")
+    base_price_usdt = order.get("base_price_usdt")
     return {
         "order_id": order.get("order_id"),
         "plan": order.get("plan"),
+        "plan_name": get_plan_name(order.get("plan")),
         "days": order.get("days"),
-        "base_price_usdt": order.get("base_price_usdt"),
-        "amount_usdt": order.get("amount_usdt"),
+        "base_price_usdt": base_price_usdt,
+        "amount_usdt": amount_usdt,
+        "amount_unique_delta": (float(amount_usdt) - float(base_price_usdt)) if amount_usdt is not None and base_price_usdt is not None else None,
         "network": order.get("network"),
         "token_symbol": order.get("token_symbol"),
         "deposit_address": order.get("deposit_address"),
         "status": order.get("status"),
+        "status_label": STATUS_LABELS.get(str(order.get("status") or "").lower(), str(order.get("status") or "—").upper()),
         "expires_at": _iso(order.get("expires_at")),
         "created_at": _iso(order.get("created_at")),
     }
@@ -118,6 +131,7 @@ def build_me_payload(user: Dict[str, Any]) -> Dict[str, Any]:
 
     plan_for_display = raw_plan if raw_plan != "free" else effective_plan
     expires_at = status.get("expires") or user.get("plan_end") or user.get("trial_end")
+    days_left = int(status.get("days_left") or 0)
 
     return {
         "user_id": int(user.get("user_id") or 0),
@@ -126,12 +140,14 @@ def build_me_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         "plan": plan_for_display,
         "plan_name": get_plan_name(plan_for_display),
         "subscription_status": subscription_status,
-        "days_left": int(status.get("days_left") or 0),
+        "subscription_status_label": STATUS_LABELS.get(subscription_status, subscription_status.upper()),
+        "days_left": days_left,
         "expires_at": _iso(expires_at),
         "banned": bool(user.get("banned")),
         "ref_code": user.get("ref_code"),
         "valid_referrals_total": int(user.get("valid_referrals_total") or 0),
         "reward_days_total": int(user.get("reward_days_total") or 0),
+        "is_paid": plan_for_display in {"plus", "premium"} and subscription_status == "active",
     }
 
 
@@ -195,8 +211,19 @@ def build_watchlist_payload(user: Dict[str, Any]) -> List[Dict[str, Any]]:
     return _serialize_watchlist(doc.get("symbols") or [])
 
 
-def build_plans_payload() -> Dict[str, Any]:
-    return get_plan_catalog()
+def build_plans_payload(user: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload = get_plan_catalog()
+    if user:
+        me = build_me_payload(user)
+        payload["current"] = {
+            "plan": me["plan"],
+            "plan_name": me["plan_name"],
+            "subscription_status": me["subscription_status"],
+            "subscription_status_label": me["subscription_status_label"],
+            "days_left": me["days_left"],
+            "expires_at": me["expires_at"],
+        }
+    return payload
 
 
 def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
@@ -207,10 +234,13 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         "history": build_history_payload(user, limit=10),
         "market": build_market_payload(),
         "watchlist": build_watchlist_payload(user),
-        "plans": build_plans_payload(),
+        "plans": build_plans_payload(user),
         "support_url": "https://chat.whatsapp.com/JXxSGjaKtqRH9c0jTlGv2l?mode=gi_t",
     }
 
 
 def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
     return users_collection().find_one({"user_id": int(user_id)})
+
+
+from app.statistics import get_performance_snapshot
