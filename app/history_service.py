@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 from bson import ObjectId
 
 from app.config import is_admin
-from app.database import signal_history_collection, signal_results_collection, signals_collection, users_collection
+from app.database import signal_history_collection, signal_results_collection, signals_collection, users_collection, user_signals_collection
 from app.models import new_signal_history_record
 from app.plans import PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM
 
@@ -118,15 +118,61 @@ def backfill_signal_history(limit: int = 200) -> int:
     return processed
 
 
+def _enrich_user_signal_history_rows(rows: List[Dict]) -> List[Dict]:
+    """Fallback para usuarios que sí tienen señales históricas en user_signals
+    pero todavía no tienen materializado signal_history."""
+    enriched: List[Dict] = []
+    for row in rows:
+        doc = dict(row)
+        signal_id = str(doc.get("signal_id") or "")
+        result_doc = None
+        if signal_id:
+            result_doc = signal_results_collection().find_one({"base_signal_id": signal_id})
+            if not result_doc:
+                result_doc = signal_results_collection().find_one({"signal_id": signal_id, "user_id": int(doc.get("user_id", 0))})
+
+        if result_doc:
+            doc["result"] = result_doc.get("result")
+            doc["evaluated_at"] = result_doc.get("evaluated_at")
+            doc["risk_pct"] = result_doc.get("risk_pct")
+            doc["reward_pct"] = result_doc.get("reward_pct")
+            doc["r_multiple"] = result_doc.get("r_multiple")
+            doc["resolution_minutes"] = result_doc.get("resolution_minutes")
+        elif doc.get("evaluated") and doc.get("result"):
+            doc["evaluated_at"] = doc.get("updated_at") or doc.get("created_at")
+
+        # Compatibilidad con la UI histórica actual.
+        doc.setdefault("signal_created_at", doc.get("created_at"))
+        doc.setdefault("signal_valid_until", doc.get("valid_until"))
+        doc.setdefault("evaluation_valid_until", doc.get("evaluation_valid_until"))
+        doc.setdefault("telegram_valid_until", doc.get("telegram_valid_until"))
+        enriched.append(doc)
+    return enriched
+
+
+
 def get_history_entries_for_user(user_id: int, *, user_plan: Optional[str] = None, limit: int = 10) -> List[Dict]:
     if user_plan is None:
         user = users_collection().find_one({"user_id": int(user_id)}, {"plan": 1}) or {}
         user_plan = user.get("plan", PLAN_FREE)
 
     query = _plan_visibility_filter(user_plan, user_id=user_id)
-    return list(
+    docs = list(
         signal_history_collection()
         .find(query)
         .sort("signal_created_at", -1)
         .limit(max(1, int(limit)))
     )
+    if docs:
+        return docs
+
+    # Fallback: si el histórico materializado aún está vacío, usamos user_signals
+    # para no dejar el módulo de Historial en falso negativo.
+    user_query = {"user_id": int(user_id), **query}
+    rows = list(
+        user_signals_collection()
+        .find(user_query)
+        .sort("created_at", -1)
+        .limit(max(1, int(limit)))
+    )
+    return _enrich_user_signal_history_rows(rows)
