@@ -31,8 +31,43 @@ PLAN_BASE_PRICES = {
     PLAN_PREMIUM: 20.0,
 }
 
-# Precios por defecto: proporcionales al plan mensual base. Se pueden ajustar
-# más adelante con variables de entorno o una fase de checkout dedicada.
+# =========================
+# VALIDACIONES DE PLANES
+# =========================
+
+def is_valid_plan_duration(plan: Optional[str], days: int) -> bool:
+    plan_value = normalize_plan(plan)
+    try:
+        day_value = int(days)
+    except Exception:
+        return False
+    return plan_value in {PLAN_PLUS, PLAN_PREMIUM} and day_value in PLAN_DURATION_OPTIONS
+
+
+def validate_plan_duration(plan: Optional[str], days: int) -> tuple[str, int]:
+    plan_value = normalize_plan(plan)
+    try:
+        day_value = int(days)
+    except Exception as exc:
+        raise ValueError("Duración inválida para el plan seleccionado") from exc
+    if not is_valid_plan_duration(plan_value, day_value):
+        raise ValueError("Duración inválida para el plan seleccionado")
+    return plan_value, day_value
+
+
+def validate_entitlement_days(days: int) -> int:
+    try:
+        day_value = int(days)
+    except Exception as exc:
+        raise ValueError("Días inválidos") from exc
+    if day_value <= 0:
+        raise ValueError("La cantidad de días debe ser mayor que 0")
+    if day_value > 3650:
+        raise ValueError("La cantidad de días es demasiado alta")
+    return day_value
+
+
+# Precios comerciales confirmados para los subplanes actuales.
 PLAN_PRICE_TABLE = {
     PLAN_PLUS: {
         7: 3.5,
@@ -114,7 +149,10 @@ def get_plan_duration_options(plan: Optional[str] = None) -> List[int]:
 
 def get_plan_price(plan: str, days: int = PLAN_DURATION_DAYS) -> float:
     plan_value = normalize_plan(plan)
-    day_value = int(days)
+    try:
+        day_value = int(days)
+    except Exception:
+        return 0.0
     return float(PLAN_PRICE_TABLE.get(plan_value, {}).get(day_value, 0.0))
 
 
@@ -230,7 +268,7 @@ def _record_subscription_event(
             user_id=int(user_id),
             event_type=event_type,
             plan=normalize_plan(plan),
-            days=int(days),
+            days=days,
             source=str(source or "system"),
             before_plan=normalize_plan(before_plan),
             after_plan=normalize_plan(after_plan),
@@ -301,7 +339,9 @@ def grant_plan_entitlement(
             logger.warning("Usuario %s no encontrado para grant_plan_entitlement", user_id)
             return False
 
-        if int(days) <= 0:
+        try:
+            days = validate_entitlement_days(days)
+        except ValueError:
             logger.warning("Días inválidos para entitlement de %s: %s", user_id, days)
             return False
 
@@ -309,7 +349,7 @@ def grant_plan_entitlement(
         updated_user = _apply_entitlement_to_user(
             user,
             target_plan=target_plan,
-            days=int(days),
+            days=days,
             source=source,
             purchase=reason == "purchase",
         )
@@ -341,13 +381,10 @@ def activate_plan_purchase(
     metadata: Optional[Dict[str, Any]] = None,
     trigger_referral: bool = True,
 ) -> bool:
-    plan_value = normalize_plan(plan)
-    day_value = int(days)
-    if plan_value not in {PLAN_PLUS, PLAN_PREMIUM}:
-        logger.warning("Intento de compra con plan inválido para %s: %s", user_id, plan)
-        return False
-    if day_value not in PLAN_DURATION_OPTIONS:
-        logger.warning("Intento de compra con duración inválida para %s: %s", user_id, days)
+    try:
+        plan_value, day_value = validate_plan_duration(plan, days)
+    except ValueError:
+        logger.warning("Intento de compra inválida para %s: plan=%s days=%s", user_id, plan, days)
         return False
 
     success = grant_plan_entitlement(
