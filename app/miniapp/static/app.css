@@ -360,3 +360,89 @@ h1 {
   .payment-grid { grid-template-columns: 1fr; }
   h1 { font-size: 24px; }
 }
+
+.hero-card, .market-hero-card {
+  background: radial-gradient(circle at top right, rgba(245,158,11,0.18), rgba(255,255,255,0.03) 45%, rgba(255,255,255,0.02));
+}
+.hero-topline {
+  color: var(--accent-2);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+.hero-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 0.8fr;
+  gap: 16px;
+  align-items: center;
+}
+.hero-title {
+  font-size: 28px;
+  margin: 0 0 8px;
+}
+.hero-subtitle {
+  color: var(--muted);
+  line-height: 1.5;
+}
+.hero-side {
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  padding: 16px;
+  background: rgba(255,255,255,0.04);
+}
+.hero-side-value {
+  font-size: 32px;
+  font-weight: 800;
+}
+.hero-side-label {
+  color: var(--muted);
+  margin-top: 6px;
+}
+.hero-side-meta {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 10px;
+}
+.mix-block + .mix-block {
+  margin-top: 12px;
+}
+.mix-title {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.compact-pill-row .pill {
+  padding: 5px 9px;
+  font-size: 11px;
+}
+.feature-list {
+  display: grid;
+  gap: 8px;
+}
+.feature-item {
+  color: var(--muted);
+  font-size: 13px;
+}
+.positive-text {
+  color: #86efac;
+}
+.negative-text {
+  color: #fca5a5;
+}
+.compact-item .item-header {
+  margin-bottom: 4px;
+}
+.signal-card-item .pill-row {
+  margin-top: 8px;
+}
+@media (max-width: 720px) {
+  .hero-grid {
+    grid-template-columns: 1fr;
+  }
+  .hero-title {
+    font-size: 24px;
+  }
+}
