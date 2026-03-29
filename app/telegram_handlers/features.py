@@ -12,7 +12,7 @@ from app.database import users_collection
 from app.market_ui import render_market_state
 from app.menus import back_to_menu, my_account_menu, main_menu
 from app.models import is_plan_active, is_trial_active, update_timestamp
-from app.plans import PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM, activate_plus, activate_premium
+from app.plans import PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM, activate_plus, activate_premium, get_plan_catalog, get_plan_name, get_plan_price
 from app.risk import get_user_risk_profile
 from app.risk_ui import (
     build_active_signals_list_keyboard,
@@ -35,6 +35,34 @@ from app.i18n import language_label, tr
 from app.telegram_handlers.common import _get_user_language, _plan_rank, _tr, _wa_link, build_language_settings_keyboard, format_whatsapp_contacts
 
 logger = logging.getLogger(__name__)
+
+
+def _format_price(value: float) -> str:
+    if float(value).is_integer():
+        return str(int(value))
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def _build_plan_selector_keyboard(language: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(_tr(language, "🟡 Ver subplanes PLUS", "🟡 View PLUS subplans"), callback_data="plan_select:plus")],
+        [InlineKeyboardButton(_tr(language, "🔴 Ver subplanes PREMIUM", "🔴 View PREMIUM subplans"), callback_data="plan_select:premium")],
+        [InlineKeyboardButton(_tr(language, "⬅️ Volver al menú", "⬅️ Back to menu"), callback_data="back_menu")],
+    ])
+
+
+def _build_plan_duration_keyboard(language: str, plan: str) -> InlineKeyboardMarkup:
+    rows = []
+    catalog = get_plan_catalog().get(plan, [])
+    emoji = "🟡" if plan == PLAN_PLUS else "🔴"
+    for option in catalog:
+        label = f"{emoji} {int(option['days'])} días · {_format_price(float(option['price_usdt']))} USDT"
+        if language == "en":
+            label = f"{emoji} {int(option['days'])} days · {_format_price(float(option['price_usdt']))} USDT"
+        rows.append([InlineKeyboardButton(label, callback_data=f"plan_duration:{plan}:{int(option['days'])}")])
+    rows.append([InlineKeyboardButton(_tr(language, "⬅️ Volver a planes", "⬅️ Back to plans"), callback_data="plans")])
+    return InlineKeyboardMarkup(rows)
+
 
 async def handle_view_signals(query, user, admin, users_col):
     language = _get_user_language(user)
@@ -73,44 +101,110 @@ async def handle_view_signals(query, user, admin, users_col):
 
 async def handle_plans(query, user):
     language = _get_user_language(user)
-    plan = str(user.get("plan", PLAN_FREE)).upper()
+    status_plan = str(user.get("plan", PLAN_FREE)).upper()
     user_id = user.get("user_id")
-    whatsapps = get_admin_whatsapps()
+    current_status = user.get("subscription_status") or ("active" if user.get("plan_end") else "trial")
 
     if language == "en":
         message = (
             "💼 HADES ALPHA PLANS\n\n"
-            f"📊 Your current plan: {plan}\n\n"
-            "🟢 FREE\n• Basic access to the bot\n• Limited features\n\n"
-            "🟡 PLUS\n• Full signals\n• Futures Radar\n• Movers\n• PRO Watchlist\n• History\n\n"
-            "🔴 PREMIUM\n• Everything in PLUS\n• 🔔 Premium alerts\n• Opportunities before the signal\n• Full ecosystem access\n\n"
-            "👇 Select the plan you want to activate:"
+            f"📊 Your current plan: {status_plan}\n"
+            f"📌 Subscription status: {str(current_status).upper()}\n\n"
+            "PLUS monthly base price: 15 USDT\n"
+            "PREMIUM monthly base price: 20 USDT\n\n"
+            "Choose a tier to view the available subplans (7 / 15 / 21 / 30 days)."
         )
-        plus_msg = f"Hello, I want to activate the PLUS plan of HADES ALPHA. My Telegram ID is: {user_id}"
-        premium_msg = f"Hello, I want to activate the PREMIUM plan of HADES ALPHA. My Telegram ID is: {user_id}"
     else:
         message = (
             "💼 PLANES HADES ALPHA\n\n"
-            f"📊 Tu plan actual: {plan}\n\n"
-            "🟢 FREE\n• Acceso básico al bot\n• Funciones limitadas\n\n"
-            "🟡 PLUS\n• Señales completas\n• Radar Futures\n• Movers\n• Watchlist PRO\n• Historial\n\n"
-            "🔴 PREMIUM\n• Todo lo de PLUS\n• 🔔 Alertas premium\n• Oportunidades antes de la señal\n• Acceso completo al ecosistema\n\n"
-            "👇 Selecciona el plan que deseas activar:"
+            f"📊 Tu plan actual: {status_plan}\n"
+            f"📌 Estado de suscripción: {str(current_status).upper()}\n\n"
+            "PLUS precio base mensual: 15 USDT\n"
+            "PREMIUM precio base mensual: 20 USDT\n\n"
+            "Elige un tier para ver sus subplanes disponibles (7 / 15 / 21 / 30 días)."
         )
-        plus_msg = f"Hola, quiero activar el plan PLUS de HADES ALPHA. Mi ID de Telegram es: {user_id}"
-        premium_msg = f"Hola, quiero activar el plan PREMIUM de HADES ALPHA. Mi ID de Telegram es: {user_id}"
+
+    await query.edit_message_text(message, reply_markup=_build_plan_selector_keyboard(language))
+
+
+async def handle_plan_subplans(query, user, plan: str):
+    language = _get_user_language(user)
+    plan = PLAN_PLUS if plan == PLAN_PLUS else PLAN_PREMIUM
+    title = "PLUS" if plan == PLAN_PLUS else "PREMIUM"
+    monthly_price = _format_price(get_plan_price(plan, 30))
+
+    lines = []
+    if language == "en":
+        lines.extend([
+            f"{title} SUBPLANS",
+            "",
+            f"Monthly base price: {monthly_price} USDT",
+            "Available durations:",
+        ])
+        for option in get_plan_catalog().get(plan, []):
+            lines.append(f"• {int(option['days'])} days → {_format_price(float(option['price_usdt']))} USDT")
+        lines.extend([
+            "",
+            "Tap a duration to generate the activation contact message.",
+        ])
+    else:
+        lines.extend([
+            f"SUBPLANES {title}",
+            "",
+            f"Precio base mensual: {monthly_price} USDT",
+            "Duraciones disponibles:",
+        ])
+        for option in get_plan_catalog().get(plan, []):
+            lines.append(f"• {int(option['days'])} días → {_format_price(float(option['price_usdt']))} USDT")
+        lines.extend([
+            "",
+            "Toca una duración para generar el mensaje de activación.",
+        ])
+
+    await query.edit_message_text("\n".join(lines), reply_markup=_build_plan_duration_keyboard(language, plan))
+
+
+async def handle_plan_duration(query, user, plan: str, days: int):
+    language = _get_user_language(user)
+    user_id = user.get("user_id")
+    whatsapps = get_admin_whatsapps()
+    plan = PLAN_PLUS if plan == PLAN_PLUS else PLAN_PREMIUM
+    days = int(days)
+    price = _format_price(get_plan_price(plan, days))
+    plan_name = get_plan_name(plan)
+
+    if language == "en":
+        message = (
+            f"💳 {plan_name} · {days} days\n\n"
+            f"Price: {price} USDT\n"
+            f"Telegram ID: {user_id}\n\n"
+            "Select an admin contact to continue with the activation."
+        )
+        wa_message = (
+            f"Hello, I want to activate the {plan_name} plan for {days} days in HADES ALPHA. "
+            f"My Telegram ID is: {user_id}. Price reference: {price} USDT."
+        )
+    else:
+        message = (
+            f"💳 {plan_name} · {days} días\n\n"
+            f"Precio: {price} USDT\n"
+            f"ID de Telegram: {user_id}\n\n"
+            "Selecciona un contacto administrador para continuar con la activación."
+        )
+        wa_message = (
+            f"Hola, quiero activar el plan {plan_name} por {days} días en HADES ALPHA. "
+            f"Mi ID de Telegram es: {user_id}. Precio de referencia: {price} USDT."
+        )
 
     keyboard_rows = []
-    if len(whatsapps) >= 1:
-        keyboard_rows.append([InlineKeyboardButton("💬 PLUS · Admin 1", url=_wa_link(whatsapps[0], plus_msg))])
-        keyboard_rows.append([InlineKeyboardButton("💬 PREMIUM · Admin 1", url=_wa_link(whatsapps[0], premium_msg))])
-    if len(whatsapps) >= 2:
-        keyboard_rows.append([InlineKeyboardButton("💬 PLUS · Admin 2", url=_wa_link(whatsapps[1], plus_msg))])
-        keyboard_rows.append([InlineKeyboardButton("💬 PREMIUM · Admin 2", url=_wa_link(whatsapps[1], premium_msg))])
+    for idx, whatsapp in enumerate(whatsapps, start=1):
+        keyboard_rows.append([InlineKeyboardButton(f"💬 Admin {idx}", url=_wa_link(whatsapp, wa_message))])
     if not keyboard_rows:
         message += _tr(language, "\n\n⚠️ No hay contactos de WhatsApp configurados todavía.", "\n\n⚠️ No WhatsApp contacts are configured yet.")
+    keyboard_rows.append([InlineKeyboardButton(_tr(language, "⬅️ Volver a subplanes", "⬅️ Back to subplans"), callback_data=f"plan_select:{plan}")])
     keyboard_rows.append([InlineKeyboardButton(_tr(language, "⬅️ Volver al menú", "⬅️ Back to menu"), callback_data="back_menu")])
     await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup(keyboard_rows))
+
 
 async def handle_my_account(query, user, admin=False):
     language = _get_user_language(user)
@@ -136,11 +230,13 @@ async def handle_my_account(query, user, admin=False):
             pass
 
     risk_profile = get_user_risk_profile(user["user_id"])
+    subscription_status = str(user.get('subscription_status') or ('active' if plan_end else 'trial')).upper()
     lines = [
         tr(language, "account.title"),
         "",
         f"{tr(language, 'account.id')}: {user['user_id']}",
         f"{tr(language, 'account.plan')}: {str(plan).upper()}",
+        f"Estado: {subscription_status}" if language != 'en' else f"Status: {subscription_status}",
         f"{tr(language, 'common.current_language')}: {language_label(language)}",
     ]
     if days_left is not None:
@@ -642,6 +738,15 @@ async def handle_standard_menu_action(query, context, user, action: str, admin: 
         await handle_plans(query, user)
         return True
 
+    if action in {"plan_select:plus", "plan_select:premium"}:
+        await handle_plan_subplans(query, user, action.split(":", 1)[1])
+        return True
+
+    if action.startswith("plan_duration:"):
+        _, plan, days = action.split(":", 2)
+        await handle_plan_duration(query, user, plan, int(days))
+        return True
+
     if action == "my_account":
         await handle_my_account(query, user, admin)
         return True
@@ -746,7 +851,7 @@ async def handle_standard_menu_action(query, context, user, action: str, admin: 
         await query.edit_message_text(
             f"📅 Activación manual de PLAN {plan_name}\n\n"
             f"Envía la cantidad de días para el usuario {target_user_id}.\n"
-            "Ejemplo: 7, 15, 30"
+            "Ejemplo: 7, 15, 21, 30"
         )
         return True
 
