@@ -20,6 +20,8 @@ SIGNAL_HISTORY_SCHEMA_VERSION = 1
 SUBSCRIPTION_EVENT_SCHEMA_VERSION = 1
 PAYMENT_ORDER_SCHEMA_VERSION = 1
 PAYMENT_VERIFICATION_LOG_SCHEMA_VERSION = 1
+AUDIT_LOG_SCHEMA_VERSION = 1
+HEALTH_STATUS_SCHEMA_VERSION = 1
 
 
 def utcnow() -> datetime:
@@ -270,6 +272,57 @@ def new_payment_verification_log(
         "confirmations": int(confirmations) if confirmations is not None else None,
         "raw": raw or {},
         "schema_version": PAYMENT_VERIFICATION_LOG_SCHEMA_VERSION,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+# =========================
+# OBSERVABILITY MODELS
+# =========================
+def new_audit_log(
+    *,
+    event_type: str,
+    status: str,
+    module: str,
+    user_id: Optional[int] = None,
+    admin_id: Optional[int] = None,
+    signal_id: Optional[str] = None,
+    order_id: Optional[str] = None,
+    callback: Optional[str] = None,
+    message: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    now = utcnow()
+    return {
+        "event_type": str(event_type),
+        "status": str(status),
+        "module": str(module),
+        "user_id": int(user_id) if user_id is not None else None,
+        "admin_id": int(admin_id) if admin_id is not None else None,
+        "signal_id": str(signal_id) if signal_id is not None else None,
+        "order_id": str(order_id) if order_id is not None else None,
+        "callback": str(callback) if callback is not None else None,
+        "message": str(message) if message is not None else None,
+        "metadata": metadata or {},
+        "schema_version": AUDIT_LOG_SCHEMA_VERSION,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def new_health_status(
+    *,
+    component: str,
+    status: str,
+    details: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    now = utcnow()
+    return {
+        "component": str(component),
+        "status": str(status),
+        "details": details or {},
+        "schema_version": HEALTH_STATUS_SCHEMA_VERSION,
         "created_at": now,
         "updated_at": now,
     }
