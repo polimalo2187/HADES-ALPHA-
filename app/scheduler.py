@@ -10,6 +10,7 @@ from app.plans import PLAN_FREE, SUBSCRIPTION_STATUS_EXPIRED
 from app.stats_engine import run_statistics_cycle
 from app.database import signal_history_collection, signal_results_collection
 from app.history_service import backfill_signal_history
+from app.payment_service import expire_stale_payment_orders
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +159,10 @@ async def scheduler_loop():
     while True:
         try:
             # Tarea 1: Revisar planes expirados (sin notificaciones por ahora)
+            expired_orders = expire_stale_payment_orders()
+            if expired_orders > 0:
+                logger.info("💳 Órdenes de pago expiradas | count=%s", expired_orders)
+
             processed = await check_expired_plans()
             if processed > 0:
                 logger.info(f"📋 Procesados {processed} planes expirados (actualizados a FREE)")
