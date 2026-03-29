@@ -65,13 +65,13 @@ def build_signal_history_record(base_signal: Dict, result_doc: Dict) -> Dict:
 
 def upsert_signal_history_record(base_signal: Dict, result_doc: Dict) -> None:
     record = build_signal_history_record(base_signal, result_doc)
-    created_at = record.pop("created_at", None) or datetime.utcnow()
+    created_at = record.get("created_at") or datetime.utcnow()
+    update_payload = dict(record)
+    update_payload.pop("created_at", None)
+    update_payload["updated_at"] = datetime.utcnow()
     signal_history_collection().update_one(
         {"signal_id": record["signal_id"]},
-        {
-            "$set": {**record, "updated_at": datetime.utcnow()},
-            "$setOnInsert": {"created_at": created_at},
-        },
+        {"$set": update_payload, "$setOnInsert": {"created_at": created_at}},
         upsert=True,
     )
 
