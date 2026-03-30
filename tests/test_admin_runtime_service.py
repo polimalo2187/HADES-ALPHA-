@@ -2,7 +2,7 @@ import tests._bootstrap
 import unittest
 from unittest.mock import patch
 
-from app.services.admin_runtime_service import get_admin_runtime_health_matrix, list_recent_audit_events
+from app.services.admin_runtime_service import get_admin_runtime_health_matrix, list_recent_audit_events, list_recent_incidents
 
 
 class _AuditCollection:
@@ -31,6 +31,57 @@ class AdminRuntimeServiceTests(unittest.TestCase):
         self.assertFalse(payload['ok'])
         self.assertEqual(payload['overall_status'], 'error')
         self.assertEqual(set(payload['runtimes'].keys()), {'web', 'bot', 'signal_worker', 'scheduler'})
+
+
+    def test_list_recent_incidents_combines_runtime_and_audit(self):
+        runtime_payload = {
+            'overall_status': 'degraded',
+            'generated_at': '2026-03-30T12:00:10',
+            'runtimes': {
+                'web': {
+                    'components': {
+                        'miniapp': {
+                            'status': 'ok',
+                            'effective_status': 'stale',
+                            'updated_at': '2026-03-30T12:00:00',
+                            'age_seconds': 181,
+                            'stale_after_seconds': 180,
+                            'details': {'stage': 'running'},
+                        }
+                    }
+                }
+            },
+        }
+        audit_payload = {
+            'items': [
+                {
+                    'created_at': '2026-03-30T12:00:20',
+                    'event_type': 'signal_dispatch_failed',
+                    'status': 'error',
+                    'module': 'signal_pipeline',
+                    'message': 'boom',
+                    'metadata': {'job_id': '123'},
+                },
+                {
+                    'created_at': '2026-03-30T12:00:05',
+                    'event_type': 'miniapp_auth_succeeded',
+                    'status': 'ok',
+                    'module': 'miniapp',
+                    'message': 'ok',
+                    'metadata': {},
+                },
+            ]
+        }
+
+        with patch('app.services.admin_runtime_service.get_admin_runtime_health_matrix', return_value=runtime_payload), \
+             patch('app.services.admin_runtime_service.list_recent_audit_events', return_value=audit_payload):
+            payload = list_recent_incidents(limit=10)
+
+        self.assertEqual(payload['runtime_overall_status'], 'degraded')
+        self.assertEqual(payload['counts']['error'], 1)
+        self.assertEqual(payload['counts']['warning'], 1)
+        self.assertEqual(payload['items'][0]['source'], 'audit')
+        self.assertEqual(payload['items'][1]['source'], 'runtime_health')
 
     def test_list_recent_audit_events_serializes_and_clamps_limit(self):
         rows = [{
