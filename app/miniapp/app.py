@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -31,7 +31,7 @@ from app.miniapp.service import (
     get_user_by_id,
     serialize_order_public,
 )
-from app.observability import heartbeat, record_audit_event
+from app.observability import build_runtime_health_report, heartbeat, record_audit_event, start_background_heartbeat
 from app.payment_service import cancel_payment_order, confirm_payment_order, create_payment_order, get_active_payment_order_for_user
 
 logger = logging.getLogger(__name__)
@@ -90,6 +90,15 @@ def create_mini_app() -> FastAPI:
     @app.on_event("startup")
     async def on_startup() -> None:
         initialize_database()
+        start_background_heartbeat(
+            "miniapp",
+            details_provider=lambda: {
+                "stage": "running",
+                "runtime_role": get_runtime_role(),
+                "cors_origins": cors_origins,
+                "dev_auth_enabled": is_mini_app_dev_auth_enabled(),
+            },
+        )
         heartbeat(
             "miniapp",
             status="ok",
@@ -126,15 +135,29 @@ def create_mini_app() -> FastAPI:
     async def miniapp_index() -> FileResponse:
         return FileResponse(str(INDEX_FILE))
 
-    @app.get("/miniapp/health")
-    async def miniapp_health() -> Dict[str, Any]:
+    @app.get("/miniapp/health/live")
+    async def miniapp_liveness() -> Dict[str, Any]:
         return {
             "ok": True,
             "service": "miniapp",
             "runtime_role": get_runtime_role(),
+        }
+
+    @app.get("/miniapp/health/ready")
+    async def miniapp_readiness() -> JSONResponse:
+        report = build_runtime_health_report(get_runtime_role())
+        status_code = 200 if report.get("ok") else 503
+        return JSONResponse(status_code=status_code, content=report)
+
+    @app.get("/miniapp/health")
+    async def miniapp_health() -> Dict[str, Any]:
+        report = build_runtime_health_report(get_runtime_role())
+        report.update({
+            "service": "miniapp",
             "dev_auth_enabled": is_mini_app_dev_auth_enabled(),
             "cors_origins": cors_origins,
-        }
+        })
+        return report
 
     @app.post("/api/miniapp/auth")
     async def miniapp_auth(payload: MiniAppAuthRequest) -> Dict[str, Any]:
