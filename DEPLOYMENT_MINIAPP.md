@@ -111,3 +111,15 @@ Crea servicios separados apuntando al mismo repo:
 `main.py` ahora valida variables críticas según el rol. Si falta algo esencial, el proceso falla al arrancar con un error explícito.
 
 Eso evita despliegues medio rotos donde aparentemente “corre” pero el proceso quedó mal configurado.
+
+## Endpoints admin operativos (MiniApp)
+Estos endpoints son de solo lectura y requieren un usuario autenticado cuyo `user_id` esté incluido en `ADMIN_USER_IDS`.
+
+- `/api/miniapp/admin/overview`
+  - Resumen operativo consolidado: runtimes, usuarios, señales, pagos y recuento básico de auditoría.
+- `/api/miniapp/admin/health`
+  - Matriz de salud por runtime (`web`, `bot`, `signal_worker`, `scheduler`).
+- `/api/miniapp/admin/audit?limit=25&status=error&module=miniapp`
+  - Eventos recientes de auditoría con filtros opcionales por estado y módulo.
+
+Esto deja la base para un panel admin web sin depender de inspección manual de Mongo o de logs crudos.
