@@ -40,13 +40,28 @@ def _run_role() -> None:
 
 def _create_runtime_app():
     from fastapi import FastAPI
+    from fastapi.responses import JSONResponse
+
+    from app.observability import build_runtime_health_report
 
     service_name = "miniapp" if _RUNTIME_ROLE == "web" else _RUNTIME_ROLE
     runtime_app = FastAPI(title=f"HADES {service_name} Process")
 
     @runtime_app.get("/health")
     async def health() -> dict:
+        report = build_runtime_health_report(_RUNTIME_ROLE)
+        report["service"] = service_name
+        return report
+
+    @runtime_app.get("/health/live")
+    async def live() -> dict:
         return {"ok": True, "service": service_name, "runtime_role": _RUNTIME_ROLE}
+
+    @runtime_app.get("/health/ready")
+    async def ready() -> JSONResponse:
+        report = build_runtime_health_report(_RUNTIME_ROLE)
+        report["service"] = service_name
+        return JSONResponse(status_code=200 if report.get("ok") else 503, content=report)
 
     return runtime_app
 
