@@ -13,6 +13,7 @@ from app.plans import get_plan_catalog, get_plan_name, normalize_plan, plan_stat
 from app.statistics import get_performance_snapshot
 from app.user_service import get_or_create_user
 from app.watchlist import get_watchlist, get_watchlist_limit_for_plan
+from app.signals import get_signal_analysis_for_user, get_signal_tracking_for_user
 
 
 def _iso(value: Any) -> Optional[str]:
@@ -258,6 +259,185 @@ def _empty_summary() -> Dict[str, Any]:
         "max_drawdown_r": 0.0,
     }
 
+
+
+def _tracking_feature_tier(plan: str) -> str:
+    plan_value = normalize_plan(plan)
+    if plan_value == "premium":
+        return "advanced"
+    if plan_value == "plus":
+        return "full"
+    return "basic"
+
+
+def _human_component_label(raw_label: Any) -> str:
+    normalized = str(raw_label or "").strip().lower()
+    mapping = {
+        "trend_structure": "Estructura de tendencia",
+        "adx_strength": "Fuerza ADX",
+        "atr_quality": "Calidad ATR",
+        "breakout_quality": "Calidad breakout",
+        "retest_quality": "Calidad retest",
+        "continuation_quality": "Continuación",
+        "volume_quality": "Calidad de volumen",
+        "entry_freshness": "Frescura de entrada",
+        "profile_penalty": "Ajuste por perfil",
+    }
+    return mapping.get(normalized, str(raw_label or "—").replace("_", " ").title())
+
+
+def _serialize_score_components(items: Any, *, limit: Optional[int] = None) -> list[Dict[str, Any]]:
+    if not isinstance(items, list):
+        return []
+    rows: list[Dict[str, Any]] = []
+    for raw_item in items:
+        label = None
+        points = None
+        if isinstance(raw_item, (list, tuple)) and raw_item:
+            label = raw_item[0]
+            if len(raw_item) > 1:
+                points = raw_item[1]
+        elif isinstance(raw_item, dict):
+            label = raw_item.get("label") or raw_item.get("name")
+            points = raw_item.get("points")
+        else:
+            label = raw_item
+        score_value = None
+        if points is not None:
+            try:
+                score_value = round(float(points), 2)
+            except Exception:
+                score_value = None
+        row = {
+            "label": _human_component_label(label),
+            "score": score_value,
+            "tone": "positive" if (score_value or 0) >= 0 else "negative",
+        }
+        rows.append(row)
+    if limit is not None:
+        return rows[:max(0, int(limit))]
+    return rows
+
+
+def _component_extreme(rows: list[Dict[str, Any]], *, pick: str) -> Optional[Dict[str, Any]]:
+    eligible = [row for row in rows if row.get("score") is not None]
+    if not eligible:
+        return None
+    key_fn = lambda row: float(row.get("score") or 0.0)
+    return max(eligible, key=key_fn) if pick == "max" else min(eligible, key=key_fn)
+
+
+def _signal_visibility_rank(plan: Any) -> int:
+    value = normalize_plan(plan)
+    return {"free": 0, "plus": 1, "premium": 2}.get(value, 0)
+
+
+def build_signal_detail_payload(user: Dict[str, Any], signal_id: str, *, profile_name: str = "moderado") -> Optional[Dict[str, Any]]:
+    user_id = int(user.get("user_id") or 0)
+    status = plan_status(user)
+    effective_plan = normalize_plan(status.get("plan") or user.get("plan"))
+    tier = _tracking_feature_tier(effective_plan)
+
+    selected_profile = str(profile_name or "moderado").strip().lower()
+    if selected_profile not in {"conservador", "moderado", "agresivo"}:
+        selected_profile = "moderado"
+    if tier == "basic":
+        selected_profile = "moderado"
+
+    tracking = get_signal_tracking_for_user(user_id, signal_id, profile_name=selected_profile)
+    if not tracking:
+        return None
+
+    analysis = get_signal_analysis_for_user(user_id, signal_id, profile_name=selected_profile) or {}
+    signal_row = _serialize_signal(tracking)
+    visibility = normalize_plan(tracking.get("visibility") or signal_row.get("visibility"))
+    score_components = _serialize_score_components(analysis.get("components"), limit=6 if tier == "advanced" else 4)
+    raw_components = _serialize_score_components(analysis.get("raw_components"), limit=6) if tier == "advanced" else []
+    normalized_components = _serialize_score_components(analysis.get("normalized_components"), limit=6) if tier == "advanced" else []
+    strongest_component = _component_extreme(score_components, pick="max")
+    weakest_component = _component_extreme(score_components, pick="min")
+    take_profits = tracking.get("take_profits") or []
+
+    tracking_payload: Dict[str, Any] = {
+        "selected_profile": selected_profile,
+        "state_label": tracking.get("state_label"),
+        "entry_state_label": tracking.get("entry_state_label"),
+        "result_label": tracking.get("result_label"),
+        "recommendation": tracking.get("recommendation"),
+        "current_price": tracking.get("current_price"),
+        "entry_price": tracking.get("entry_price"),
+        "entry_zone_low": tracking.get("entry_zone_low"),
+        "entry_zone_high": tracking.get("entry_zone_high"),
+        "stop_loss": tracking.get("stop_loss"),
+        "take_profits": take_profits,
+        "current_move_pct": tracking.get("current_move_pct"),
+        "distance_to_entry_pct": tracking.get("distance_to_entry_pct"),
+        "stop_distance_pct": tracking.get("stop_distance_pct"),
+        "tp1_distance_pct": tracking.get("tp1_distance_pct"),
+        "tp2_distance_pct": analysis.get("selected_tp2_distance_pct"),
+        "progress_to_tp1_pct": tracking.get("progress_to_tp1_pct"),
+        "in_entry_zone": bool(tracking.get("in_entry_zone")),
+        "tp1_hit_now": bool(tracking.get("tp1_hit_now")),
+        "tp2_hit_now": bool(tracking.get("tp2_hit_now")),
+        "stop_hit_now": bool(tracking.get("stop_hit_now")),
+        "is_operable_now": bool(tracking.get("is_operable_now")),
+        "created_at": _iso(tracking.get("created_at")),
+        "telegram_valid_until": _iso(tracking.get("telegram_valid_until")),
+        "evaluation_valid_until": _iso(tracking.get("evaluation_valid_until") or tracking.get("valid_until")),
+        "warnings": list((tracking.get("warnings") or [])[:(4 if tier == "advanced" else 2)]),
+    }
+
+    analysis_payload: Dict[str, Any] = {
+        "setup_group": analysis.get("setup_group"),
+        "score": analysis.get("score"),
+        "normalized_score": analysis.get("normalized_score"),
+        "atr_pct": analysis.get("atr_pct"),
+        "timeframes": list(analysis.get("timeframes") or []),
+        "strongest_component": strongest_component,
+        "weakest_component": weakest_component,
+        "components": score_components,
+        "selected_stop_distance_pct": analysis.get("selected_stop_distance_pct"),
+        "selected_tp1_distance_pct": analysis.get("selected_tp1_distance_pct"),
+        "selected_tp2_distance_pct": analysis.get("selected_tp2_distance_pct"),
+        "warnings": list((analysis.get("warnings") or [])[:(4 if tier == "advanced" else 2)]),
+    }
+
+    if tier in {"full", "advanced"}:
+        analysis_payload.update({
+            "market_validity_minutes": analysis.get("market_validity_minutes"),
+            "leverage": (analysis.get("selected_profile_payload") or {}).get("leverage"),
+        })
+
+    if tier == "advanced":
+        analysis_payload.update({
+            "score_profile": analysis.get("score_profile"),
+            "score_calibration": analysis.get("score_calibration"),
+            "raw_components": raw_components,
+            "normalized_components": normalized_components,
+        })
+
+    if tier == "basic":
+        upgrade_hint = "Plus desbloquea estructura operativa completa y Premium añade desglose interno del scoring."
+    elif tier == "full":
+        upgrade_hint = "Premium añade desglose interno del scoring y componentes avanzados."
+    else:
+        upgrade_hint = None
+
+    return {
+        "signal": {
+            **signal_row,
+            "visibility_rank": _signal_visibility_rank(visibility),
+            "created_at": signal_row.get("created_at") or _iso(tracking.get("created_at")),
+            "visibility": visibility,
+        },
+        "viewer_plan": effective_plan,
+        "tracking_tier": tier,
+        "selected_profile": selected_profile,
+        "profile_options": ["moderado"] if tier == "basic" else ["conservador", "moderado", "agresivo"],
+        "tracking": tracking_payload,
+        "analysis": analysis_payload,
+        "upgrade_hint": upgrade_hint,
+    }
 
 def ensure_mini_app_user(*, user_id: int, username: Optional[str], telegram_language: Optional[str]) -> Dict[str, Any]:
     user, _ = get_or_create_user(
