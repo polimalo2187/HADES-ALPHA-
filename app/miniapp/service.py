@@ -393,6 +393,36 @@ def _radar_conviction_label(score: float, activity_score: float, range_score: fl
     return "Baja"
 
 
+def _radar_priority_rank(label: str) -> int:
+    mapping = {
+        "Máxima": 5,
+        "Alta": 4,
+        "Media": 3,
+        "Vigilancia": 2,
+        "Exploración": 1,
+    }
+    return mapping.get(str(label or ""), 0)
+
+
+def _radar_proximity_rank(label: str) -> int:
+    mapping = {
+        "Activa": 5,
+        "Inmediata": 4,
+        "Cercana": 3,
+        "Preparando": 2,
+        "Temprana": 1,
+    }
+    return mapping.get(str(label or ""), 0)
+
+
+def _radar_signal_context_label(*, has_active_signal: bool, latest_signal: Optional[Dict[str, Any]]) -> str:
+    if has_active_signal:
+        return "Activa"
+    if latest_signal:
+        return "Reciente"
+    return "Sin señal"
+
+
 def _radar_reasons(
     *,
     radar_score: float,
@@ -575,17 +605,41 @@ def _serialize_radar(user_id: int, *, limit: int = 6) -> tuple[List[Dict[str, An
             missing_market_data=bool(ticker_metrics["missing_market_data"]),
         )
 
+        priority_label = _radar_priority_label(setup_priority_score)
+        proximity_label = _radar_proximity_label(setup_proximity_score, has_active_signal=bool(active_signal))
+        window_label = _radar_window_label(setup_proximity_score, ticker_metrics["range_pct_24h"], has_active_signal=bool(active_signal))
+        conviction_label = _radar_conviction_label(radar_score, activity_score, range_score, has_active_signal=bool(active_signal))
+        signal_context_label = _radar_signal_context_label(has_active_signal=bool(active_signal), latest_signal=latest_signal)
+        ranking_score = (
+            (0.44 * setup_priority_score)
+            + (0.28 * setup_proximity_score)
+            + (0.12 * radar_score)
+            + (0.08 * activity_score)
+            + (0.08 * signal_score)
+        )
+        if active_signal:
+            ranking_score = max(ranking_score, 96.0)
+
         items.append({
             "symbol": symbol,
             "direction": direction,
             "score": round(base_score, 1),
             "final_score": round(radar_score, 1),
-            "priority_label": _radar_priority_label(setup_priority_score),
+            "priority_label": priority_label,
+            "priority_rank": _radar_priority_rank(priority_label),
             "priority_score": round(setup_priority_score, 1),
-            "proximity_label": _radar_proximity_label(setup_proximity_score, has_active_signal=bool(active_signal)),
+            "proximity_label": proximity_label,
+            "proximity_rank": _radar_proximity_rank(proximity_label),
             "proximity_score": round(setup_proximity_score, 1),
-            "window_label": _radar_window_label(setup_proximity_score, ticker_metrics["range_pct_24h"], has_active_signal=bool(active_signal)),
-            "conviction_label": _radar_conviction_label(radar_score, activity_score, range_score, has_active_signal=bool(active_signal)),
+            "window_label": window_label,
+            "conviction_label": conviction_label,
+            "signal_context_label": signal_context_label,
+            "signal_score": round(signal_score, 1),
+            "activity_score": round(activity_score, 1),
+            "range_score": round(range_score, 1),
+            "change_score": round(change_score, 1),
+            "extreme_score": round(extreme_score, 1),
+            "ranking_score": round(max(0.0, min(100.0, ranking_score)), 1),
             "action_label": setup_action_label,
             "reason_short": reasons[0],
             "reasons": reasons,
@@ -608,6 +662,18 @@ def _serialize_radar(user_id: int, *, limit: int = 6) -> tuple[List[Dict[str, An
             "has_active_signal": bool(active_signal),
         })
 
+    items.sort(
+        key=lambda item: (
+            0 if item.get("has_active_signal") else 1,
+            -_safe_float(item.get("ranking_score"), 0.0),
+            -_safe_float(item.get("priority_score"), 0.0),
+            -_safe_float(item.get("proximity_score"), 0.0),
+            -_safe_float(item.get("final_score"), 0.0),
+            -_safe_float(item.get("quote_volume"), 0.0),
+            str(item.get("symbol") or ""),
+        )
+    )
+
     summary = {
         "total": len(items),
         "longs": sum(1 for item in items if item.get("direction") == "LONG"),
@@ -615,6 +681,26 @@ def _serialize_radar(user_id: int, *, limit: int = 6) -> tuple[List[Dict[str, An
         "hot": sum(1 for item in items if _safe_float(item.get("priority_score"), 0.0) >= 75.0),
         "immediate": sum(1 for item in items if item.get("proximity_label") in {"Activa", "Inmediata", "Cercana"}),
         "active_signals": sum(1 for item in items if item.get("has_active_signal")),
+        "priority_mix": {
+            "maxima": sum(1 for item in items if item.get("priority_label") == "Máxima"),
+            "alta": sum(1 for item in items if item.get("priority_label") == "Alta"),
+            "media": sum(1 for item in items if item.get("priority_label") == "Media"),
+            "vigilancia": sum(1 for item in items if item.get("priority_label") == "Vigilancia"),
+            "exploracion": sum(1 for item in items if item.get("priority_label") == "Exploración"),
+        },
+        "proximity_mix": {
+            "activa": sum(1 for item in items if item.get("proximity_label") == "Activa"),
+            "inmediata": sum(1 for item in items if item.get("proximity_label") == "Inmediata"),
+            "cercana": sum(1 for item in items if item.get("proximity_label") == "Cercana"),
+            "preparando": sum(1 for item in items if item.get("proximity_label") == "Preparando"),
+            "temprana": sum(1 for item in items if item.get("proximity_label") == "Temprana"),
+        },
+        "signal_mix": {
+            "activa": sum(1 for item in items if item.get("signal_context_label") == "Activa"),
+            "reciente": sum(1 for item in items if item.get("signal_context_label") == "Reciente"),
+            "sin_senal": sum(1 for item in items if item.get("signal_context_label") == "Sin señal"),
+        },
+        "sort_default": "ranking",
     }
     return items, summary
 
@@ -1084,7 +1170,7 @@ def build_history_payload(user: Dict[str, Any], *, limit: int = 20) -> List[Dict
 def build_market_payload(user: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     snapshot = get_market_state_snapshot() or {}
     user_id = int((user or {}).get("user_id") or 0)
-    radar_items, radar_summary = _serialize_radar(user_id, limit=6)
+    radar_items, radar_summary = _serialize_radar(user_id, limit=12)
     snapshot["radar"] = radar_items
     snapshot["radar_summary"] = radar_summary
     snapshot["top_gainers"] = list(snapshot.get("top_gainers") or [])[:5]
