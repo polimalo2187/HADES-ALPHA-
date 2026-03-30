@@ -30,6 +30,7 @@ from app.miniapp.service import (
     build_signals_payload,
     build_watchlist_context,
     build_watchlist_payload,
+    build_signal_detail_payload,
     ensure_mini_app_user,
     get_user_by_id,
     serialize_order_public,
@@ -312,6 +313,14 @@ def create_mini_app() -> FastAPI:
     @app.get("/api/miniapp/signals")
     async def miniapp_signals(limit: int = 20, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
         return {"items": build_signals_payload(user, limit=limit)}
+
+
+    @app.get("/api/miniapp/signals/{signal_id}")
+    async def miniapp_signal_detail(signal_id: str, profile: str = "moderado", user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
+        payload = build_signal_detail_payload(user, signal_id, profile_name=profile)
+        if not payload:
+            raise HTTPException(status_code=404, detail="signal_not_found")
+        return payload
 
     @app.get("/api/miniapp/history")
     async def miniapp_history(limit: int = 20, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
