@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from math import isfinite, log10
 from typing import Any, Dict, Iterable, List, Optional
 
-from app.binance_api import get_futures_24h_tickers, get_radar_opportunities
+from app.binance_api import get_futures_24h_tickers, get_open_interest, get_premium_index, get_radar_opportunities
 from app.database import users_collection, user_signals_collection, watchlists_collection
 from app.history_service import get_history_entries_for_user
 from app.market import get_market_state_snapshot
@@ -344,6 +344,279 @@ def _watchlist_priority_reasons(
     if not reasons:
         reasons.append("En observación, sin gatillo operativo claro")
     return reasons[:3]
+
+
+def _radar_priority_label(score: float) -> str:
+    if score >= 85.0:
+        return "Máxima"
+    if score >= 72.0:
+        return "Alta"
+    if score >= 58.0:
+        return "Media"
+    if score >= 45.0:
+        return "Vigilancia"
+    return "Exploración"
+
+
+def _radar_proximity_label(score: float, *, has_active_signal: bool = False) -> str:
+    if has_active_signal:
+        return "Activa"
+    if score >= 88.0:
+        return "Inmediata"
+    if score >= 74.0:
+        return "Cercana"
+    if score >= 58.0:
+        return "Preparando"
+    return "Temprana"
+
+
+def _radar_window_label(score: float, range_pct_24h: float, *, has_active_signal: bool = False) -> str:
+    if has_active_signal:
+        return "Seguimiento activo"
+    if score >= 88.0 or (score >= 78.0 and range_pct_24h >= 6.0):
+        return "Ventana inmediata"
+    if score >= 70.0:
+        return "Intradía cercano"
+    if score >= 55.0:
+        return "Preparando setup"
+    return "Exploración"
+
+
+def _radar_conviction_label(score: float, activity_score: float, range_score: float, *, has_active_signal: bool = False) -> str:
+    if has_active_signal:
+        return "Seguimiento"
+    combined = (0.58 * score) + (0.24 * activity_score) + (0.18 * range_score)
+    if combined >= 78.0:
+        return "Alta"
+    if combined >= 60.0:
+        return "Media"
+    return "Baja"
+
+
+def _radar_reasons(
+    *,
+    radar_score: float,
+    range_score: float,
+    change_score: float,
+    activity_score: float,
+    extreme_score: float,
+    signal_score: float,
+    has_active_signal: bool,
+    funding_rate_pct: float,
+    open_interest: float,
+    missing_market_data: bool,
+) -> List[str]:
+    reasons: List[str] = []
+    if has_active_signal:
+        reasons.append("Ya tienes una señal activa en este símbolo")
+    if radar_score >= 82.0:
+        reasons.append("Radar con prioridad alta en esta rotación")
+    if range_score >= 58.0:
+        reasons.append("Expansión intradía suficiente para setup")
+    if change_score >= 50.0:
+        reasons.append("Desplazamiento 24h con dirección útil")
+    if activity_score >= 55.0:
+        reasons.append("Volumen y actividad respaldan el movimiento")
+    if extreme_score >= 60.0:
+        reasons.append("Cotiza cerca de una zona extrema del rango")
+    if signal_score >= 70.0:
+        reasons.append("Tu historial reciente ya marcó edge aquí")
+    if abs(funding_rate_pct) >= 0.03:
+        reasons.append("Funding exigente: vigila continuidad y squeeze")
+    if open_interest > 0 and open_interest >= 1_000_000:
+        reasons.append("Open interest elevado para seguir el flujo")
+    if missing_market_data:
+        reasons.append("Sin datos frescos de Binance ahora mismo")
+    if not reasons:
+        reasons.append("En observación, esperando mejor confirmación")
+    return reasons[:4]
+
+
+def _ticker_range_metrics(item: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not item:
+        return {
+            "missing_market_data": True,
+            "last_price": 0.0,
+            "change_pct": 0.0,
+            "quote_volume": 0.0,
+            "trade_count": 0,
+            "high_24h": 0.0,
+            "low_24h": 0.0,
+            "price_change_abs": 0.0,
+            "range_pct_24h": 0.0,
+            "range_position_pct": None,
+            "range_bias_label": "Sin datos de Binance",
+            "volatility_label": "Sin datos",
+        }
+
+    last_price = _safe_float(item.get("lastPrice"))
+    change_pct = _safe_float(item.get("priceChangePercent"))
+    quote_volume = _safe_float(item.get("quoteVolume"))
+    high_24h = _safe_float(item.get("highPrice"), last_price)
+    low_24h = _safe_float(item.get("lowPrice"), last_price)
+    trade_count = int(_safe_float(item.get("count"), 0.0))
+    price_change_abs = _safe_float(item.get("priceChange"))
+
+    if high_24h > 0 and low_24h > 0 and high_24h >= low_24h:
+        range_width = max(high_24h - low_24h, 0.0)
+        range_pct_24h = (range_width / low_24h * 100.0) if low_24h > 0 else 0.0
+        if range_width > 0 and last_price > 0:
+            range_position_pct = max(0.0, min(100.0, ((last_price - low_24h) / range_width) * 100.0))
+        else:
+            range_position_pct = None
+    else:
+        range_pct_24h = 0.0
+        range_position_pct = None
+
+    return {
+        "missing_market_data": False,
+        "last_price": last_price,
+        "change_pct": change_pct,
+        "quote_volume": quote_volume,
+        "trade_count": trade_count,
+        "high_24h": high_24h,
+        "low_24h": low_24h,
+        "price_change_abs": price_change_abs,
+        "range_pct_24h": range_pct_24h,
+        "range_position_pct": range_position_pct,
+        "range_bias_label": _watchlist_range_bias(range_position_pct),
+        "volatility_label": _watchlist_volatility_label(range_pct_24h),
+    }
+
+
+def _serialize_radar(user_id: int, *, limit: int = 6) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    radar_rows = _safe_call(get_radar_opportunities, [], limit=max(6, int(limit))) or []
+    if not radar_rows:
+        return [], {
+            "total": 0,
+            "longs": 0,
+            "shorts": 0,
+            "hot": 0,
+            "immediate": 0,
+            "active_signals": 0,
+        }
+
+    symbols = [str(row.get("symbol") or "").upper() for row in radar_rows if row.get("symbol")]
+    selected = set(symbols)
+    tickers = get_futures_24h_tickers()
+    ticker_by_symbol = {
+        str(item.get("symbol") or "").upper(): item
+        for item in tickers
+        if str(item.get("symbol") or "").upper() in selected
+    }
+    latest_signal_by_symbol, active_signal_by_symbol = _load_watchlist_signal_context(user_id, symbols)
+
+    items: List[Dict[str, Any]] = []
+    for row in radar_rows[: max(1, int(limit))]:
+        symbol = str(row.get("symbol") or "").upper()
+        if not symbol:
+            continue
+
+        ticker_metrics = _ticker_range_metrics(ticker_by_symbol.get(symbol))
+        latest_signal = _serialize_watchlist_signal(latest_signal_by_symbol.get(symbol))
+        active_signal = _serialize_watchlist_signal(active_signal_by_symbol.get(symbol))
+        signal_score = max(
+            _watchlist_signal_score(latest_signal_by_symbol.get(symbol)),
+            _watchlist_signal_score(active_signal_by_symbol.get(symbol)),
+        )
+
+        radar_score = max(0.0, min(100.0, _safe_float(row.get("final_score", row.get("score")), 0.0)))
+        base_score = max(0.0, min(100.0, _safe_float(row.get("score"), radar_score)))
+        direction = str(row.get("direction") or "").upper().strip() or None
+        range_score = max(0.0, min(100.0, ticker_metrics["range_pct_24h"] * 8.0))
+        change_score = max(0.0, min(100.0, abs(ticker_metrics["change_pct"]) * 10.0))
+        activity_score = _watchlist_activity_score(ticker_metrics["quote_volume"], ticker_metrics["trade_count"])
+        extreme_score = _watchlist_extreme_score(ticker_metrics["range_position_pct"])
+
+        setup_priority_score = (
+            (0.55 * radar_score)
+            + (0.14 * activity_score)
+            + (0.11 * range_score)
+            + (0.08 * change_score)
+            + (0.04 * extreme_score)
+            + (0.08 * signal_score)
+        )
+        setup_proximity_score = (
+            (0.50 * radar_score)
+            + (0.22 * extreme_score)
+            + (0.16 * range_score)
+            + (0.12 * change_score)
+        )
+        if signal_score > 0:
+            setup_proximity_score = max(setup_proximity_score, 0.62 * signal_score)
+        if active_signal:
+            setup_priority_score = max(setup_priority_score, min(100.0, signal_score + 10.0))
+            setup_proximity_score = 100.0
+
+        setup_priority_score = max(0.0, min(100.0, setup_priority_score))
+        setup_proximity_score = max(0.0, min(100.0, setup_proximity_score))
+
+        premium = _safe_call(get_premium_index, {}, symbol) or {}
+        funding_rate_pct = _safe_float(premium.get("lastFundingRate")) * 100.0
+        oi_data = _safe_call(get_open_interest, {}, symbol) or {}
+        open_interest = _safe_float(oi_data.get("openInterest"))
+
+        setup_action_label = _watchlist_action_label(
+            direction,
+            ticker_metrics["range_position_pct"],
+            setup_proximity_score,
+            has_active_signal=bool(active_signal),
+        )
+        reasons = _radar_reasons(
+            radar_score=radar_score,
+            range_score=range_score,
+            change_score=change_score,
+            activity_score=activity_score,
+            extreme_score=extreme_score,
+            signal_score=signal_score,
+            has_active_signal=bool(active_signal),
+            funding_rate_pct=funding_rate_pct,
+            open_interest=open_interest,
+            missing_market_data=bool(ticker_metrics["missing_market_data"]),
+        )
+
+        items.append({
+            "symbol": symbol,
+            "direction": direction,
+            "score": round(base_score, 1),
+            "final_score": round(radar_score, 1),
+            "priority_label": _radar_priority_label(setup_priority_score),
+            "priority_score": round(setup_priority_score, 1),
+            "proximity_label": _radar_proximity_label(setup_proximity_score, has_active_signal=bool(active_signal)),
+            "proximity_score": round(setup_proximity_score, 1),
+            "window_label": _radar_window_label(setup_proximity_score, ticker_metrics["range_pct_24h"], has_active_signal=bool(active_signal)),
+            "conviction_label": _radar_conviction_label(radar_score, activity_score, range_score, has_active_signal=bool(active_signal)),
+            "action_label": setup_action_label,
+            "reason_short": reasons[0],
+            "reasons": reasons,
+            "momentum": row.get("momentum"),
+            "last_price": ticker_metrics["last_price"] or _safe_float(row.get("last_price")),
+            "change_pct": ticker_metrics["change_pct"] if not ticker_metrics["missing_market_data"] else _safe_float(row.get("change_pct")),
+            "quote_volume": ticker_metrics["quote_volume"] or _safe_float(row.get("quote_volume")),
+            "trade_count": ticker_metrics["trade_count"] or int(_safe_float(row.get("trades"), 0.0)),
+            "range_pct_24h": ticker_metrics["range_pct_24h"],
+            "range_position_pct": ticker_metrics["range_position_pct"],
+            "range_bias_label": ticker_metrics["range_bias_label"],
+            "volatility_label": ticker_metrics["volatility_label"],
+            "price_change_abs": ticker_metrics["price_change_abs"],
+            "high_24h": ticker_metrics["high_24h"],
+            "low_24h": ticker_metrics["low_24h"],
+            "funding_rate_pct": funding_rate_pct,
+            "open_interest": open_interest,
+            "active_signal": active_signal,
+            "latest_signal": latest_signal,
+            "has_active_signal": bool(active_signal),
+        })
+
+    summary = {
+        "total": len(items),
+        "longs": sum(1 for item in items if item.get("direction") == "LONG"),
+        "shorts": sum(1 for item in items if item.get("direction") == "SHORT"),
+        "hot": sum(1 for item in items if _safe_float(item.get("priority_score"), 0.0) >= 75.0),
+        "immediate": sum(1 for item in items if item.get("proximity_label") in {"Activa", "Inmediata", "Cercana"}),
+        "active_signals": sum(1 for item in items if item.get("has_active_signal")),
+    }
+    return items, summary
 
 
 def _serialize_watchlist(symbols: Iterable[str], *, user_id: int = 0) -> List[Dict[str, Any]]:
@@ -808,21 +1081,12 @@ def build_history_payload(user: Dict[str, Any], *, limit: int = 20) -> List[Dict
     return [_serialize_history(doc) for doc in docs]
 
 
-def build_market_payload() -> Dict[str, Any]:
+def build_market_payload(user: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     snapshot = get_market_state_snapshot() or {}
-    radar = get_radar_opportunities(limit=6)
-    snapshot["radar"] = [
-        {
-            "symbol": row.get("symbol"),
-            "score": row.get("score"),
-            "direction": row.get("direction"),
-            "change_pct": row.get("change_pct"),
-            "last_price": row.get("last_price"),
-            "momentum": row.get("momentum"),
-            "quote_volume": row.get("quote_volume"),
-        }
-        for row in radar
-    ]
+    user_id = int((user or {}).get("user_id") or 0)
+    radar_items, radar_summary = _serialize_radar(user_id, limit=6)
+    snapshot["radar"] = radar_items
+    snapshot["radar_summary"] = radar_summary
     snapshot["top_gainers"] = list(snapshot.get("top_gainers") or [])[:5]
     snapshot["top_losers"] = list(snapshot.get("top_losers") or [])[:5]
     snapshot["top_volume"] = list(snapshot.get("top_volume") or [])[:5]
@@ -900,7 +1164,7 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         }),
         "signals": _safe_call(lambda: build_signals_payload(user, limit=12), []),
         "history": _safe_call(lambda: build_history_payload(user, limit=10), []),
-        "market": _safe_call(build_market_payload, {
+        "market": _safe_call(lambda: build_market_payload(user), {
             "bias": "—",
             "regime": "—",
             "volatility": "—",
@@ -911,6 +1175,7 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
             "top_volume": [],
             "top_open_interest": [],
             "radar": [],
+            "radar_summary": {"total": 0, "longs": 0, "shorts": 0, "hot": 0, "immediate": 0, "active_signals": 0},
             "btc": {},
             "eth": {},
             "preferred_side": "—",
