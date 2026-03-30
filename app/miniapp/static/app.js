@@ -124,6 +124,23 @@ function sideClassByValue(value) {
   return Number(value || 0) >= 0 ? 'positive-text' : 'negative-text';
 }
 
+function watchlistBiasClass(label) {
+  const normalized = String(label || '').toLowerCase();
+  if (normalized.includes('máximo')) return 'positive-text';
+  if (normalized.includes('mínimo')) return 'negative-text';
+  return '';
+}
+
+function formatInteger(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '—';
+  return Number(value).toLocaleString();
+}
+
+function watchlistRangePosition(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '—';
+  return `${Number(value).toFixed(0)}% del rango`;
+}
+
 function metricToneClass(kind, value) {
   const num = Number(value || 0);
   if (kind === 'pf') {
@@ -612,14 +629,51 @@ function renderMarket() {
         </div>
         <div class="list">
           ${watchlist.length ? watchlist.map(item => `
-            <div class="item compact-item">
+            <div class="item compact-item watchlist-item-card">
               <div class="item-header">
-                <div class="item-title">${escapeHtml(item.symbol)}</div>
+                <div>
+                  <div class="item-title">${escapeHtml(item.symbol)}</div>
+                  <div class="item-subtitle ${watchlistBiasClass(item.range_bias_label)}">${escapeHtml(item.range_bias_label || 'Sin lectura intradía')}</div>
+                </div>
                 <span class="${sideClassByValue(item.change_pct)}">${escapeHtml(formatPercentSigned(item.change_pct, 2))}</span>
               </div>
-              <div class="inline-meta">
-                <span>Precio ${escapeHtml(formatNumber(item.last_price, 4))}</span>
-                <span>Vol ${escapeHtml(formatCompactAmount(item.quote_volume))}</span>
+              <div class="watchlist-metric-grid">
+                <div class="watchlist-metric-box">
+                  <span class="watchlist-metric-label">Precio</span>
+                  <span class="watchlist-metric-value">${escapeHtml(formatNumber(item.last_price, 4))}</span>
+                </div>
+                <div class="watchlist-metric-box">
+                  <span class="watchlist-metric-label">Cambio abs</span>
+                  <span class="watchlist-metric-value">${escapeHtml(formatNumber(item.price_change_abs, 4))}</span>
+                </div>
+                <div class="watchlist-metric-box">
+                  <span class="watchlist-metric-label">Rango 24h</span>
+                  <span class="watchlist-metric-value">${escapeHtml(formatPercentSigned(item.range_pct_24h, 2))}</span>
+                </div>
+                <div class="watchlist-metric-box">
+                  <span class="watchlist-metric-label">Posición</span>
+                  <span class="watchlist-metric-value">${escapeHtml(watchlistRangePosition(item.range_position_pct))}</span>
+                </div>
+                <div class="watchlist-metric-box">
+                  <span class="watchlist-metric-label">Máx 24h</span>
+                  <span class="watchlist-metric-value">${escapeHtml(formatNumber(item.high_24h, 4))}</span>
+                </div>
+                <div class="watchlist-metric-box">
+                  <span class="watchlist-metric-label">Mín 24h</span>
+                  <span class="watchlist-metric-value">${escapeHtml(formatNumber(item.low_24h, 4))}</span>
+                </div>
+                <div class="watchlist-metric-box">
+                  <span class="watchlist-metric-label">Volumen 24h</span>
+                  <span class="watchlist-metric-value">${escapeHtml(formatCompactAmount(item.quote_volume))}</span>
+                </div>
+                <div class="watchlist-metric-box">
+                  <span class="watchlist-metric-label">Trades 24h</span>
+                  <span class="watchlist-metric-value">${escapeHtml(formatInteger(item.trade_count))}</span>
+                </div>
+              </div>
+              <div class="inline-meta watchlist-inline-meta">
+                <span>Base vol: ${escapeHtml(formatCompactAmount(item.volume_base))}</span>
+                <span>Volatilidad: ${escapeHtml(item.volatility_label || '—')}</span>
               </div>
             </div>
           `).join('') : '<div class="empty-state">Tu watchlist está vacía.</div>'}
