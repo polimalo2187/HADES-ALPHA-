@@ -7,6 +7,17 @@ import types
 os.environ.setdefault('MONGODB_URI', 'mongodb://example.invalid/test')
 os.environ.setdefault('DATABASE_NAME', 'test_db')
 
+
+if 'bson' not in sys.modules:
+    bson = types.ModuleType('bson')
+
+    class ObjectId(str):
+        def __new__(cls, value='dummy_object_id'):
+            return str.__new__(cls, value)
+
+    bson.ObjectId = ObjectId
+    sys.modules['bson'] = bson
+
 if 'pymongo' not in sys.modules:
     pymongo = types.ModuleType('pymongo')
     errors = types.ModuleType('pymongo.errors')
