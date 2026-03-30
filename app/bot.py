@@ -14,7 +14,7 @@ from telegram.ext import Application
 from app.handlers import get_handlers
 from app.scanner import scan_market
 from app.scheduler import scheduler_loop
-from app.config import get_bot_display_name
+from app.config import get_bot_display_name, get_bot_token
 from app.database import initialize_database
 from app.observability import heartbeat, log_event, record_audit_event
 from app.realtime_pipeline import initialize_signal_pipeline
@@ -30,9 +30,12 @@ logger = logging.getLogger(__name__)
 # VARIABLES DE ENTORNO
 # ======================================================
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN no está definido")
+
+def _require_bot_token() -> str:
+    token = get_bot_token()
+    if not token:
+        raise RuntimeError("BOT_TOKEN no está definido")
+    return token
 
 
 async def application_error_handler(update: object, context) -> None:
@@ -75,7 +78,7 @@ async def application_error_handler(update: object, context) -> None:
 
 
 def _create_raw_bot() -> Bot:
-    return Bot(token=BOT_TOKEN)
+    return Bot(token=_require_bot_token())
 
 
 
@@ -138,7 +141,7 @@ def run_bot(*, background: bool = False, enable_scanner: bool = True, enable_sch
     initialize_database()
     heartbeat("database", status="ok", details={"stage": "initialized"})
 
-    application = Application.builder().token(BOT_TOKEN).build()
+    application = Application.builder().token(_require_bot_token()).build()
     application.add_error_handler(application_error_handler)
 
     for handler in get_handlers():
@@ -167,8 +170,7 @@ def run_bot(*, background: bool = False, enable_scanner: bool = True, enable_sch
     logger.info("✅ Runtime bot inicializado (scanner=%s scheduler=%s)", enable_scanner, enable_scheduler)
 
     def signal_handler(sig: int, frame: Any) -> None:
-        logger.info("
-🛑 Recibida señal de terminación (%s)...", sig)
+        logger.info("🛑 Recibida señal de terminación (%s)...", sig)
         heartbeat("bot", status="stopping", details={"signal": sig})
 
         if application.running:
@@ -235,20 +237,3 @@ def run_signal_worker() -> None:
 
 
 
-def run_scheduler_worker() -> None:
-    initialize_database()
-    heartbeat("database", status="ok", details={"stage": "initialized"})
-    heartbeat("scheduler", status="starting", details={"mode": "dedicated_process"})
-    try:
-        logger.info("⏰ Iniciando scheduler dedicado...")
-        asyncio.run(scheduler_loop())
-    except Exception as exc:
-        heartbeat("scheduler", status="error", details={"error": str(exc), "mode": "dedicated_process"})
-        record_audit_event(
-            event_type="scheduler_worker_crashed",
-            status="error",
-            module="scheduler",
-            message=str(exc),
-        )
-        logger.error("❌ Scheduler worker falló: %s", exc, exc_info=True)
-        raise
