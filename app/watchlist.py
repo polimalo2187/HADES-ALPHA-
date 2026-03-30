@@ -102,11 +102,19 @@ def get_watchlist(user_id: int) -> List[str]:
     return get_symbols(user_id)
 
 
+def _watchlist_insert_seed(user_id: int, symbols: Optional[List[str]] = None) -> dict:
+    doc = new_watchlist(int(user_id), list(symbols or []))
+    doc.pop("updated_at", None)
+    doc.pop("schema_version", None)
+    doc.pop("symbols", None)
+    return doc
+
+
 def _ensure_doc(user_id: int):
     collection.update_one(
         {"user_id": int(user_id)},
         {
-            "$setOnInsert": new_watchlist(int(user_id), []),
+            "$setOnInsert": {**_watchlist_insert_seed(int(user_id)), "symbols": []},
             "$set": {"updated_at": _now(), "schema_version": WATCHLIST_SCHEMA_VERSION},
         },
         upsert=True,
@@ -178,7 +186,7 @@ def set_symbols(user_id: int, symbols: Iterable[str], plan: str = "FREE"):
                 "updated_at": _now(),
                 "schema_version": WATCHLIST_SCHEMA_VERSION,
             },
-            "$setOnInsert": new_watchlist(int(user_id), normalized),
+            "$setOnInsert": _watchlist_insert_seed(int(user_id), normalized),
         },
         upsert=True,
     )
