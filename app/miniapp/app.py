@@ -328,7 +328,7 @@ def create_mini_app() -> FastAPI:
 
     @app.get("/api/miniapp/market")
     async def miniapp_market(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
-        return build_market_payload()
+        return build_market_payload(user)
 
     @app.get("/api/miniapp/watchlist")
     async def miniapp_watchlist(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
