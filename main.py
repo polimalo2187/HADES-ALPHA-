@@ -1,9 +1,10 @@
 import os
 
-from app.config import get_runtime_role
+from app.config import get_runtime_role, validate_runtime_configuration
 
 
 _RUNTIME_ROLE = get_runtime_role()
+validate_runtime_configuration(role=_RUNTIME_ROLE)
 
 
 
@@ -22,7 +23,7 @@ def _run_role() -> None:
         return
 
     if _RUNTIME_ROLE == "scheduler":
-        from app.bot import run_scheduler_worker
+        from app.scheduler import run_scheduler_worker
 
         run_scheduler_worker()
         return
