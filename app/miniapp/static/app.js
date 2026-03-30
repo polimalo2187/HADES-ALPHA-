@@ -891,7 +891,7 @@ function renderSignalDetailModal(payload) {
         ${detailStatCard('Progreso TP1', tracking.progress_to_tp1_pct === null || tracking.progress_to_tp1_pct === undefined ? '—' : formatPercentSigned(tracking.progress_to_tp1_pct, 1))}
       </div>
 
-      <div class="card card-span-12">
+      <div class="card signal-intel-section signal-intel-section-full">
         <h3>Lectura operativa</h3>
         <div class="pill-row compact-pill-row">
           <span class="pill">En entrada: ${tracking.in_entry_zone ? 'Sí' : 'No'}</span>
@@ -907,7 +907,7 @@ function renderSignalDetailModal(payload) {
         </div>
       </div>
 
-      <div class="card card-span-12">
+      <div class="card signal-intel-section signal-intel-section-full">
         <h3>Desglose de calidad</h3>
         <div class="pill-row compact-pill-row">
           <span class="pill">ATR: ${escapeHtml(formatFractionPercent(analysis.atr_pct))}</span>
@@ -927,8 +927,8 @@ function renderSignalDetailModal(payload) {
         ${analysis.raw_components?.length && analysis.normalized_components?.length && !showRaw && !showNormalized ? `<div class="detail-note">En esta señal, los valores raw y normalizados coinciden, por eso no se repiten abajo.</div>` : ''}
       </div>
 
-      ${warnings.length ? `<div class="card card-span-12"><h3>Notas</h3><div class="feature-list">${warnings.map(item => `<div class="feature-item">• ${escapeHtml(item)}</div>`).join('')}</div></div>` : ''}
-      ${payload.upgrade_hint ? `<div class="card card-span-12 upgrade-note-card"><h3>Lectura premium</h3><p>${escapeHtml(payload.upgrade_hint)}</p></div>` : ''}
+      ${warnings.length ? `<div class="card signal-intel-section signal-intel-section-full"><h3>Notas</h3><div class="feature-list">${warnings.map(item => `<div class="feature-item">• ${escapeHtml(item)}</div>`).join('')}</div></div>` : ''}
+      ${payload.upgrade_hint ? `<div class="card signal-intel-section signal-intel-section-full upgrade-note-card"><h3>Lectura premium</h3><p>${escapeHtml(payload.upgrade_hint)}</p></div>` : ''}
     </div>
   `;
 }
