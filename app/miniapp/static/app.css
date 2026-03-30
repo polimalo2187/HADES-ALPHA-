@@ -693,11 +693,20 @@ h1 {
 
 .signal-intel-layout {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
 }
 
 .detail-status-card {
   border-color: rgba(245, 158, 11, 0.22);
+}
+
+.signal-intel-section {
+  width: 100%;
+}
+
+.signal-intel-section-full {
+  grid-column: 1 / -1;
 }
 
 .detail-status-top {
