@@ -792,6 +792,24 @@ function detailSummaryCard(label, value) {
   `;
 }
 
+function detailMetaPill(label, value, tone = '') {
+  return `
+    <span class="detail-meta-pill ${tone}">
+      <span class="detail-meta-pill-label">${escapeHtml(label)}</span>
+      <span class="detail-meta-pill-value">${escapeHtml(value)}</span>
+    </span>
+  `;
+}
+
+function scoreListsEqual(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  if (a.length !== b.length) return false;
+  return a.every((item, index) => {
+    const other = b[index] || {};
+    return String(item?.label || '') === String(other?.label || '') && Number(item?.score || 0) === Number(other?.score || 0);
+  });
+}
+
 function renderScoreBreakdown(items) {
   if (!items || !items.length) return '<div class="empty-state">Sin desglose disponible.</div>';
   return `<div class="component-list">${items.map(item => `
@@ -816,22 +834,26 @@ function renderSignalDetailModal(payload) {
   const profileOptions = payload?.profile_options || ['moderado'];
   const tier = payload?.tracking_tier || 'basic';
   const warnings = [...(tracking.warnings || []), ...(analysis.warnings || [])];
+  const mainComponents = analysis.components?.length ? analysis.components : (analysis.normalized_components?.length ? analysis.normalized_components : (analysis.raw_components || []));
+  const showRaw = analysis.raw_components?.length && !scoreListsEqual(analysis.raw_components, mainComponents);
+  const showNormalized = analysis.normalized_components?.length && !scoreListsEqual(analysis.normalized_components, mainComponents) && !scoreListsEqual(analysis.normalized_components, analysis.raw_components || []);
 
   els.signalDetailTitle.textContent = `${signal.symbol || 'Señal'} · ${signal.direction || ''}`.trim();
   els.signalDetailBody.innerHTML = `
-    <div class="detail-summary-grid">
-      ${detailSummaryCard('Plan vista', String(payload.viewer_plan || 'free').toUpperCase())}
-      ${detailSummaryCard('Tier señal', String(signal.visibility || 'free').toUpperCase())}
-      ${detailSummaryCard('Perfil', profileLabel(selectedProfile))}
-      ${detailSummaryCard('Tracking', String(tier).toUpperCase())}
-    </div>
-
-    <div class="detail-profile-row" role="tablist" aria-label="Perfil de lectura">
-      ${profileOptions.map(option => `<button class="button detail-profile-button ${option === selectedProfile ? 'button-primary is-active' : 'button-secondary'}" data-signal-profile="${escapeHtml(option)}" data-signal-id="${escapeHtml(signal.signal_id || '')}" aria-pressed="${option === selectedProfile ? 'true' : 'false'}">${escapeHtml(profileLabel(option))}</button>`).join('')}
+    <div class="detail-topbar">
+      <div class="detail-topbar-meta">
+        ${detailMetaPill('Plan', String(payload.viewer_plan || 'free').toUpperCase())}
+        ${detailMetaPill('Tier', String(signal.visibility || 'free').toUpperCase())}
+        ${detailMetaPill('Perfil', profileLabel(selectedProfile))}
+        ${detailMetaPill('Tracking', String(tier).toUpperCase())}
+      </div>
+      <div class="detail-profile-row" role="tablist" aria-label="Perfil de lectura">
+        ${profileOptions.map(option => `<button class="detail-profile-button ${option === selectedProfile ? 'is-active' : ''}" data-signal-profile="${escapeHtml(option)}" data-signal-id="${escapeHtml(signal.signal_id || '')}" aria-pressed="${option === selectedProfile ? 'true' : 'false'}">${escapeHtml(profileLabel(option))}</button>`).join('')}
+      </div>
     </div>
 
     <div class="card detail-hero-card">
-      <div class="item-header">
+      <div class="detail-hero-header">
         <div>
           <div class="item-title">${escapeHtml(tracking.state_label || 'Sin estado')}</div>
           <div class="item-subtitle">${escapeHtml(tracking.entry_state_label || 'Sin lectura operativa')}</div>
@@ -841,19 +863,19 @@ function renderSignalDetailModal(payload) {
       <p>${escapeHtml(tracking.recommendation || 'Sin recomendación operativa disponible.')}</p>
     </div>
 
-    <div class="detail-grid">
+    <div class="detail-grid detail-grid-compact">
       ${detailMetric('Precio actual', formatNumber(tracking.current_price, 4), sideClassByValue(tracking.current_move_pct || 0))}
       ${detailMetric('Entrada', formatNumber(tracking.entry_price, 4))}
       ${detailMetric('SL', formatNumber(tracking.stop_loss, 4), 'negative-text')}
       ${detailMetric('TP1', formatNumber((tracking.take_profits || [])[0], 4), 'positive-text')}
       ${detailMetric('TP2', formatNumber((tracking.take_profits || [])[1], 4), 'positive-text')}
+      ${detailMetric('Score', formatNumber(analysis.normalized_score ?? analysis.score ?? signal.score, 1))}
       ${detailMetric('Dist. entrada', formatFractionPercent(tracking.distance_to_entry_pct))}
       ${detailMetric('Dist. SL', formatFractionPercent(tracking.stop_distance_pct))}
       ${detailMetric('Dist. TP1', formatFractionPercent(tracking.tp1_distance_pct))}
       ${detailMetric('Dist. TP2', formatFractionPercent(tracking.tp2_distance_pct))}
       ${detailMetric('Progreso TP1', tracking.progress_to_tp1_pct === null || tracking.progress_to_tp1_pct === undefined ? '—' : formatPercentSigned(tracking.progress_to_tp1_pct, 1))}
       ${detailMetric('Setup', String(analysis.setup_group || signal.setup_group || 'legacy').toUpperCase())}
-      ${detailMetric('Score', formatNumber(analysis.normalized_score ?? analysis.score ?? signal.score, 1))}
     </div>
 
     <div class="card card-span-12">
@@ -886,9 +908,10 @@ function renderSignalDetailModal(payload) {
         ${analysis.score_profile ? `<span>Perfil score: ${escapeHtml(String(analysis.score_profile).toUpperCase())}</span>` : ''}
         ${analysis.score_calibration ? `<span>Calibración: ${escapeHtml(String(analysis.score_calibration))}</span>` : ''}
       </div>
-      ${renderScoreBreakdown(analysis.components)}
-      ${analysis.raw_components?.length ? `<h3 style="margin-top:14px;">Componentes raw</h3>${renderScoreBreakdown(analysis.raw_components)}` : ''}
-      ${analysis.normalized_components?.length ? `<h3 style="margin-top:14px;">Componentes normalizados</h3>${renderScoreBreakdown(analysis.normalized_components)}` : ''}
+      ${renderScoreBreakdown(mainComponents)}
+      ${showRaw ? `<h3 class="detail-subheading">Componentes raw</h3>${renderScoreBreakdown(analysis.raw_components)}` : ''}
+      ${showNormalized ? `<h3 class="detail-subheading">Componentes normalizados</h3>${renderScoreBreakdown(analysis.normalized_components)}` : ''}
+      ${analysis.raw_components?.length && analysis.normalized_components?.length && !showRaw && !showNormalized ? `<div class="detail-note">En esta señal, los valores raw y normalizados coinciden, por eso no se repiten abajo.</div>` : ''}
     </div>
 
     ${warnings.length ? `<div class="card card-span-12"><h3>Notas</h3><div class="feature-list">${warnings.map(item => `<div class="feature-item">• ${escapeHtml(item)}</div>`).join('')}</div></div>` : ''}
