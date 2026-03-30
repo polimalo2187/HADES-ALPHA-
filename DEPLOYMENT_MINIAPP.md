@@ -123,3 +123,21 @@ Estos endpoints son de solo lectura y requieren un usuario autenticado cuyo `use
   - Eventos recientes de auditoría con filtros opcionales por estado y módulo.
 
 Esto deja la base para un panel admin web sin depender de inspección manual de Mongo o de logs crudos.
+
+
+## Operación y trazabilidad
+
+La MiniApp ahora expone además:
+
+- `/api/miniapp/admin/incidents`: feed consolidado de incidentes (health degradado + audit warning/error)
+- `X-Request-ID` en respuestas HTTP para rastrear errores 5xx y requests problemáticas
+
+Ante errores no controlados de la MiniApp, la API devuelve `500` con este formato:
+
+```json
+{
+  "ok": false,
+  "detail": "internal_server_error",
+  "request_id": "..."
+}
+```
