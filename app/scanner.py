@@ -15,6 +15,7 @@ from app.database import signals_collection
 from app.realtime_pipeline import enqueue_signal_dispatch
 from app.plans import PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM
 from app.signals import create_base_signal
+from app.observability import heartbeat
 from app.strategy import mtf_strategy
 
 logger = logging.getLogger(__name__)
@@ -262,8 +263,11 @@ async def scan_market_async(bot: Bot):
         "📡 Scanner iniciado — clasificación exclusiva por plan + ranking con normalized_score"
     )
 
+    cycle_number = 0
+
     while True:
         try:
+            cycle_started_at = datetime.utcnow()
             symbols = get_active_futures_symbols()
             candidates: List[Dict] = []
 
@@ -283,6 +287,19 @@ async def scan_market_async(bot: Bot):
 
             if not candidates:
                 logger.info("📭 No hay oportunidades fuertes en este ciclo")
+                heartbeat(
+                    "scanner",
+                    status="ok",
+                    details={
+                        "cycle": cycle_number,
+                        "symbols": len(symbols),
+                        "candidates": 0,
+                        "selected": 0,
+                        "scan_interval_seconds": SCAN_INTERVAL_SECONDS,
+                        "cycle_started_at": cycle_started_at.isoformat(),
+                    },
+                )
+                cycle_number += 1
                 await asyncio.sleep(SCAN_INTERVAL_SECONDS)
                 continue
 
@@ -320,6 +337,7 @@ async def scan_market_async(bot: Bot):
                 (PLAN_PLUS, "🥈 PLATA", plus_signal),
                 (PLAN_FREE, "🥉 BRONCE", free_signal),
             ]
+            selected_count = sum(1 for _, _, signal in selected if signal)
 
             for visibility, medal, signal in selected:
                 if not signal:
@@ -386,9 +404,26 @@ async def scan_market_async(bot: Bot):
                     signal.get("score_calibration", "unknown"),
                 )
 
+            heartbeat(
+                "scanner",
+                status="ok",
+                details={
+                    "cycle": cycle_number,
+                    "symbols": len(symbols),
+                    "candidates": len(candidates),
+                    "premium_candidates": len(premium_candidates),
+                    "plus_candidates": len(plus_candidates),
+                    "free_candidates": len(free_candidates),
+                    "selected": selected_count,
+                    "scan_interval_seconds": SCAN_INTERVAL_SECONDS,
+                    "cycle_started_at": cycle_started_at.isoformat(),
+                },
+            )
+            cycle_number += 1
             await asyncio.sleep(SCAN_INTERVAL_SECONDS)
 
-        except Exception:
+        except Exception as exc:
+            heartbeat("scanner", status="error", details={"error": str(exc), "cycle": cycle_number})
             logger.error("❌ Error crítico en scanner", exc_info=True)
             await asyncio.sleep(60)
 
