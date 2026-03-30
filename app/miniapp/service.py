@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from math import isfinite
 from typing import Any, Dict, Iterable, List, Optional
 
 from app.binance_api import get_futures_24h_tickers, get_radar_opportunities
@@ -129,36 +130,108 @@ def _serialize_history(doc: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        parsed = float(value)
+    except Exception:
+        return default
+    if not isfinite(parsed):
+        return default
+    return parsed
+
+
+def _watchlist_range_bias(position_pct: Optional[float]) -> str:
+    if position_pct is None:
+        return "Sin rango"
+    if position_pct >= 80.0:
+        return "Cerca del máximo 24h"
+    if position_pct <= 20.0:
+        return "Cerca del mínimo 24h"
+    return "Zona media 24h"
+
+
+def _watchlist_volatility_label(range_pct: float) -> str:
+    if range_pct >= 12.0:
+        return "Expansivo"
+    if range_pct >= 6.0:
+        return "Activo"
+    if range_pct >= 3.0:
+        return "Moderado"
+    return "Calmo"
+
+
 def _serialize_watchlist(symbols: Iterable[str]) -> List[Dict[str, Any]]:
-    selected = {str(symbol).upper() for symbol in symbols if symbol}
-    if not selected:
+    selected_order = [str(symbol).upper() for symbol in symbols if symbol]
+    if not selected_order:
         return []
+
+    selected = set(selected_order)
     tickers = get_futures_24h_tickers()
-    rows: List[Dict[str, Any]] = []
+    ticker_by_symbol: Dict[str, Dict[str, Any]] = {}
     for item in tickers:
         symbol = str(item.get("symbol", "")).upper()
-        if symbol not in selected:
+        if symbol and symbol in selected:
+            ticker_by_symbol[symbol] = item
+
+    rows: List[Dict[str, Any]] = []
+    for symbol in selected_order:
+        item = ticker_by_symbol.get(symbol)
+        if not item:
+            rows.append({
+                "symbol": symbol,
+                "last_price": 0.0,
+                "change_pct": 0.0,
+                "quote_volume": 0.0,
+                "volume_base": 0.0,
+                "trade_count": 0,
+                "high_24h": 0.0,
+                "low_24h": 0.0,
+                "range_pct_24h": 0.0,
+                "range_position_pct": None,
+                "range_bias_label": "Sin datos de Binance",
+                "volatility_label": "Sin datos",
+                "price_change_abs": 0.0,
+                "is_positive": True,
+            })
             continue
-        try:
-            last_price = float(item.get("lastPrice", 0.0))
-        except Exception:
-            last_price = 0.0
-        try:
-            change_pct = float(item.get("priceChangePercent", 0.0))
-        except Exception:
-            change_pct = 0.0
-        try:
-            quote_volume = float(item.get("quoteVolume", 0.0))
-        except Exception:
-            quote_volume = 0.0
+
+        last_price = _safe_float(item.get("lastPrice"))
+        change_pct = _safe_float(item.get("priceChangePercent"))
+        quote_volume = _safe_float(item.get("quoteVolume"))
+        volume_base = _safe_float(item.get("volume"))
+        high_24h = _safe_float(item.get("highPrice"), last_price)
+        low_24h = _safe_float(item.get("lowPrice"), last_price)
+        trade_count = int(_safe_float(item.get("count"), 0.0))
+        price_change_abs = _safe_float(item.get("priceChange"))
+
+        if high_24h > 0 and low_24h > 0 and high_24h >= low_24h:
+            range_width = max(high_24h - low_24h, 0.0)
+            range_pct_24h = (range_width / low_24h * 100.0) if low_24h > 0 else 0.0
+            if range_width > 0 and last_price > 0:
+                range_position_pct: Optional[float] = max(0.0, min(100.0, ((last_price - low_24h) / range_width) * 100.0))
+            else:
+                range_position_pct = None
+        else:
+            range_pct_24h = 0.0
+            range_position_pct = None
+
         rows.append({
             "symbol": symbol,
             "last_price": last_price,
             "change_pct": change_pct,
             "quote_volume": quote_volume,
+            "volume_base": volume_base,
+            "trade_count": trade_count,
+            "high_24h": high_24h,
+            "low_24h": low_24h,
+            "range_pct_24h": range_pct_24h,
+            "range_position_pct": range_position_pct,
+            "range_bias_label": _watchlist_range_bias(range_position_pct),
+            "volatility_label": _watchlist_volatility_label(range_pct_24h),
+            "price_change_abs": price_change_abs,
             "is_positive": change_pct >= 0,
         })
-    rows.sort(key=lambda row: abs(row["change_pct"]), reverse=True)
+
     return rows
 
 
