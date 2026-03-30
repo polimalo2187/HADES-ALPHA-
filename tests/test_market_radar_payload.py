@@ -114,6 +114,10 @@ class MarketRadarPayloadTests(unittest.TestCase):
         self.assertEqual(payload['radar_summary']['active_signals'], 1)
         self.assertEqual(payload['radar_summary']['priority_mix']['maxima'], 1)
         self.assertEqual(payload['radar_summary']['signal_mix']['activa'], 1)
+        self.assertEqual(payload['radar_summary']['execution_mix']['seguimiento'], 1)
+        self.assertEqual(payload['radar_summary']['alignment_mix']['a_favor'], 2)
+        self.assertEqual(payload['radar_summary']['focus_now'], 1)
+        self.assertEqual(payload['radar_summary']['aligned_now'], 2)
         self.assertEqual(payload['radar_summary']['sort_default'], 'ranking')
 
         btc = payload['radar'][0]
@@ -126,6 +130,11 @@ class MarketRadarPayloadTests(unittest.TestCase):
         self.assertGreaterEqual(btc['priority_score'], 90.0)
         self.assertGreaterEqual(btc['ranking_score'], 96.0)
         self.assertEqual(btc['signal_context_label'], 'Activa')
+        self.assertEqual(btc['alignment_label'], 'A favor')
+        self.assertEqual(btc['execution_state_label'], 'Seguimiento')
+        self.assertEqual(btc['setup_mode_label'], 'Continuación')
+        self.assertEqual(btc['risk_label'], 'Gestionar')
+        self.assertTrue(any('Riesgo:' in step for step in btc['trade_plan']))
         self.assertEqual(btc['priority_rank'], 5)
         self.assertEqual(btc['proximity_rank'], 5)
         self.assertEqual(btc['latest_signal']['signal_id'], 'sig-btc')
@@ -138,6 +147,9 @@ class MarketRadarPayloadTests(unittest.TestCase):
         self.assertFalse(eth['has_active_signal'])
         self.assertIn(eth['proximity_label'], {'Inmediata', 'Cercana', 'Preparando', 'Temprana'})
         self.assertEqual(eth['signal_context_label'], 'Sin señal')
+        self.assertEqual(eth['alignment_label'], 'Contratendencia')
+        self.assertIn(eth['execution_state_label'], {'Ejecutable', 'Preparación', 'Observación'})
+        self.assertIn(eth['risk_label'], {'Reducido', 'Selectivo', 'Cauto'})
         self.assertAlmostEqual(eth['funding_rate_pct'], -0.01, places=4)
 
 
