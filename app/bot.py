@@ -140,6 +140,13 @@ def _start_scheduler_thread() -> threading.Thread:
 def run_bot(*, background: bool = False, enable_scanner: bool = True, enable_scheduler: bool = True) -> None:
     initialize_database()
     heartbeat("database", status="ok", details={"stage": "initialized"})
+    record_audit_event(
+        event_type="bot_runtime_started",
+        status="info",
+        module="bot",
+        message="bot_runtime_started",
+        metadata={"scanner_enabled": enable_scanner, "scheduler_enabled": enable_scheduler},
+    )
 
     application = Application.builder().token(_require_bot_token()).build()
     application.add_error_handler(application_error_handler)
@@ -186,6 +193,13 @@ def run_bot(*, background: bool = False, enable_scanner: bool = True, enable_sch
             logger.info("Deteniendo aplicación de Telegram...")
             application.stop()
 
+        record_audit_event(
+            event_type="bot_runtime_stopping",
+            status="warning",
+            module="bot",
+            message="bot_runtime_stopping",
+            metadata={"signal": sig},
+        )
         logger.info("Bot detenido correctamente")
         sys.exit(0)
 
@@ -231,6 +245,12 @@ def run_signal_worker() -> None:
     bot = _create_raw_bot()
     initialize_signal_pipeline(bot)
     try:
+        record_audit_event(
+            event_type="signal_worker_started",
+            status="info",
+            module="signal_worker",
+            message="signal_worker_started",
+        )
         logger.info("🚀 Iniciando signal worker dedicado...")
         heartbeat("signal_worker", status="ok", details={"stage": "running"})
         scan_market(bot)
