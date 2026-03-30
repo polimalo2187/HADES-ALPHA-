@@ -14,6 +14,7 @@ from app.config import (
     get_mini_app_cors_origins,
     get_mini_app_dev_user_id,
     get_runtime_role,
+    is_admin,
     is_mini_app_dev_auth_enabled,
 )
 from app.database import initialize_database
@@ -32,6 +33,11 @@ from app.miniapp.service import (
     serialize_order_public,
 )
 from app.observability import build_runtime_health_report, heartbeat, record_audit_event, start_background_heartbeat
+from app.services.admin_runtime_service import (
+    get_admin_operational_overview,
+    get_admin_runtime_health_matrix,
+    list_recent_audit_events,
+)
 from app.payment_service import cancel_payment_order, confirm_payment_order, create_payment_order, get_active_payment_order_for_user
 
 logger = logging.getLogger(__name__)
@@ -129,6 +135,12 @@ def create_mini_app() -> FastAPI:
             raise HTTPException(status_code=401, detail="session_user_not_found")
         if user.get("banned"):
             raise HTTPException(status_code=403, detail="user_banned")
+        return user
+
+    def get_authenticated_admin_user(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
+        user_id = int(user.get("user_id") or 0)
+        if not is_admin(user_id):
+            raise HTTPException(status_code=403, detail="admin_required")
         return user
 
     @app.get("/miniapp")
@@ -267,5 +279,31 @@ def create_mini_app() -> FastAPI:
     async def miniapp_cancel_payment(payload: MiniAppPaymentActionRequest, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
         cancelled = cancel_payment_order(payload.order_id, int(user.get("user_id") or 0))
         return {"ok": cancelled}
+
+    @app.get("/api/miniapp/admin/overview")
+    async def miniapp_admin_overview(admin_user: Dict[str, Any] = Depends(get_authenticated_admin_user)) -> Dict[str, Any]:
+        payload = get_admin_operational_overview()
+        payload["requested_by"] = int(admin_user.get("user_id") or 0)
+        return payload
+
+    @app.get("/api/miniapp/admin/health")
+    async def miniapp_admin_health(admin_user: Dict[str, Any] = Depends(get_authenticated_admin_user)) -> Dict[str, Any]:
+        payload = get_admin_runtime_health_matrix()
+        payload["requested_by"] = int(admin_user.get("user_id") or 0)
+        return payload
+
+    @app.get("/api/miniapp/admin/audit")
+    async def miniapp_admin_audit(
+        limit: int = 25,
+        status: Optional[str] = None,
+        module: Optional[str] = None,
+        admin_user: Dict[str, Any] = Depends(get_authenticated_admin_user),
+    ) -> Dict[str, Any]:
+        try:
+            payload = list_recent_audit_events(limit=limit, status=status, module=module)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        payload["requested_by"] = int(admin_user.get("user_id") or 0)
+        return payload
 
     return app
