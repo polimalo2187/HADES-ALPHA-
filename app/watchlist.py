@@ -113,7 +113,7 @@ def _ensure_doc(user_id: int):
     )
 
 
-def _plan_limit(plan: str) -> Optional[int]:
+def get_watchlist_limit_for_plan(plan: str) -> Optional[int]:
     p = (plan or "FREE").upper().strip()
     if p == "PREMIUM":
         return None
@@ -135,7 +135,7 @@ def add_symbol(user_id: int, symbol: str, plan: str = "FREE"):
     if sym in current:
         return True, f"✅ {sym} ya está en tu Watchlist."
 
-    limit = _plan_limit(plan)
+    limit = get_watchlist_limit_for_plan(plan)
     if limit is not None and len(current) >= limit:
         return False, f"🔒 Tu plan permite hasta {limit} símbolos en Watchlist."
 
@@ -151,7 +151,7 @@ def add_symbol(user_id: int, symbol: str, plan: str = "FREE"):
     return True, f"✅ {sym} añadido a tu Watchlist."
 
 
-def set_symbols(user_id: int, symbols: Iterable[str]):
+def set_symbols(user_id: int, symbols: Iterable[str], plan: str = "FREE"):
     normalized = []
     seen = set()
     valid = get_valid_symbols()
@@ -165,6 +165,10 @@ def set_symbols(user_id: int, symbols: Iterable[str]):
         if sym not in seen:
             normalized.append(sym)
             seen.add(sym)
+
+    limit = get_watchlist_limit_for_plan(plan)
+    if limit is not None and len(normalized) > limit:
+        return False, f"🔒 Tu plan permite hasta {limit} símbolos en Watchlist."
 
     collection.update_one(
         {"user_id": int(user_id)},
