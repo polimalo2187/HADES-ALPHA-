@@ -28,6 +28,7 @@ from app.miniapp.service import (
     build_me_payload,
     build_plans_payload,
     build_signals_payload,
+    build_watchlist_context,
     build_watchlist_payload,
     ensure_mini_app_user,
     get_user_by_id,
@@ -41,6 +42,8 @@ from app.services.admin_runtime_service import (
     list_recent_incidents,
 )
 from app.payment_service import cancel_payment_order, confirm_payment_order, create_payment_order, get_active_payment_order_for_user
+from app.plans import normalize_plan, plan_status
+from app.watchlist import add_symbol, normalize_many, remove_symbol, set_symbols, clear_watchlist
 
 logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
@@ -60,6 +63,15 @@ class MiniAppPlanSelectionRequest(BaseModel):
 
 class MiniAppPaymentActionRequest(BaseModel):
     order_id: str
+
+
+class MiniAppWatchlistSymbolRequest(BaseModel):
+    symbol: str
+
+
+class MiniAppWatchlistReplaceRequest(BaseModel):
+    symbols: Optional[list[str]] = None
+    raw: Optional[str] = None
 
 
 
@@ -82,6 +94,11 @@ def _resolve_dev_telegram_user(payload: MiniAppAuthRequest) -> Dict[str, Any]:
         "language_code": "es",
     }
 
+
+
+def _resolve_watchlist_plan(user: Dict[str, Any]) -> str:
+    status = plan_status(user)
+    return normalize_plan(status.get("plan") or user.get("plan"))
 
 
 def create_mini_app() -> FastAPI:
@@ -306,7 +323,83 @@ def create_mini_app() -> FastAPI:
 
     @app.get("/api/miniapp/watchlist")
     async def miniapp_watchlist(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
-        return {"items": build_watchlist_payload(user)}
+        return build_watchlist_context(user)
+
+    @app.post("/api/miniapp/watchlist/add")
+    async def miniapp_watchlist_add(payload: MiniAppWatchlistSymbolRequest, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
+        ok, message = add_symbol(int(user.get("user_id") or 0), payload.symbol, plan=_resolve_watchlist_plan(user))
+        if not ok:
+            record_audit_event(
+                event_type="miniapp_watchlist_add_failed",
+                status="warning",
+                module="miniapp",
+                user_id=int(user.get("user_id") or 0),
+                message=message,
+                metadata={"symbol": payload.symbol},
+            )
+            raise HTTPException(status_code=400, detail=message)
+        record_audit_event(
+            event_type="miniapp_watchlist_added",
+            status="ok",
+            module="miniapp",
+            user_id=int(user.get("user_id") or 0),
+            message=message,
+            metadata={"symbol": payload.symbol},
+        )
+        return {"ok": True, "message": message, **build_watchlist_context(get_user_by_id(int(user.get("user_id") or 0)) or user)}
+
+    @app.post("/api/miniapp/watchlist/remove")
+    async def miniapp_watchlist_remove(payload: MiniAppWatchlistSymbolRequest, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
+        ok, message = remove_symbol(int(user.get("user_id") or 0), payload.symbol)
+        if not ok:
+            raise HTTPException(status_code=400, detail=message)
+        record_audit_event(
+            event_type="miniapp_watchlist_removed",
+            status="ok",
+            module="miniapp",
+            user_id=int(user.get("user_id") or 0),
+            message=message,
+            metadata={"symbol": payload.symbol},
+        )
+        return {"ok": True, "message": message, **build_watchlist_context(get_user_by_id(int(user.get("user_id") or 0)) or user)}
+
+    @app.post("/api/miniapp/watchlist/replace")
+    async def miniapp_watchlist_replace(payload: MiniAppWatchlistReplaceRequest, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
+        symbols = payload.symbols or normalize_many(payload.raw or "")
+        ok, message = set_symbols(int(user.get("user_id") or 0), symbols, plan=_resolve_watchlist_plan(user))
+        if not ok:
+            record_audit_event(
+                event_type="miniapp_watchlist_replace_failed",
+                status="warning",
+                module="miniapp",
+                user_id=int(user.get("user_id") or 0),
+                message=message,
+                metadata={"symbols_count": len(symbols)},
+            )
+            raise HTTPException(status_code=400, detail=message)
+        record_audit_event(
+            event_type="miniapp_watchlist_replaced",
+            status="ok",
+            module="miniapp",
+            user_id=int(user.get("user_id") or 0),
+            message=message,
+            metadata={"symbols_count": len(symbols)},
+        )
+        return {"ok": True, "message": message, **build_watchlist_context(get_user_by_id(int(user.get("user_id") or 0)) or user)}
+
+    @app.post("/api/miniapp/watchlist/clear")
+    async def miniapp_watchlist_clear(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
+        ok, message = clear_watchlist(int(user.get("user_id") or 0))
+        if not ok:
+            raise HTTPException(status_code=400, detail=message)
+        record_audit_event(
+            event_type="miniapp_watchlist_cleared",
+            status="ok",
+            module="miniapp",
+            user_id=int(user.get("user_id") or 0),
+            message=message,
+        )
+        return {"ok": True, "message": message, **build_watchlist_context(get_user_by_id(int(user.get("user_id") or 0)) or user)}
 
     @app.get("/api/miniapp/plans")
     async def miniapp_plans(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
