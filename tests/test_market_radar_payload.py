@@ -24,6 +24,17 @@ class MarketRadarPayloadTests(unittest.TestCase):
         }
         radar_rows = [
             {
+                'symbol': 'ETHUSDT',
+                'score': 75,
+                'final_score': 78,
+                'direction': 'SHORT',
+                'change_pct': -4.1,
+                'last_price': 3200,
+                'quote_volume': 96000000,
+                'trades': 54000,
+                'momentum': 'Alto',
+            },
+            {
                 'symbol': 'BTCUSDT',
                 'score': 87,
                 'final_score': 91,
@@ -35,15 +46,15 @@ class MarketRadarPayloadTests(unittest.TestCase):
                 'momentum': 'Muy alto',
             },
             {
-                'symbol': 'ETHUSDT',
-                'score': 75,
-                'final_score': 78,
-                'direction': 'SHORT',
-                'change_pct': -4.1,
-                'last_price': 3200,
-                'quote_volume': 96000000,
-                'trades': 54000,
-                'momentum': 'Alto',
+                'symbol': 'SOLUSDT',
+                'score': 68,
+                'final_score': 69,
+                'direction': 'LONG',
+                'change_pct': 2.1,
+                'last_price': 152,
+                'quote_volume': 45000000,
+                'trades': 33000,
+                'momentum': 'Medio',
             },
         ]
         tickers = [
@@ -67,6 +78,16 @@ class MarketRadarPayloadTests(unittest.TestCase):
                 'count': '54000',
                 'priceChange': '-136',
             },
+            {
+                'symbol': 'SOLUSDT',
+                'lastPrice': '152',
+                'priceChangePercent': '2.1',
+                'quoteVolume': '45000000',
+                'highPrice': '156',
+                'lowPrice': '147',
+                'count': '33000',
+                'priceChange': '3.1',
+            },
         ]
         latest_signal = {
             'signal_id': 'sig-btc',
@@ -81,16 +102,19 @@ class MarketRadarPayloadTests(unittest.TestCase):
              patch('app.miniapp.service.get_radar_opportunities', return_value=radar_rows), \
              patch('app.miniapp.service.get_futures_24h_tickers', return_value=tickers), \
              patch('app.miniapp.service._load_watchlist_signal_context', return_value=({'BTCUSDT': latest_signal}, {'BTCUSDT': latest_signal})), \
-             patch('app.miniapp.service.get_premium_index', side_effect=[{'lastFundingRate': '0.0004'}, {'lastFundingRate': '-0.0001'}]), \
-             patch('app.miniapp.service.get_open_interest', side_effect=[{'openInterest': '2500000'}, {'openInterest': '1800000'}]):
+             patch('app.miniapp.service.get_premium_index', side_effect=[{'lastFundingRate': '-0.0001'}, {'lastFundingRate': '0.0004'}, {'lastFundingRate': '0.0002'}]), \
+             patch('app.miniapp.service.get_open_interest', side_effect=[{'openInterest': '1800000'}, {'openInterest': '2500000'}, {'openInterest': '950000'}]):
             payload = build_market_payload({'user_id': 10, 'plan': 'premium'})
 
         self.assertEqual(payload['bias'], 'Alcista')
-        self.assertEqual(len(payload['radar']), 2)
-        self.assertEqual(payload['radar_summary']['total'], 2)
-        self.assertEqual(payload['radar_summary']['longs'], 1)
+        self.assertEqual(len(payload['radar']), 3)
+        self.assertEqual(payload['radar_summary']['total'], 3)
+        self.assertEqual(payload['radar_summary']['longs'], 2)
         self.assertEqual(payload['radar_summary']['shorts'], 1)
         self.assertEqual(payload['radar_summary']['active_signals'], 1)
+        self.assertEqual(payload['radar_summary']['priority_mix']['maxima'], 1)
+        self.assertEqual(payload['radar_summary']['signal_mix']['activa'], 1)
+        self.assertEqual(payload['radar_summary']['sort_default'], 'ranking')
 
         btc = payload['radar'][0]
         self.assertEqual(btc['symbol'], 'BTCUSDT')
@@ -100,15 +124,20 @@ class MarketRadarPayloadTests(unittest.TestCase):
         self.assertEqual(btc['window_label'], 'Seguimiento activo')
         self.assertEqual(btc['conviction_label'], 'Seguimiento')
         self.assertGreaterEqual(btc['priority_score'], 90.0)
+        self.assertGreaterEqual(btc['ranking_score'], 96.0)
+        self.assertEqual(btc['signal_context_label'], 'Activa')
+        self.assertEqual(btc['priority_rank'], 5)
+        self.assertEqual(btc['proximity_rank'], 5)
         self.assertEqual(btc['latest_signal']['signal_id'], 'sig-btc')
         self.assertAlmostEqual(btc['funding_rate_pct'], 0.04, places=4)
         self.assertEqual(btc['open_interest'], 2500000.0)
         self.assertTrue(any('señal activa' in reason.lower() for reason in btc['reasons']))
 
-        eth = payload['radar'][1]
+        eth = next(item for item in payload['radar'] if item['symbol'] == 'ETHUSDT')
         self.assertEqual(eth['direction'], 'SHORT')
         self.assertFalse(eth['has_active_signal'])
         self.assertIn(eth['proximity_label'], {'Inmediata', 'Cercana', 'Preparando', 'Temprana'})
+        self.assertEqual(eth['signal_context_label'], 'Sin señal')
         self.assertAlmostEqual(eth['funding_rate_pct'], -0.01, places=4)
 
 
