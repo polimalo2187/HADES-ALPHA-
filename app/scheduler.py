@@ -235,3 +235,24 @@ async def scheduler_loop():
                 errors_in_row = 0
             else:
                 await asyncio.sleep(30)
+
+
+def run_scheduler_worker() -> None:
+    from app.database import initialize_database
+
+    initialize_database()
+    heartbeat("database", status="ok", details={"stage": "initialized"})
+    heartbeat("scheduler", status="starting", details={"mode": "dedicated_process"})
+    try:
+        logger.info("⏰ Iniciando scheduler dedicado...")
+        asyncio.run(scheduler_loop())
+    except Exception as exc:
+        heartbeat("scheduler", status="error", details={"error": str(exc), "mode": "dedicated_process"})
+        record_audit_event(
+            event_type="scheduler_worker_crashed",
+            status="error",
+            module="scheduler",
+            message=str(exc),
+        )
+        logger.error("❌ Scheduler worker falló: %s", exc, exc_info=True)
+        raise
