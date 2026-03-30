@@ -162,6 +162,12 @@ async def scheduler_loop():
     """Loop principal del scheduler - SIN USAR BOT para evitar errores de event loop."""
     logger.info("⏰ Scheduler iniciado correctamente (modo seguro)")
     heartbeat("scheduler", status="ok", details={"stage": "started"})
+    record_audit_event(
+        event_type="scheduler_started",
+        status="info",
+        module="scheduler",
+        message="scheduler_started",
+    )
 
     iteration = 0
     errors_in_row = 0
@@ -216,6 +222,13 @@ async def scheduler_loop():
         except asyncio.CancelledError:
             logger.info("🛑 Scheduler cancelado")
             heartbeat("scheduler", status="stopped", details={"reason": "cancelled"})
+            record_audit_event(
+                event_type="scheduler_stopped",
+                status="warning",
+                module="scheduler",
+                message="scheduler_stopped",
+                metadata={"reason": "cancelled"},
+            )
             break
         except Exception as e:
             errors_in_row += 1
@@ -244,6 +257,12 @@ def run_scheduler_worker() -> None:
     heartbeat("database", status="ok", details={"stage": "initialized"})
     heartbeat("scheduler", status="starting", details={"mode": "dedicated_process"})
     try:
+        record_audit_event(
+            event_type="scheduler_worker_started",
+            status="info",
+            module="scheduler",
+            message="scheduler_worker_started",
+        )
         logger.info("⏰ Iniciando scheduler dedicado...")
         asyncio.run(scheduler_loop())
     except Exception as exc:
