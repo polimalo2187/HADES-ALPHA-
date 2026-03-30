@@ -423,6 +423,147 @@ def _radar_signal_context_label(*, has_active_signal: bool, latest_signal: Optio
     return "Sin señal"
 
 
+def _preferred_side_matches(direction: Optional[str], preferred_side: Optional[str]) -> bool:
+    direction_value = str(direction or "").upper().strip()
+    preferred_value = str(preferred_side or "").upper().strip()
+    if direction_value == "LONG":
+        return "LONG" in preferred_value
+    if direction_value == "SHORT":
+        return "SHORT" in preferred_value
+    return False
+
+
+def _radar_alignment_label(
+    direction: Optional[str],
+    market_bias: Optional[str],
+    preferred_side: Optional[str],
+) -> str:
+    bias_value = str(market_bias or "").lower().strip()
+    if _preferred_side_matches(direction, preferred_side):
+        if (direction == "LONG" and bias_value.startswith("alcista")) or (direction == "SHORT" and bias_value.startswith("bajista")):
+            return "A favor"
+        return "Con flujo"
+    if "neutral" in bias_value or "leve" in bias_value or not bias_value:
+        return "Selectivo"
+    return "Contratendencia"
+
+
+def _radar_alignment_rank(label: str) -> int:
+    mapping = {
+        "A favor": 4,
+        "Con flujo": 3,
+        "Selectivo": 2,
+        "Contratendencia": 1,
+    }
+    return mapping.get(str(label or ""), 0)
+
+
+def _radar_execution_state_label(
+    *,
+    has_active_signal: bool,
+    proximity_score: float,
+    priority_score: float,
+    radar_score: float,
+    signal_score: float,
+) -> str:
+    if has_active_signal:
+        return "Seguimiento"
+    if proximity_score >= 86.0 and priority_score >= 74.0:
+        return "Ejecutable"
+    if proximity_score >= 72.0 or priority_score >= 68.0 or signal_score >= 70.0:
+        return "Preparación"
+    if radar_score >= 52.0:
+        return "Observación"
+    return "Exploración"
+
+
+def _radar_execution_rank(label: str) -> int:
+    mapping = {
+        "Seguimiento": 5,
+        "Ejecutable": 4,
+        "Preparación": 3,
+        "Observación": 2,
+        "Exploración": 1,
+    }
+    return mapping.get(str(label or ""), 0)
+
+
+def _radar_setup_mode_label(direction: Optional[str], range_position_pct: Optional[float], extreme_score: float) -> str:
+    position_pct = None if range_position_pct is None else _safe_float(range_position_pct)
+    if str(direction or "").upper() == "LONG":
+        if position_pct is not None and position_pct >= 72.0:
+            return "Continuación"
+        if position_pct is not None and position_pct <= 35.0:
+            return "Pullback"
+    if str(direction or "").upper() == "SHORT":
+        if position_pct is not None and position_pct <= 28.0:
+            return "Continuación"
+        if position_pct is not None and position_pct >= 65.0:
+            return "Pullback"
+    if extreme_score >= 62.0:
+        return "Extremo"
+    return "En desarrollo"
+
+
+def _radar_risk_label(
+    *,
+    has_active_signal: bool,
+    alignment_label: str,
+    conviction_label: str,
+    volatility_label: Optional[str],
+    funding_rate_pct: float,
+) -> str:
+    if has_active_signal:
+        return "Gestionar"
+    volatility_value = str(volatility_label or "").lower().strip()
+    if alignment_label == "Contratendencia":
+        return "Reducido"
+    if conviction_label == "Baja" or volatility_value == "expansivo":
+        return "Selectivo"
+    if abs(funding_rate_pct) >= 0.05:
+        return "Cauto"
+    return "Normal"
+
+
+def _radar_operator_note(
+    *,
+    execution_state_label: str,
+    alignment_label: str,
+    setup_mode_label: str,
+    risk_label: str,
+    has_active_signal: bool,
+) -> str:
+    if has_active_signal:
+        return "Gestiona la señal activa; evita duplicar exposición en el mismo símbolo."
+    if execution_state_label == "Ejecutable" and alignment_label in {"A favor", "Con flujo"}:
+        return f"{setup_mode_label} con ventana útil; busca confirmación sin perseguir precio."
+    if execution_state_label == "Preparación":
+        return f"Mantén {setup_mode_label.lower()} en primera línea; puede activarse en esta sesión."
+    if alignment_label == "Contratendencia":
+        return f"Lectura de {setup_mode_label.lower()} en contra del contexto; opera solo si el riesgo es {risk_label.lower()}."
+    return "Radar en vigilancia: todavía no compensa forzar entrada."
+
+
+def _radar_trade_plan(
+    *,
+    action_label: str,
+    execution_state_label: str,
+    alignment_label: str,
+    risk_label: str,
+    signal_context_label: str,
+    setup_mode_label: str,
+    funding_rate_pct: float,
+) -> List[str]:
+    steps = [
+        f"Setup: {setup_mode_label} · {action_label}",
+        f"Estado: {execution_state_label} · Contexto: {alignment_label}",
+        f"Riesgo: {risk_label} · Señal: {signal_context_label}",
+    ]
+    if abs(funding_rate_pct) >= 0.05:
+        steps.append("Funding exigente: evita perseguir si el precio ya viene extendido.")
+    return steps[:4]
+
+
 def _radar_reasons(
     *,
     radar_score: float,
@@ -514,7 +655,12 @@ def _ticker_range_metrics(item: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def _serialize_radar(user_id: int, *, limit: int = 6) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+def _serialize_radar(
+    user_id: int,
+    *,
+    limit: int = 6,
+    market_snapshot: Optional[Dict[str, Any]] = None,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
     radar_rows = _safe_call(get_radar_opportunities, [], limit=max(6, int(limit))) or []
     if not radar_rows:
         return [], {
@@ -527,6 +673,10 @@ def _serialize_radar(user_id: int, *, limit: int = 6) -> tuple[List[Dict[str, An
         }
 
     symbols = [str(row.get("symbol") or "").upper() for row in radar_rows if row.get("symbol")]
+    market_snapshot = market_snapshot or {}
+    market_bias = market_snapshot.get("bias")
+    preferred_side = market_snapshot.get("preferred_side")
+    market_environment = market_snapshot.get("environment")
     selected = set(symbols)
     tickers = get_futures_24h_tickers()
     ticker_by_symbol = {
@@ -610,6 +760,38 @@ def _serialize_radar(user_id: int, *, limit: int = 6) -> tuple[List[Dict[str, An
         window_label = _radar_window_label(setup_proximity_score, ticker_metrics["range_pct_24h"], has_active_signal=bool(active_signal))
         conviction_label = _radar_conviction_label(radar_score, activity_score, range_score, has_active_signal=bool(active_signal))
         signal_context_label = _radar_signal_context_label(has_active_signal=bool(active_signal), latest_signal=latest_signal)
+        alignment_label = _radar_alignment_label(direction, market_bias, preferred_side)
+        execution_state_label = _radar_execution_state_label(
+            has_active_signal=bool(active_signal),
+            proximity_score=setup_proximity_score,
+            priority_score=setup_priority_score,
+            radar_score=radar_score,
+            signal_score=signal_score,
+        )
+        setup_mode_label = _radar_setup_mode_label(direction, ticker_metrics["range_position_pct"], extreme_score)
+        risk_label = _radar_risk_label(
+            has_active_signal=bool(active_signal),
+            alignment_label=alignment_label,
+            conviction_label=conviction_label,
+            volatility_label=ticker_metrics["volatility_label"],
+            funding_rate_pct=funding_rate_pct,
+        )
+        operator_note = _radar_operator_note(
+            execution_state_label=execution_state_label,
+            alignment_label=alignment_label,
+            setup_mode_label=setup_mode_label,
+            risk_label=risk_label,
+            has_active_signal=bool(active_signal),
+        )
+        trade_plan = _radar_trade_plan(
+            action_label=setup_action_label,
+            execution_state_label=execution_state_label,
+            alignment_label=alignment_label,
+            risk_label=risk_label,
+            signal_context_label=signal_context_label,
+            setup_mode_label=setup_mode_label,
+            funding_rate_pct=funding_rate_pct,
+        )
         ranking_score = (
             (0.44 * setup_priority_score)
             + (0.28 * setup_proximity_score)
@@ -634,6 +816,16 @@ def _serialize_radar(user_id: int, *, limit: int = 6) -> tuple[List[Dict[str, An
             "window_label": window_label,
             "conviction_label": conviction_label,
             "signal_context_label": signal_context_label,
+            "alignment_label": alignment_label,
+            "alignment_rank": _radar_alignment_rank(alignment_label),
+            "execution_state_label": execution_state_label,
+            "execution_rank": _radar_execution_rank(execution_state_label),
+            "setup_mode_label": setup_mode_label,
+            "risk_label": risk_label,
+            "operator_note": operator_note,
+            "trade_plan": trade_plan,
+            "market_bias": market_bias,
+            "market_environment": market_environment,
             "signal_score": round(signal_score, 1),
             "activity_score": round(activity_score, 1),
             "range_score": round(range_score, 1),
@@ -700,6 +892,21 @@ def _serialize_radar(user_id: int, *, limit: int = 6) -> tuple[List[Dict[str, An
             "reciente": sum(1 for item in items if item.get("signal_context_label") == "Reciente"),
             "sin_senal": sum(1 for item in items if item.get("signal_context_label") == "Sin señal"),
         },
+        "execution_mix": {
+            "seguimiento": sum(1 for item in items if item.get("execution_state_label") == "Seguimiento"),
+            "ejecutable": sum(1 for item in items if item.get("execution_state_label") == "Ejecutable"),
+            "preparacion": sum(1 for item in items if item.get("execution_state_label") == "Preparación"),
+            "observacion": sum(1 for item in items if item.get("execution_state_label") == "Observación"),
+            "exploracion": sum(1 for item in items if item.get("execution_state_label") == "Exploración"),
+        },
+        "alignment_mix": {
+            "a_favor": sum(1 for item in items if item.get("alignment_label") == "A favor"),
+            "con_flujo": sum(1 for item in items if item.get("alignment_label") == "Con flujo"),
+            "selectivo": sum(1 for item in items if item.get("alignment_label") == "Selectivo"),
+            "contratendencia": sum(1 for item in items if item.get("alignment_label") == "Contratendencia"),
+        },
+        "focus_now": sum(1 for item in items if item.get("execution_state_label") in {"Seguimiento", "Ejecutable"}),
+        "aligned_now": sum(1 for item in items if item.get("alignment_label") in {"A favor", "Con flujo"}),
         "sort_default": "ranking",
     }
     return items, summary
@@ -1170,7 +1377,7 @@ def build_history_payload(user: Dict[str, Any], *, limit: int = 20) -> List[Dict
 def build_market_payload(user: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     snapshot = get_market_state_snapshot() or {}
     user_id = int((user or {}).get("user_id") or 0)
-    radar_items, radar_summary = _serialize_radar(user_id, limit=12)
+    radar_items, radar_summary = _serialize_radar(user_id, limit=12, market_snapshot=snapshot)
     snapshot["radar"] = radar_items
     snapshot["radar_summary"] = radar_summary
     snapshot["top_gainers"] = list(snapshot.get("top_gainers") or [])[:5]
