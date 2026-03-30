@@ -599,3 +599,97 @@ h1 {
     grid-template-columns: 1fr;
   }
 }
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(7, 10, 18, 0.78);
+  backdrop-filter: blur(12px);
+  z-index: 50;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 16px;
+}
+.modal-sheet {
+  width: min(960px, 100%);
+  max-height: min(92vh, 960px);
+  overflow: auto;
+  border-radius: 28px;
+  background: linear-gradient(180deg, rgba(18,24,38,0.98), rgba(10,13,20,0.98));
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  padding: 18px;
+}
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+.modal-body {
+  display: grid;
+  gap: 12px;
+}
+.modal-close {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.05);
+  color: var(--text);
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
+  font-size: 18px;
+  font-weight: 800;
+}
+.loading-inline {
+  padding: 20px;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.detail-profile-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.detail-hero-card {
+  border-color: rgba(245, 158, 11, 0.22);
+}
+.detail-metric-box {
+  min-height: 84px;
+}
+.component-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+.component-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+}
+.upgrade-note-card {
+  border-color: rgba(245, 158, 11, 0.24);
+  background: linear-gradient(180deg, rgba(245,158,11,0.12), rgba(255,255,255,0.02));
+}
+@media (max-width: 680px) {
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+  .modal-sheet {
+    padding: 16px 14px 18px;
+    max-height: 94vh;
+  }
+}
