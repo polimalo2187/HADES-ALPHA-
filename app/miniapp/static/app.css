@@ -560,6 +560,61 @@ h1 {
   gap: 12px;
 }
 
+.watchlist-opportunity-copy {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.35;
+  color: rgba(255,255,255,0.84);
+}
+
+.watchlist-priority-row {
+  margin-top: 8px;
+}
+
+.watchlist-priority-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.05);
+  color: var(--text);
+}
+
+.watchlist-pill-critical {
+  background: rgba(34, 197, 94, 0.16);
+  border-color: rgba(34, 197, 94, 0.32);
+  color: #d5ffe7;
+}
+
+.watchlist-pill-strong {
+  background: rgba(59, 130, 246, 0.16);
+  border-color: rgba(59, 130, 246, 0.28);
+  color: #dceaff;
+}
+
+.watchlist-pill-medium {
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(245, 158, 11, 0.28);
+  color: #fff0c7;
+}
+
+.watchlist-pill-soft {
+  background: rgba(255,255,255,0.05);
+  border-color: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.88);
+}
+
+.watchlist-pill-active {
+  background: rgba(168, 85, 247, 0.16);
+  border-color: rgba(168, 85, 247, 0.3);
+  color: #f1ddff;
+}
+
 .watchlist-metric-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -590,11 +645,33 @@ h1 {
   color: var(--text);
 }
 
+.watchlist-reason-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.watchlist-reason-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.84);
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.04);
+}
+
 .watchlist-inline-meta {
   margin-top: 10px;
 }
 
-@media (max-width: 720px) {
+.watchlist-card-actions {
+  margin-top: 6px;
+}
+
+@media (max-width: 420px) {
   .watchlist-metric-grid {
     grid-template-columns: 1fr;
   }
