@@ -55,6 +55,68 @@ def get_runtime_role() -> str:
         return normalized
     return "web" if is_mini_app_enabled() else "bot"
 
+def get_bot_token() -> str:
+    return os.getenv("BOT_TOKEN", "").strip()
+
+
+def get_mongodb_uri() -> str:
+    return os.getenv("MONGODB_URI", "").strip()
+
+
+def get_database_name() -> str:
+    return os.getenv("DATABASE_NAME", "").strip()
+
+
+def get_runtime_required_env_vars(role: str | None = None) -> List[str]:
+    runtime_role = role or get_runtime_role()
+    required = ["MONGODB_URI", "DATABASE_NAME"]
+
+    if runtime_role in {"bot", "bot_ui", "signal_worker"}:
+        required.append("BOT_TOKEN")
+
+    if runtime_role == "web":
+        required.append("BOT_TOKEN")
+
+    return required
+
+
+def get_runtime_configuration_errors(role: str | None = None) -> List[str]:
+    runtime_role = role or get_runtime_role()
+    errors: List[str] = []
+
+    values = {
+        "BOT_TOKEN": get_bot_token(),
+        "MONGODB_URI": get_mongodb_uri(),
+        "DATABASE_NAME": get_database_name(),
+        "MINI_APP_URL": get_mini_app_url(),
+        "MINI_APP_SESSION_SECRET": os.getenv("MINI_APP_SESSION_SECRET", "").strip(),
+    }
+
+    missing = [name for name in get_runtime_required_env_vars(runtime_role) if not values.get(name)]
+    if missing:
+        errors.append(
+            f"runtime_role={runtime_role}: faltan variables requeridas: {', '.join(missing)}"
+        )
+
+    if runtime_role == "web" and not get_mini_app_url() and not is_development_environment():
+        errors.append("runtime_role=web: MINI_APP_URL es obligatoria fuera de desarrollo")
+
+    if runtime_role == "web" and not values["MINI_APP_SESSION_SECRET"] and not is_development_environment():
+        errors.append(
+            "runtime_role=web: MINI_APP_SESSION_SECRET debe configurarse explícitamente fuera de desarrollo"
+        )
+
+    if runtime_role == "web" and is_mini_app_dev_auth_enabled() and get_mini_app_dev_user_id() is None:
+        errors.append("runtime_role=web: MINI_APP_DEV_USER_ID es obligatorio cuando MINI_APP_ALLOW_DEV_AUTH=true")
+
+    return errors
+
+
+def validate_runtime_configuration(role: str | None = None) -> None:
+    errors = get_runtime_configuration_errors(role=role)
+    if errors:
+        raise RuntimeError(" | ".join(errors))
+
 
 # ======================================================
 # ADMINISTRADORES DEL SISTEMA (TELEGRAM USER_ID)
@@ -218,7 +280,7 @@ def get_mini_app_session_secret() -> str:
     value = os.getenv("MINI_APP_SESSION_SECRET", "").strip()
     if value:
         return value
-    return os.getenv("BOT_TOKEN", "").strip()
+    return get_bot_token()
 
 
 
