@@ -792,12 +792,21 @@ function detailSummaryCard(label, value) {
   `;
 }
 
-function detailMetaPill(label, value, tone = '') {
+function detailInfoChip(label, value, extraClass = '') {
   return `
-    <span class="detail-meta-pill ${tone}">
-      <span class="detail-meta-pill-label">${escapeHtml(label)}</span>
-      <span class="detail-meta-pill-value">${escapeHtml(value)}</span>
-    </span>
+    <div class="detail-info-chip ${extraClass}">
+      <span class="detail-info-chip-label">${escapeHtml(label)}</span>
+      <span class="detail-info-chip-value">${escapeHtml(value)}</span>
+    </div>
+  `;
+}
+
+function detailStatCard(label, value, valueClass = '') {
+  return `
+    <div class="detail-stat-card">
+      <span class="detail-stat-label">${escapeHtml(label)}</span>
+      <span class="detail-stat-value ${valueClass}">${escapeHtml(value)}</span>
+    </div>
   `;
 }
 
@@ -837,85 +846,90 @@ function renderSignalDetailModal(payload) {
   const mainComponents = analysis.components?.length ? analysis.components : (analysis.normalized_components?.length ? analysis.normalized_components : (analysis.raw_components || []));
   const showRaw = analysis.raw_components?.length && !scoreListsEqual(analysis.raw_components, mainComponents);
   const showNormalized = analysis.normalized_components?.length && !scoreListsEqual(analysis.normalized_components, mainComponents) && !scoreListsEqual(analysis.normalized_components, analysis.raw_components || []);
+  const statusBadge = signal.result
+    ? `<span class="${badgeClassByResult(signal)}">${escapeHtml(resultLabel(signal))}</span>`
+    : `<span class="plan-tag">${escapeHtml(tracking.result_label || formatStatusLabel(signal.status || 'active'))}</span>`;
 
   els.signalDetailTitle.textContent = `${signal.symbol || 'Señal'} · ${signal.direction || ''}`.trim();
   els.signalDetailBody.innerHTML = `
-    <div class="detail-topbar">
-      <div class="detail-topbar-meta">
-        ${detailMetaPill('Plan', String(payload.viewer_plan || 'free').toUpperCase())}
-        ${detailMetaPill('Tier', String(signal.visibility || 'free').toUpperCase())}
-        ${detailMetaPill('Perfil', profileLabel(selectedProfile))}
-        ${detailMetaPill('Tracking', String(tier).toUpperCase())}
+    <div class="signal-intel-layout">
+      <div class="card detail-status-card">
+        <div class="detail-status-top">
+          <div class="detail-status-copy-block">
+            <span class="detail-kicker">Resumen operativo</span>
+            <div class="item-title">${escapeHtml(tracking.state_label || 'Sin estado')}</div>
+            <div class="item-subtitle">${escapeHtml(tracking.entry_state_label || 'Sin lectura operativa')}</div>
+          </div>
+          ${statusBadge}
+        </div>
+        <p class="detail-status-copy">${escapeHtml(tracking.recommendation || 'Sin recomendación operativa disponible.')}</p>
       </div>
-      <div class="detail-profile-row" role="tablist" aria-label="Perfil de lectura">
+
+      <div class="detail-info-grid">
+        ${detailInfoChip('Plan', String(payload.viewer_plan || 'free').toUpperCase())}
+        ${detailInfoChip('Tier', String(signal.visibility || 'free').toUpperCase())}
+        ${detailInfoChip('Perfil', profileLabel(selectedProfile))}
+        ${detailInfoChip('Tracking', String(tier).toUpperCase())}
+        ${detailInfoChip('Setup', String(analysis.setup_group || signal.setup_group || 'legacy').toUpperCase())}
+        ${detailInfoChip('Score', formatNumber(analysis.normalized_score ?? analysis.score ?? signal.score, 1))}
+      </div>
+
+      <div class="detail-profile-selector" role="tablist" aria-label="Perfil de lectura">
         ${profileOptions.map(option => `<button class="detail-profile-button ${option === selectedProfile ? 'is-active' : ''}" data-signal-profile="${escapeHtml(option)}" data-signal-id="${escapeHtml(signal.signal_id || '')}" aria-pressed="${option === selectedProfile ? 'true' : 'false'}">${escapeHtml(profileLabel(option))}</button>`).join('')}
       </div>
-    </div>
 
-    <div class="card detail-hero-card">
-      <div class="detail-hero-header">
-        <div>
-          <div class="item-title">${escapeHtml(tracking.state_label || 'Sin estado')}</div>
-          <div class="item-subtitle">${escapeHtml(tracking.entry_state_label || 'Sin lectura operativa')}</div>
+      <div class="detail-stat-grid">
+        ${detailStatCard('Precio actual', formatNumber(tracking.current_price, 4), sideClassByValue(tracking.current_move_pct || 0))}
+        ${detailStatCard('Entrada', formatNumber(tracking.entry_price, 4))}
+        ${detailStatCard('SL', formatNumber(tracking.stop_loss, 4), 'negative-text')}
+        ${detailStatCard('TP1', formatNumber((tracking.take_profits || [])[0], 4), 'positive-text')}
+        ${detailStatCard('TP2', formatNumber((tracking.take_profits || [])[1], 4), 'positive-text')}
+        ${detailStatCard('Dist. entrada', formatFractionPercent(tracking.distance_to_entry_pct))}
+        ${detailStatCard('Dist. SL', formatFractionPercent(tracking.stop_distance_pct))}
+        ${detailStatCard('Dist. TP1', formatFractionPercent(tracking.tp1_distance_pct))}
+        ${detailStatCard('Dist. TP2', formatFractionPercent(tracking.tp2_distance_pct))}
+        ${detailStatCard('Progreso TP1', tracking.progress_to_tp1_pct === null || tracking.progress_to_tp1_pct === undefined ? '—' : formatPercentSigned(tracking.progress_to_tp1_pct, 1))}
+      </div>
+
+      <div class="card card-span-12">
+        <h3>Lectura operativa</h3>
+        <div class="pill-row compact-pill-row">
+          <span class="pill">En entrada: ${tracking.in_entry_zone ? 'Sí' : 'No'}</span>
+          <span class="pill">Operable ahora: ${tracking.is_operable_now ? 'Sí' : 'No'}</span>
+          <span class="pill">TP1 tocado: ${tracking.tp1_hit_now ? 'Sí' : 'No'}</span>
+          <span class="pill">TP2 tocado: ${tracking.tp2_hit_now ? 'Sí' : 'No'}</span>
+          <span class="pill">SL roto: ${tracking.stop_hit_now ? 'Sí' : 'No'}</span>
         </div>
-        ${signal.result ? `<span class="${badgeClassByResult(signal)}">${escapeHtml(resultLabel(signal))}</span>` : `<span class="plan-tag">${escapeHtml(tracking.result_label || formatStatusLabel(signal.status || 'active'))}</span>`}
+        <div class="inline-meta">
+          <span>Creada: ${escapeHtml(formatDate(tracking.created_at || signal.created_at))}</span>
+          <span>Visible hasta: ${escapeHtml(formatDate(tracking.telegram_valid_until || signal.telegram_valid_until))}</span>
+          <span>Evaluación hasta: ${escapeHtml(formatDate(tracking.evaluation_valid_until))}</span>
+        </div>
       </div>
-      <p>${escapeHtml(tracking.recommendation || 'Sin recomendación operativa disponible.')}</p>
-    </div>
 
-    <div class="detail-grid detail-grid-compact">
-      ${detailMetric('Precio actual', formatNumber(tracking.current_price, 4), sideClassByValue(tracking.current_move_pct || 0))}
-      ${detailMetric('Entrada', formatNumber(tracking.entry_price, 4))}
-      ${detailMetric('SL', formatNumber(tracking.stop_loss, 4), 'negative-text')}
-      ${detailMetric('TP1', formatNumber((tracking.take_profits || [])[0], 4), 'positive-text')}
-      ${detailMetric('TP2', formatNumber((tracking.take_profits || [])[1], 4), 'positive-text')}
-      ${detailMetric('Score', formatNumber(analysis.normalized_score ?? analysis.score ?? signal.score, 1))}
-      ${detailMetric('Dist. entrada', formatFractionPercent(tracking.distance_to_entry_pct))}
-      ${detailMetric('Dist. SL', formatFractionPercent(tracking.stop_distance_pct))}
-      ${detailMetric('Dist. TP1', formatFractionPercent(tracking.tp1_distance_pct))}
-      ${detailMetric('Dist. TP2', formatFractionPercent(tracking.tp2_distance_pct))}
-      ${detailMetric('Progreso TP1', tracking.progress_to_tp1_pct === null || tracking.progress_to_tp1_pct === undefined ? '—' : formatPercentSigned(tracking.progress_to_tp1_pct, 1))}
-      ${detailMetric('Setup', String(analysis.setup_group || signal.setup_group || 'legacy').toUpperCase())}
-    </div>
+      <div class="card card-span-12">
+        <h3>Desglose de calidad</h3>
+        <div class="pill-row compact-pill-row">
+          <span class="pill">ATR: ${escapeHtml(formatFractionPercent(analysis.atr_pct))}</span>
+          <span class="pill">TF: ${escapeHtml((analysis.timeframes || []).join(' / ') || '—')}</span>
+          ${analysis.leverage ? `<span class="pill">Leverage: ${escapeHtml(String(analysis.leverage))}</span>` : ''}
+          ${analysis.market_validity_minutes ? `<span class="pill">Mercado: ${escapeHtml(String(analysis.market_validity_minutes))} min</span>` : ''}
+        </div>
+        <div class="inline-meta">
+          ${analysis.strongest_component ? `<span>Más fuerte: ${escapeHtml(analysis.strongest_component.label)} (${escapeHtml(formatNumber(analysis.strongest_component.score, 2))})</span>` : ''}
+          ${analysis.weakest_component ? `<span>Más débil: ${escapeHtml(analysis.weakest_component.label)} (${escapeHtml(formatNumber(analysis.weakest_component.score, 2))})</span>` : ''}
+          ${analysis.score_profile ? `<span>Perfil score: ${escapeHtml(String(analysis.score_profile).toUpperCase())}</span>` : ''}
+          ${analysis.score_calibration ? `<span>Calibración: ${escapeHtml(String(analysis.score_calibration))}</span>` : ''}
+        </div>
+        ${renderScoreBreakdown(mainComponents)}
+        ${showRaw ? `<h3 class="detail-subheading">Componentes raw</h3>${renderScoreBreakdown(analysis.raw_components)}` : ''}
+        ${showNormalized ? `<h3 class="detail-subheading">Componentes normalizados</h3>${renderScoreBreakdown(analysis.normalized_components)}` : ''}
+        ${analysis.raw_components?.length && analysis.normalized_components?.length && !showRaw && !showNormalized ? `<div class="detail-note">En esta señal, los valores raw y normalizados coinciden, por eso no se repiten abajo.</div>` : ''}
+      </div>
 
-    <div class="card card-span-12">
-      <h3>Lectura operativa</h3>
-      <div class="pill-row compact-pill-row">
-        <span class="pill">En entrada: ${tracking.in_entry_zone ? 'Sí' : 'No'}</span>
-        <span class="pill">Operable ahora: ${tracking.is_operable_now ? 'Sí' : 'No'}</span>
-        <span class="pill">TP1 tocado: ${tracking.tp1_hit_now ? 'Sí' : 'No'}</span>
-        <span class="pill">TP2 tocado: ${tracking.tp2_hit_now ? 'Sí' : 'No'}</span>
-        <span class="pill">SL roto: ${tracking.stop_hit_now ? 'Sí' : 'No'}</span>
-      </div>
-      <div class="inline-meta">
-        <span>Creada: ${escapeHtml(formatDate(tracking.created_at || signal.created_at))}</span>
-        <span>Visible hasta: ${escapeHtml(formatDate(tracking.telegram_valid_until || signal.telegram_valid_until))}</span>
-        <span>Evaluación hasta: ${escapeHtml(formatDate(tracking.evaluation_valid_until))}</span>
-      </div>
+      ${warnings.length ? `<div class="card card-span-12"><h3>Notas</h3><div class="feature-list">${warnings.map(item => `<div class="feature-item">• ${escapeHtml(item)}</div>`).join('')}</div></div>` : ''}
+      ${payload.upgrade_hint ? `<div class="card card-span-12 upgrade-note-card"><h3>Lectura premium</h3><p>${escapeHtml(payload.upgrade_hint)}</p></div>` : ''}
     </div>
-
-    <div class="card card-span-12">
-      <h3>Desglose de calidad</h3>
-      <div class="pill-row compact-pill-row">
-        <span class="pill">ATR: ${escapeHtml(formatFractionPercent(analysis.atr_pct))}</span>
-        <span class="pill">TF: ${escapeHtml((analysis.timeframes || []).join(' / ') || '—')}</span>
-        ${analysis.leverage ? `<span class="pill">Leverage: ${escapeHtml(String(analysis.leverage))}</span>` : ''}
-        ${analysis.market_validity_minutes ? `<span class="pill">Mercado: ${escapeHtml(String(analysis.market_validity_minutes))} min</span>` : ''}
-      </div>
-      <div class="inline-meta">
-        ${analysis.strongest_component ? `<span>Más fuerte: ${escapeHtml(analysis.strongest_component.label)} (${escapeHtml(formatNumber(analysis.strongest_component.score, 2))})</span>` : ''}
-        ${analysis.weakest_component ? `<span>Más débil: ${escapeHtml(analysis.weakest_component.label)} (${escapeHtml(formatNumber(analysis.weakest_component.score, 2))})</span>` : ''}
-        ${analysis.score_profile ? `<span>Perfil score: ${escapeHtml(String(analysis.score_profile).toUpperCase())}</span>` : ''}
-        ${analysis.score_calibration ? `<span>Calibración: ${escapeHtml(String(analysis.score_calibration))}</span>` : ''}
-      </div>
-      ${renderScoreBreakdown(mainComponents)}
-      ${showRaw ? `<h3 class="detail-subheading">Componentes raw</h3>${renderScoreBreakdown(analysis.raw_components)}` : ''}
-      ${showNormalized ? `<h3 class="detail-subheading">Componentes normalizados</h3>${renderScoreBreakdown(analysis.normalized_components)}` : ''}
-      ${analysis.raw_components?.length && analysis.normalized_components?.length && !showRaw && !showNormalized ? `<div class="detail-note">En esta señal, los valores raw y normalizados coinciden, por eso no se repiten abajo.</div>` : ''}
-    </div>
-
-    ${warnings.length ? `<div class="card card-span-12"><h3>Notas</h3><div class="feature-list">${warnings.map(item => `<div class="feature-item">• ${escapeHtml(item)}</div>`).join('')}</div></div>` : ''}
-    ${payload.upgrade_hint ? `<div class="card card-span-12 upgrade-note-card"><h3>Lectura premium</h3><p>${escapeHtml(payload.upgrade_hint)}</p></div>` : ''}
   `;
 }
 
