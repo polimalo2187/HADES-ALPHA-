@@ -52,6 +52,32 @@ class MiniAppAdminEndpointTests(unittest.TestCase):
         self.assertEqual(body['users']['total'], 10)
         self.assertTrue(body['runtime']['ok'])
 
+
+    def test_admin_incidents_returns_payload_for_admin(self):
+        payload = {
+            'items': [{'source': 'runtime_health', 'status': 'warning', 'message': 'runtime degraded'}],
+            'limit': 25,
+            'counts': {'error': 0, 'warning': 1},
+            'runtime_overall_status': 'degraded',
+            'generated_at': '2026-03-30T12:00:00',
+        }
+        with patch('app.miniapp.app.initialize_database'), \
+             patch('app.miniapp.app.start_background_heartbeat'), \
+             patch('app.miniapp.app.get_mini_app_cors_origins', return_value=['https://hades.example.com']), \
+             patch('app.miniapp.app.is_mini_app_dev_auth_enabled', return_value=False), \
+             patch('app.miniapp.app.parse_session_token', return_value={'uid': 999}), \
+             patch('app.miniapp.app.get_user_by_id', return_value={'user_id': 999, 'banned': False}), \
+             patch('app.miniapp.app.is_admin', return_value=True), \
+             patch('app.miniapp.app.list_recent_incidents', return_value=payload):
+            with self._build_client() as client:
+                response = client.get('/api/miniapp/admin/incidents', headers={'Authorization': 'Bearer token'})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body['requested_by'], 999)
+        self.assertEqual(body['counts']['warning'], 1)
+        self.assertEqual(body['items'][0]['source'], 'runtime_health')
+
     def test_admin_audit_returns_400_for_invalid_status(self):
         with patch('app.miniapp.app.initialize_database'), \
              patch('app.miniapp.app.start_background_heartbeat'), \
