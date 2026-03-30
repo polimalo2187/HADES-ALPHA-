@@ -4,11 +4,21 @@ if (tg) {
   tg.expand();
 }
 
+const DEFAULT_RADAR_VIEW = {
+  search: '',
+  direction: 'all',
+  priority: 'all',
+  proximity: 'all',
+  signal: 'all',
+  sort: 'ranking',
+};
+
 const state = {
   token: null,
   payload: null,
   currentView: 'home',
   signalDetail: null,
+  radarView: { ...DEFAULT_RADAR_VIEW },
 };
 
 const els = {
@@ -195,6 +205,86 @@ function radarConvictionClass(label) {
   if (normalized.includes('alta')) return 'watchlist-pill-strong';
   if (normalized.includes('media')) return 'watchlist-pill-medium';
   return 'watchlist-pill-soft';
+}
+
+function radarSignalContextClass(label) {
+  const normalized = String(label || '').toLowerCase();
+  if (normalized.includes('activa')) return 'watchlist-pill-active';
+  if (normalized.includes('reciente')) return 'watchlist-pill-strong';
+  return 'watchlist-pill-soft';
+}
+
+function normalizeTextLookup(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase();
+}
+
+function radarFilterCount(items, predicate) {
+  return items.filter(predicate).length;
+}
+
+function sortRadarItems(items, sortKey) {
+  const copy = [...items];
+  copy.sort((a, b) => {
+    const activeDelta = Number(Boolean(b.has_active_signal)) - Number(Boolean(a.has_active_signal));
+    if (activeDelta !== 0 && sortKey !== 'change') return activeDelta;
+
+    const comparators = {
+      ranking: [Number(b.ranking_score || 0) - Number(a.ranking_score || 0), Number(b.priority_score || 0) - Number(a.priority_score || 0)],
+      priority: [Number(b.priority_score || 0) - Number(a.priority_score || 0), Number(b.proximity_score || 0) - Number(a.proximity_score || 0)],
+      proximity: [Number(b.proximity_score || 0) - Number(a.proximity_score || 0), Number(b.priority_score || 0) - Number(a.priority_score || 0)],
+      score: [Number(b.final_score || 0) - Number(a.final_score || 0), Number(b.priority_score || 0) - Number(a.priority_score || 0)],
+      volume: [Number(b.quote_volume || 0) - Number(a.quote_volume || 0), Number(b.activity_score || 0) - Number(a.activity_score || 0)],
+      change: [Math.abs(Number(b.change_pct || 0)) - Math.abs(Number(a.change_pct || 0)), Number(b.final_score || 0) - Number(a.final_score || 0)],
+    };
+
+    const selected = comparators[sortKey] || comparators.ranking;
+    for (const delta of selected) {
+      if (delta !== 0) return delta;
+    }
+    return String(a.symbol || '').localeCompare(String(b.symbol || ''));
+  });
+  return copy;
+}
+
+function getRadarPresentation(items, view) {
+  const search = normalizeTextLookup(view?.search || '');
+  let filtered = [...(items || [])];
+  if (search) {
+    filtered = filtered.filter(item => {
+      const haystack = normalizeTextLookup(`${item.symbol || ''} ${item.direction || ''} ${item.action_label || ''} ${item.reason_short || ''} ${(item.reasons || []).join(' ')}`);
+      return haystack.includes(search);
+    });
+  }
+  if (view?.direction && view.direction !== 'all') {
+    filtered = filtered.filter(item => String(item.direction || '').toLowerCase() === String(view.direction).toLowerCase());
+  }
+  if (view?.priority && view.priority !== 'all') {
+    filtered = filtered.filter(item => String(item.priority_label || '') === String(view.priority));
+  }
+  if (view?.proximity && view.proximity !== 'all') {
+    filtered = filtered.filter(item => String(item.proximity_label || '') === String(view.proximity));
+  }
+  if (view?.signal && view.signal !== 'all') {
+    if (view.signal === 'active') filtered = filtered.filter(item => Boolean(item.has_active_signal));
+    if (view.signal === 'recent') filtered = filtered.filter(item => !item.has_active_signal && Boolean(item.latest_signal));
+    if (view.signal === 'none') filtered = filtered.filter(item => !item.has_active_signal && !item.latest_signal);
+  }
+  return sortRadarItems(filtered, view?.sort || 'ranking');
+}
+
+function radarSortLabel(value) {
+  const map = {
+    ranking: 'Ranking',
+    priority: 'Prioridad',
+    proximity: 'Proximidad',
+    score: 'Score radar',
+    volume: 'Volumen',
+    change: 'Movimiento 24h',
+  };
+  return map[String(value || '').toLowerCase()] || 'Ranking';
 }
 
 
@@ -578,6 +668,9 @@ function renderMarket() {
   const topVolume = market.top_volume || [];
   const btc = market.btc || {};
   const eth = market.eth || {};
+  const radarView = state.radarView || { ...DEFAULT_RADAR_VIEW };
+  const visibleRadar = getRadarPresentation(radar, radarView);
+  const radarSummary = market.radar_summary || {};
 
   const movementList = (items, type) => items.length ? items.map(item => `
     <div class="item compact-item">
@@ -655,18 +748,81 @@ function renderMarket() {
         <div class="item-header radar-section-header">
           <div>
             <h2>Radar V2</h2>
-            <div class="item-subtitle">Prioridad, proximidad y contexto operativo por activo.</div>
+            <div class="item-subtitle">Filtra, ordena y prioriza sin perder contexto operativo.</div>
           </div>
           <div class="pill-row compact-pill-row radar-summary-row">
-            <span class="pill">Hot: ${escapeHtml(market.radar_summary?.hot ?? 0)}</span>
-            <span class="pill">Inmediatos: ${escapeHtml(market.radar_summary?.immediate ?? 0)}</span>
-            <span class="pill">Longs: ${escapeHtml(market.radar_summary?.longs ?? 0)}</span>
-            <span class="pill">Shorts: ${escapeHtml(market.radar_summary?.shorts ?? 0)}</span>
-            <span class="pill">Con señal: ${escapeHtml(market.radar_summary?.active_signals ?? 0)}</span>
+            <span class="pill">Hot: ${escapeHtml(radarSummary.hot ?? 0)}</span>
+            <span class="pill">Inmediatos: ${escapeHtml(radarSummary.immediate ?? 0)}</span>
+            <span class="pill">Longs: ${escapeHtml(radarSummary.longs ?? 0)}</span>
+            <span class="pill">Shorts: ${escapeHtml(radarSummary.shorts ?? 0)}</span>
+            <span class="pill">Con señal: ${escapeHtml(radarSummary.active_signals ?? 0)}</span>
           </div>
         </div>
+
+        <div class="radar-toolbar">
+          <input id="radarSearchInput" class="text-input radar-search-input" placeholder="Buscar símbolo, motivo o acción" value="${escapeHtml(radarView.search || '')}" />
+          <div class="radar-filter-grid">
+            <label class="radar-filter-field">
+              <span>Dirección</span>
+              <select id="radarDirectionFilter" class="text-input compact-select">
+                <option value="all" ${radarView.direction === 'all' ? 'selected' : ''}>Todas (${escapeHtml(radar.length)})</option>
+                <option value="LONG" ${radarView.direction === 'LONG' ? 'selected' : ''}>Long (${escapeHtml(radarSummary.longs ?? radarFilterCount(radar, item => item.direction === 'LONG'))})</option>
+                <option value="SHORT" ${radarView.direction === 'SHORT' ? 'selected' : ''}>Short (${escapeHtml(radarSummary.shorts ?? radarFilterCount(radar, item => item.direction === 'SHORT'))})</option>
+              </select>
+            </label>
+            <label class="radar-filter-field">
+              <span>Prioridad</span>
+              <select id="radarPriorityFilter" class="text-input compact-select">
+                <option value="all" ${radarView.priority === 'all' ? 'selected' : ''}>Todas</option>
+                <option value="Máxima" ${radarView.priority === 'Máxima' ? 'selected' : ''}>Máxima (${escapeHtml(radarSummary.priority_mix?.maxima ?? radarFilterCount(radar, item => item.priority_label === 'Máxima'))})</option>
+                <option value="Alta" ${radarView.priority === 'Alta' ? 'selected' : ''}>Alta (${escapeHtml(radarSummary.priority_mix?.alta ?? radarFilterCount(radar, item => item.priority_label === 'Alta'))})</option>
+                <option value="Media" ${radarView.priority === 'Media' ? 'selected' : ''}>Media (${escapeHtml(radarSummary.priority_mix?.media ?? radarFilterCount(radar, item => item.priority_label === 'Media'))})</option>
+                <option value="Vigilancia" ${radarView.priority === 'Vigilancia' ? 'selected' : ''}>Vigilancia (${escapeHtml(radarSummary.priority_mix?.vigilancia ?? radarFilterCount(radar, item => item.priority_label === 'Vigilancia'))})</option>
+              </select>
+            </label>
+            <label class="radar-filter-field">
+              <span>Proximidad</span>
+              <select id="radarProximityFilter" class="text-input compact-select">
+                <option value="all" ${radarView.proximity === 'all' ? 'selected' : ''}>Todas</option>
+                <option value="Activa" ${radarView.proximity === 'Activa' ? 'selected' : ''}>Activa (${escapeHtml(radarSummary.proximity_mix?.activa ?? radarFilterCount(radar, item => item.proximity_label === 'Activa'))})</option>
+                <option value="Inmediata" ${radarView.proximity === 'Inmediata' ? 'selected' : ''}>Inmediata (${escapeHtml(radarSummary.proximity_mix?.inmediata ?? radarFilterCount(radar, item => item.proximity_label === 'Inmediata'))})</option>
+                <option value="Cercana" ${radarView.proximity === 'Cercana' ? 'selected' : ''}>Cercana (${escapeHtml(radarSummary.proximity_mix?.cercana ?? radarFilterCount(radar, item => item.proximity_label === 'Cercana'))})</option>
+                <option value="Preparando" ${radarView.proximity === 'Preparando' ? 'selected' : ''}>Preparando (${escapeHtml(radarSummary.proximity_mix?.preparando ?? radarFilterCount(radar, item => item.proximity_label === 'Preparando'))})</option>
+              </select>
+            </label>
+            <label class="radar-filter-field">
+              <span>Señal</span>
+              <select id="radarSignalFilter" class="text-input compact-select">
+                <option value="all" ${radarView.signal === 'all' ? 'selected' : ''}>Todas</option>
+                <option value="active" ${radarView.signal === 'active' ? 'selected' : ''}>Activa (${escapeHtml(radarSummary.signal_mix?.activa ?? radarFilterCount(radar, item => item.signal_context_label === 'Activa'))})</option>
+                <option value="recent" ${radarView.signal === 'recent' ? 'selected' : ''}>Reciente (${escapeHtml(radarSummary.signal_mix?.reciente ?? radarFilterCount(radar, item => item.signal_context_label === 'Reciente'))})</option>
+                <option value="none" ${radarView.signal === 'none' ? 'selected' : ''}>Sin señal (${escapeHtml(radarSummary.signal_mix?.sin_senal ?? radarFilterCount(radar, item => item.signal_context_label === 'Sin señal'))})</option>
+              </select>
+            </label>
+            <label class="radar-filter-field">
+              <span>Orden</span>
+              <select id="radarSortFilter" class="text-input compact-select">
+                <option value="ranking" ${radarView.sort === 'ranking' ? 'selected' : ''}>Ranking</option>
+                <option value="priority" ${radarView.sort === 'priority' ? 'selected' : ''}>Prioridad</option>
+                <option value="proximity" ${radarView.sort === 'proximity' ? 'selected' : ''}>Proximidad</option>
+                <option value="score" ${radarView.sort === 'score' ? 'selected' : ''}>Score radar</option>
+                <option value="volume" ${radarView.sort === 'volume' ? 'selected' : ''}>Volumen</option>
+                <option value="change" ${radarView.sort === 'change' ? 'selected' : ''}>Movimiento 24h</option>
+              </select>
+            </label>
+          </div>
+          <div class="radar-toolbar-footer">
+            <div class="pill-row compact-pill-row radar-results-row">
+              <span class="pill">Mostrando: ${escapeHtml(visibleRadar.length)} / ${escapeHtml(radar.length)}</span>
+              <span class="pill">Orden: ${escapeHtml(radarSortLabel(radarView.sort))}</span>
+              ${radarView.search ? `<span class="pill">Búsqueda: ${escapeHtml(radarView.search)}</span>` : ''}
+            </div>
+            <button class="button button-secondary radar-reset-button" data-radar-reset>Reset filtros</button>
+          </div>
+        </div>
+
         <div class="radar-card-grid">
-          ${radar.length ? radar.map(item => `
+          ${visibleRadar.length ? visibleRadar.map(item => `
             <div class="item compact-item watchlist-item-card radar-item-card">
               <div class="item-header radar-item-header">
                 <div>
@@ -684,12 +840,20 @@ function renderMarket() {
                 <span class="watchlist-priority-pill ${watchlistProximityClass(item.proximity_label)}">Proximidad ${escapeHtml(item.proximity_label || '—')}</span>
                 <span class="watchlist-priority-pill ${radarWindowClass(item.window_label)}">${escapeHtml(item.window_label || 'Exploración')}</span>
                 <span class="watchlist-priority-pill ${radarConvictionClass(item.conviction_label)}">Convicción ${escapeHtml(item.conviction_label || '—')}</span>
-                ${item.has_active_signal ? `<span class="watchlist-priority-pill watchlist-pill-active">Señal activa · ${escapeHtml(item.active_signal?.visibility_name || 'HADES')}</span>` : (item.latest_signal ? `<span class="watchlist-priority-pill watchlist-pill-soft">Última señal · ${escapeHtml(item.latest_signal.visibility_name || item.latest_signal.visibility || '—')}</span>` : '')}
+                <span class="watchlist-priority-pill ${radarSignalContextClass(item.signal_context_label)}">${escapeHtml(item.signal_context_label || 'Sin señal')}</span>
               </div>
               <div class="watchlist-metric-grid radar-metric-grid">
                 <div class="watchlist-metric-box">
-                  <span class="watchlist-metric-label">Score</span>
-                  <span class="watchlist-metric-value">${escapeHtml(formatNumber(item.final_score, 1))}</span>
+                  <span class="watchlist-metric-label">Ranking</span>
+                  <span class="watchlist-metric-value">${escapeHtml(formatNumber(item.ranking_score, 1))}</span>
+                </div>
+                <div class="watchlist-metric-box">
+                  <span class="watchlist-metric-label">Prioridad</span>
+                  <span class="watchlist-metric-value">${escapeHtml(formatNumber(item.priority_score, 1))}</span>
+                </div>
+                <div class="watchlist-metric-box">
+                  <span class="watchlist-metric-label">Proximidad</span>
+                  <span class="watchlist-metric-value">${escapeHtml(formatNumber(item.proximity_score, 1))}</span>
                 </div>
                 <div class="watchlist-metric-box">
                   <span class="watchlist-metric-label">Cambio 24h</span>
@@ -735,7 +899,7 @@ function renderMarket() {
                 </div>
               ` : ''}
             </div>
-          `).join('') : '<div class="empty-state">Sin radar disponible.</div>'}
+          `).join('') : '<div class="empty-state">No hay activos que cumplan ese filtro ahora mismo.</div>'}
         </div>
       </div>
 
@@ -765,16 +929,18 @@ function renderMarket() {
               <div class="item-header">
                 <div>
                   <div class="item-title">${escapeHtml(item.symbol)}</div>
-                  <div class="item-subtitle ${watchlistBiasClass(item.range_bias_label)}">${escapeHtml(item.range_bias_label || 'Sin lectura intradía')}</div>
-                  <div class="watchlist-opportunity-copy">${escapeHtml(item.setup_action_label || 'Sin gatillo claro todavía')}</div>
+                  <div class="item-subtitle ${watchlistBiasClass(item.range_bias_label)}">${escapeHtml(item.range_bias_label || 'Sin sesgo')}</div>
+                  <div class="watchlist-opportunity-copy">${escapeHtml(item.setup_action_label || 'Sin lectura operativa disponible')}</div>
                 </div>
-                <span class="${sideClassByValue(item.change_pct)}">${escapeHtml(formatPercentSigned(item.change_pct, 2))}</span>
+                <div class="radar-header-side">
+                  <span class="radar-score-chip">${escapeHtml(item.radar_direction || '—')}</span>
+                </div>
               </div>
               <div class="pill-row compact-pill-row watchlist-priority-row">
                 <span class="watchlist-priority-pill ${watchlistPriorityClass(item.setup_priority_label)}">Prioridad ${escapeHtml(item.setup_priority_label || '—')} · ${escapeHtml(formatNumber(item.setup_priority_score, 0))}</span>
                 <span class="watchlist-priority-pill ${watchlistProximityClass(item.setup_proximity_label)}">Proximidad ${escapeHtml(item.setup_proximity_label || '—')}</span>
-                ${item.radar_direction ? `<span class="watchlist-priority-pill ${dirClass(item.radar_direction)}">${escapeHtml(item.radar_direction)} · Radar ${escapeHtml(formatNumber(item.radar_score, 0))}</span>` : ''}
-                ${item.has_active_signal ? `<span class="watchlist-priority-pill watchlist-pill-active">Señal activa · ${escapeHtml(item.active_signal?.visibility_name || 'HADES')}</span>` : (item.latest_signal ? `<span class="watchlist-priority-pill watchlist-pill-soft">Última señal · ${escapeHtml(item.latest_signal.visibility_name || item.latest_signal.visibility || '—')}</span>` : '')}
+                <span class="watchlist-priority-pill ${watchlistBiasClass(item.range_bias_label) ? 'watchlist-pill-strong' : 'watchlist-pill-soft'}">${escapeHtml(item.range_bias_label || 'Sin rango')}</span>
+                ${item.active_signal ? `<span class="watchlist-priority-pill watchlist-pill-active">Señal activa · ${escapeHtml(item.active_signal?.visibility_name || 'HADES')}</span>` : (item.latest_signal ? `<span class="watchlist-priority-pill watchlist-pill-soft">Última señal · ${escapeHtml(item.latest_signal.visibility_name || item.latest_signal.visibility || '—')}</span>` : '')}
               </div>
               <div class="watchlist-metric-grid">
                 <div class="watchlist-metric-box">
@@ -1218,6 +1384,62 @@ function bindViewButtons() {
       } catch (error) {
         tg?.showAlert(error.message || 'No se pudo eliminar el símbolo.');
       }
+    };
+  });
+
+  const radarSearchInput = document.getElementById('radarSearchInput');
+  if (radarSearchInput) {
+    radarSearchInput.oninput = () => {
+      state.radarView = { ...state.radarView, search: radarSearchInput.value || '' };
+      renderMarket();
+      bindViewButtons();
+    };
+  }
+  const radarDirectionFilter = document.getElementById('radarDirectionFilter');
+  if (radarDirectionFilter) {
+    radarDirectionFilter.onchange = () => {
+      state.radarView = { ...state.radarView, direction: radarDirectionFilter.value || 'all' };
+      renderMarket();
+      bindViewButtons();
+    };
+  }
+  const radarPriorityFilter = document.getElementById('radarPriorityFilter');
+  if (radarPriorityFilter) {
+    radarPriorityFilter.onchange = () => {
+      state.radarView = { ...state.radarView, priority: radarPriorityFilter.value || 'all' };
+      renderMarket();
+      bindViewButtons();
+    };
+  }
+  const radarProximityFilter = document.getElementById('radarProximityFilter');
+  if (radarProximityFilter) {
+    radarProximityFilter.onchange = () => {
+      state.radarView = { ...state.radarView, proximity: radarProximityFilter.value || 'all' };
+      renderMarket();
+      bindViewButtons();
+    };
+  }
+  const radarSignalFilter = document.getElementById('radarSignalFilter');
+  if (radarSignalFilter) {
+    radarSignalFilter.onchange = () => {
+      state.radarView = { ...state.radarView, signal: radarSignalFilter.value || 'all' };
+      renderMarket();
+      bindViewButtons();
+    };
+  }
+  const radarSortFilter = document.getElementById('radarSortFilter');
+  if (radarSortFilter) {
+    radarSortFilter.onchange = () => {
+      state.radarView = { ...state.radarView, sort: radarSortFilter.value || 'ranking' };
+      renderMarket();
+      bindViewButtons();
+    };
+  }
+  document.querySelectorAll('[data-radar-reset]').forEach(button => {
+    button.onclick = () => {
+      state.radarView = { ...DEFAULT_RADAR_VIEW };
+      renderMarket();
+      bindViewButtons();
     };
   });
 
