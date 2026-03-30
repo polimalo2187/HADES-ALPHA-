@@ -554,3 +554,48 @@ h1 {
   border-radius: 999px;
   font-size: 12px;
 }
+
+
+.watchlist-item-card {
+  gap: 12px;
+}
+
+.watchlist-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.watchlist-metric-box {
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.03);
+  border-radius: 14px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.watchlist-metric-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.watchlist-metric-value {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.watchlist-inline-meta {
+  margin-top: 10px;
+}
+
+@media (max-width: 720px) {
+  .watchlist-metric-grid {
+    grid-template-columns: 1fr;
+  }
+}
