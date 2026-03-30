@@ -156,6 +156,32 @@ function watchlistRangePosition(value) {
   return `${Number(value).toFixed(0)}% del rango`;
 }
 
+function watchlistPriorityClass(label) {
+  const normalized = String(label || '').toLowerCase();
+  if (normalized.includes('máxima') || normalized.includes('setup activo')) return 'watchlist-pill-critical';
+  if (normalized.includes('alta')) return 'watchlist-pill-strong';
+  if (normalized.includes('media')) return 'watchlist-pill-medium';
+  return 'watchlist-pill-soft';
+}
+
+function watchlistProximityClass(label) {
+  const normalized = String(label || '').toLowerCase();
+  if (normalized.includes('setup activo') || normalized.includes('muy alta')) return 'watchlist-pill-critical';
+  if (normalized.includes('alta')) return 'watchlist-pill-strong';
+  if (normalized.includes('media')) return 'watchlist-pill-medium';
+  return 'watchlist-pill-soft';
+}
+
+function watchlistSignalSummary(signal) {
+  if (!signal) return 'Sin señal';
+  const bits = [];
+  if (signal.direction) bits.push(String(signal.direction).toUpperCase());
+  if (signal.visibility_name || signal.visibility) bits.push(String(signal.visibility_name || signal.visibility).toUpperCase());
+  if (signal.score !== null && signal.score !== undefined && !Number.isNaN(Number(signal.score))) bits.push(`Score ${formatNumber(signal.score, 0)}`);
+  return bits.join(' · ') || 'Sin señal';
+}
+
+
 function metricToneClass(kind, value) {
   const num = Number(value || 0);
   if (kind === 'pf') {
@@ -655,17 +681,28 @@ function renderMarket() {
                 <div>
                   <div class="item-title">${escapeHtml(item.symbol)}</div>
                   <div class="item-subtitle ${watchlistBiasClass(item.range_bias_label)}">${escapeHtml(item.range_bias_label || 'Sin lectura intradía')}</div>
+                  <div class="watchlist-opportunity-copy">${escapeHtml(item.setup_action_label || 'Sin gatillo claro todavía')}</div>
                 </div>
                 <span class="${sideClassByValue(item.change_pct)}">${escapeHtml(formatPercentSigned(item.change_pct, 2))}</span>
               </div>
+              <div class="pill-row compact-pill-row watchlist-priority-row">
+                <span class="watchlist-priority-pill ${watchlistPriorityClass(item.setup_priority_label)}">Prioridad ${escapeHtml(item.setup_priority_label || '—')} · ${escapeHtml(formatNumber(item.setup_priority_score, 0))}</span>
+                <span class="watchlist-priority-pill ${watchlistProximityClass(item.setup_proximity_label)}">Proximidad ${escapeHtml(item.setup_proximity_label || '—')}</span>
+                ${item.radar_direction ? `<span class="watchlist-priority-pill ${dirClass(item.radar_direction)}">${escapeHtml(item.radar_direction)} · Radar ${escapeHtml(formatNumber(item.radar_score, 0))}</span>` : ''}
+                ${item.has_active_signal ? `<span class="watchlist-priority-pill watchlist-pill-active">Señal activa · ${escapeHtml(item.active_signal?.visibility_name || 'HADES')}</span>` : (item.latest_signal ? `<span class="watchlist-priority-pill watchlist-pill-soft">Última señal · ${escapeHtml(item.latest_signal.visibility_name || item.latest_signal.visibility || '—')}</span>` : '')}
+              </div>
               <div class="watchlist-metric-grid">
+                <div class="watchlist-metric-box">
+                  <span class="watchlist-metric-label">Prioridad</span>
+                  <span class="watchlist-metric-value">${escapeHtml(formatNumber(item.setup_priority_score, 1))}</span>
+                </div>
+                <div class="watchlist-metric-box">
+                  <span class="watchlist-metric-label">Proximidad</span>
+                  <span class="watchlist-metric-value">${escapeHtml(formatNumber(item.setup_proximity_score, 1))}</span>
+                </div>
                 <div class="watchlist-metric-box">
                   <span class="watchlist-metric-label">Precio</span>
                   <span class="watchlist-metric-value">${escapeHtml(formatNumber(item.last_price, 4))}</span>
-                </div>
-                <div class="watchlist-metric-box">
-                  <span class="watchlist-metric-label">Cambio abs</span>
-                  <span class="watchlist-metric-value">${escapeHtml(formatNumber(item.price_change_abs, 4))}</span>
                 </div>
                 <div class="watchlist-metric-box">
                   <span class="watchlist-metric-label">Rango 24h</span>
@@ -676,26 +713,32 @@ function renderMarket() {
                   <span class="watchlist-metric-value">${escapeHtml(watchlistRangePosition(item.range_position_pct))}</span>
                 </div>
                 <div class="watchlist-metric-box">
-                  <span class="watchlist-metric-label">Máx 24h</span>
-                  <span class="watchlist-metric-value">${escapeHtml(formatNumber(item.high_24h, 4))}</span>
-                </div>
-                <div class="watchlist-metric-box">
-                  <span class="watchlist-metric-label">Mín 24h</span>
-                  <span class="watchlist-metric-value">${escapeHtml(formatNumber(item.low_24h, 4))}</span>
+                  <span class="watchlist-metric-label">Radar</span>
+                  <span class="watchlist-metric-value">${escapeHtml(item.radar_score ? formatNumber(item.radar_score, 0) : '—')}</span>
                 </div>
                 <div class="watchlist-metric-box">
                   <span class="watchlist-metric-label">Volumen 24h</span>
                   <span class="watchlist-metric-value">${escapeHtml(formatCompactAmount(item.quote_volume))}</span>
                 </div>
                 <div class="watchlist-metric-box">
-                  <span class="watchlist-metric-label">Trades 24h</span>
-                  <span class="watchlist-metric-value">${escapeHtml(formatInteger(item.trade_count))}</span>
+                  <span class="watchlist-metric-label">Última señal</span>
+                  <span class="watchlist-metric-value">${escapeHtml(watchlistSignalSummary(item.latest_signal))}</span>
                 </div>
               </div>
-              <div class="inline-meta watchlist-inline-meta">
-                <span>Base vol: ${escapeHtml(formatCompactAmount(item.volume_base))}</span>
-                <span>Volatilidad: ${escapeHtml(item.volatility_label || '—')}</span>
+              <div class="watchlist-reason-list">
+                ${(item.priority_reasons || []).map(reason => `<span class="watchlist-reason-chip">${escapeHtml(reason)}</span>`).join('')}
               </div>
+              <div class="inline-meta watchlist-inline-meta">
+                <span>Cambio abs: ${escapeHtml(formatNumber(item.price_change_abs, 4))}</span>
+                <span>Trades: ${escapeHtml(formatInteger(item.trade_count))}</span>
+                <span>Volatilidad: ${escapeHtml(item.volatility_label || '—')}</span>
+                ${item.radar_momentum ? `<span>Momentum radar: ${escapeHtml(item.radar_momentum)}</span>` : ''}
+              </div>
+              ${item.latest_signal?.signal_id ? `
+                <div class="action-row compact watchlist-card-actions">
+                  <button class="button button-secondary" data-signal-detail="${escapeHtml(item.latest_signal.signal_id)}" data-signal-source="watchlist">Ver inteligencia</button>
+                </div>
+              ` : ''}
             </div>
           `).join('') : '<div class="empty-state">Tu watchlist está vacía.</div>'}
         </div>
