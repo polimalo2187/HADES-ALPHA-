@@ -783,6 +783,15 @@ function detailMetric(label, value, valueClass = '') {
   `;
 }
 
+function detailSummaryCard(label, value) {
+  return `
+    <div class="detail-summary-card">
+      <span class="detail-summary-label">${escapeHtml(label)}</span>
+      <span class="detail-summary-value">${escapeHtml(value)}</span>
+    </div>
+  `;
+}
+
 function renderScoreBreakdown(items) {
   if (!items || !items.length) return '<div class="empty-state">Sin desglose disponible.</div>';
   return `<div class="component-list">${items.map(item => `
@@ -810,15 +819,15 @@ function renderSignalDetailModal(payload) {
 
   els.signalDetailTitle.textContent = `${signal.symbol || 'Señal'} · ${signal.direction || ''}`.trim();
   els.signalDetailBody.innerHTML = `
-    <div class="pill-row compact-pill-row">
-      <span class="pill">Plan vista: ${escapeHtml(String(payload.viewer_plan || 'free').toUpperCase())}</span>
-      <span class="pill">Tier señal: ${escapeHtml(String(signal.visibility || 'free').toUpperCase())}</span>
-      <span class="pill">Perfil: ${escapeHtml(profileLabel(selectedProfile))}</span>
-      <span class="pill">Tracking: ${escapeHtml(tier)}</span>
+    <div class="detail-summary-grid">
+      ${detailSummaryCard('Plan vista', String(payload.viewer_plan || 'free').toUpperCase())}
+      ${detailSummaryCard('Tier señal', String(signal.visibility || 'free').toUpperCase())}
+      ${detailSummaryCard('Perfil', profileLabel(selectedProfile))}
+      ${detailSummaryCard('Tracking', String(tier).toUpperCase())}
     </div>
 
-    <div class="detail-profile-row">
-      ${profileOptions.map(option => `<button class="button ${option === selectedProfile ? 'button-primary' : 'button-secondary'}" data-signal-profile="${escapeHtml(option)}" data-signal-id="${escapeHtml(signal.signal_id || '')}">${escapeHtml(profileLabel(option))}</button>`).join('')}
+    <div class="detail-profile-row" role="tablist" aria-label="Perfil de lectura">
+      ${profileOptions.map(option => `<button class="button detail-profile-button ${option === selectedProfile ? 'button-primary is-active' : 'button-secondary'}" data-signal-profile="${escapeHtml(option)}" data-signal-id="${escapeHtml(signal.signal_id || '')}" aria-pressed="${option === selectedProfile ? 'true' : 'false'}">${escapeHtml(profileLabel(option))}</button>`).join('')}
     </div>
 
     <div class="card detail-hero-card">
