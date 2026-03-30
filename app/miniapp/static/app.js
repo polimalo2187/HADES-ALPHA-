@@ -181,6 +181,22 @@ function watchlistSignalSummary(signal) {
   return bits.join(' · ') || 'Sin señal';
 }
 
+function radarWindowClass(label) {
+  const normalized = String(label || '').toLowerCase();
+  if (normalized.includes('seguimiento') || normalized.includes('inmediata')) return 'watchlist-pill-critical';
+  if (normalized.includes('intradía')) return 'watchlist-pill-strong';
+  if (normalized.includes('preparando')) return 'watchlist-pill-medium';
+  return 'watchlist-pill-soft';
+}
+
+function radarConvictionClass(label) {
+  const normalized = String(label || '').toLowerCase();
+  if (normalized.includes('seguimiento')) return 'watchlist-pill-active';
+  if (normalized.includes('alta')) return 'watchlist-pill-strong';
+  if (normalized.includes('media')) return 'watchlist-pill-medium';
+  return 'watchlist-pill-soft';
+}
+
 
 function metricToneClass(kind, value) {
   const num = Number(value || 0);
@@ -635,20 +651,89 @@ function renderMarket() {
         <div class="list">${movementList(topVolume, 'volumen')}</div>
       </div>
 
-      <div class="card card-span-6">
-        <h2>Radar</h2>
-        <div class="list">
+      <div class="card card-span-12">
+        <div class="item-header radar-section-header">
+          <div>
+            <h2>Radar V2</h2>
+            <div class="item-subtitle">Prioridad, proximidad y contexto operativo por activo.</div>
+          </div>
+          <div class="pill-row compact-pill-row radar-summary-row">
+            <span class="pill">Hot: ${escapeHtml(market.radar_summary?.hot ?? 0)}</span>
+            <span class="pill">Inmediatos: ${escapeHtml(market.radar_summary?.immediate ?? 0)}</span>
+            <span class="pill">Longs: ${escapeHtml(market.radar_summary?.longs ?? 0)}</span>
+            <span class="pill">Shorts: ${escapeHtml(market.radar_summary?.shorts ?? 0)}</span>
+            <span class="pill">Con señal: ${escapeHtml(market.radar_summary?.active_signals ?? 0)}</span>
+          </div>
+        </div>
+        <div class="radar-card-grid">
           ${radar.length ? radar.map(item => `
-            <div class="item compact-item">
-              <div class="item-header">
-                <div class="item-title">${escapeHtml(item.symbol)}</div>
-                <span class="${dirClass(item.direction)}">${escapeHtml(item.direction)}</span>
+            <div class="item compact-item watchlist-item-card radar-item-card">
+              <div class="item-header radar-item-header">
+                <div>
+                  <div class="item-title">${escapeHtml(item.symbol)}</div>
+                  <div class="item-subtitle ${watchlistBiasClass(item.range_bias_label)}">${escapeHtml(item.reason_short || item.range_bias_label || 'Radar operativo')}</div>
+                  <div class="watchlist-opportunity-copy">${escapeHtml(item.action_label || 'Sin gatillo operativo claro')}</div>
+                </div>
+                <div class="radar-header-side">
+                  <span class="${dirClass(item.direction)}">${escapeHtml(item.direction || '—')}</span>
+                  <span class="radar-score-chip">Radar ${escapeHtml(formatNumber(item.final_score, 0))}</span>
+                </div>
               </div>
-              <div class="inline-meta">
-                <span>Score ${escapeHtml(item.score)}</span>
-                <span class="${sideClassByValue(item.change_pct)}">${escapeHtml(formatPercentSigned(item.change_pct, 2))}</span>
-                <span>${escapeHtml(item.momentum || 'Momentum')}</span>
+              <div class="pill-row compact-pill-row watchlist-priority-row radar-pill-row">
+                <span class="watchlist-priority-pill ${watchlistPriorityClass(item.priority_label)}">Prioridad ${escapeHtml(item.priority_label || '—')}</span>
+                <span class="watchlist-priority-pill ${watchlistProximityClass(item.proximity_label)}">Proximidad ${escapeHtml(item.proximity_label || '—')}</span>
+                <span class="watchlist-priority-pill ${radarWindowClass(item.window_label)}">${escapeHtml(item.window_label || 'Exploración')}</span>
+                <span class="watchlist-priority-pill ${radarConvictionClass(item.conviction_label)}">Convicción ${escapeHtml(item.conviction_label || '—')}</span>
+                ${item.has_active_signal ? `<span class="watchlist-priority-pill watchlist-pill-active">Señal activa · ${escapeHtml(item.active_signal?.visibility_name || 'HADES')}</span>` : (item.latest_signal ? `<span class="watchlist-priority-pill watchlist-pill-soft">Última señal · ${escapeHtml(item.latest_signal.visibility_name || item.latest_signal.visibility || '—')}</span>` : '')}
               </div>
+              <div class="watchlist-metric-grid radar-metric-grid">
+                <div class="watchlist-metric-box">
+                  <span class="watchlist-metric-label">Score</span>
+                  <span class="watchlist-metric-value">${escapeHtml(formatNumber(item.final_score, 1))}</span>
+                </div>
+                <div class="watchlist-metric-box">
+                  <span class="watchlist-metric-label">Cambio 24h</span>
+                  <span class="watchlist-metric-value ${sideClassByValue(item.change_pct)}">${escapeHtml(formatPercentSigned(item.change_pct, 2))}</span>
+                </div>
+                <div class="watchlist-metric-box">
+                  <span class="watchlist-metric-label">Rango 24h</span>
+                  <span class="watchlist-metric-value">${escapeHtml(formatPercentSigned(item.range_pct_24h, 2))}</span>
+                </div>
+                <div class="watchlist-metric-box">
+                  <span class="watchlist-metric-label">Posición</span>
+                  <span class="watchlist-metric-value">${escapeHtml(watchlistRangePosition(item.range_position_pct))}</span>
+                </div>
+                <div class="watchlist-metric-box">
+                  <span class="watchlist-metric-label">Funding</span>
+                  <span class="watchlist-metric-value ${sideClassByValue(item.funding_rate_pct)}">${escapeHtml(formatPercentSigned(item.funding_rate_pct, 3))}</span>
+                </div>
+                <div class="watchlist-metric-box">
+                  <span class="watchlist-metric-label">Open interest</span>
+                  <span class="watchlist-metric-value">${escapeHtml(formatCompactAmount(item.open_interest))}</span>
+                </div>
+                <div class="watchlist-metric-box">
+                  <span class="watchlist-metric-label">Volumen 24h</span>
+                  <span class="watchlist-metric-value">${escapeHtml(formatCompactAmount(item.quote_volume))}</span>
+                </div>
+                <div class="watchlist-metric-box">
+                  <span class="watchlist-metric-label">Última señal</span>
+                  <span class="watchlist-metric-value">${escapeHtml(watchlistSignalSummary(item.latest_signal))}</span>
+                </div>
+              </div>
+              <div class="watchlist-reason-list radar-reason-list">
+                ${(item.reasons || []).map(reason => `<span class="watchlist-reason-chip">${escapeHtml(reason)}</span>`).join('')}
+              </div>
+              <div class="inline-meta watchlist-inline-meta radar-inline-meta">
+                <span>Precio: ${escapeHtml(formatNumber(item.last_price, 4))}</span>
+                <span>Trades: ${escapeHtml(formatInteger(item.trade_count))}</span>
+                <span>Momentum: ${escapeHtml(item.momentum || '—')}</span>
+                <span>Volatilidad: ${escapeHtml(item.volatility_label || '—')}</span>
+              </div>
+              ${item.latest_signal?.signal_id ? `
+                <div class="action-row compact watchlist-card-actions">
+                  <button class="button button-secondary" data-signal-detail="${escapeHtml(item.latest_signal.signal_id)}" data-signal-source="radar">Ver inteligencia</button>
+                </div>
+              ` : ''}
             </div>
           `).join('') : '<div class="empty-state">Sin radar disponible.</div>'}
         </div>
