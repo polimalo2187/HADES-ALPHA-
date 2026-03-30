@@ -16,7 +16,7 @@ from app.scanner import scan_market
 from app.scheduler import scheduler_loop
 from app.config import get_bot_display_name, get_bot_token
 from app.database import initialize_database
-from app.observability import heartbeat, log_event, record_audit_event
+from app.observability import heartbeat, log_event, record_audit_event, start_background_heartbeat
 from app.realtime_pipeline import initialize_signal_pipeline
 
 # Configurar logging
@@ -158,6 +158,15 @@ def run_bot(*, background: bool = False, enable_scanner: bool = True, enable_sch
     if enable_scheduler:
         started_threads.append(_start_scheduler_thread().name)
 
+    start_background_heartbeat(
+        "bot",
+        details_provider=lambda: {
+            "threads": started_threads,
+            "scanner_enabled": enable_scanner,
+            "scheduler_enabled": enable_scheduler,
+            "telegram_running": bool(application.running),
+        },
+    )
     heartbeat(
         "bot",
         status="ok",
@@ -218,6 +227,7 @@ def run_signal_worker() -> None:
     initialize_database()
     heartbeat("database", status="ok", details={"stage": "initialized"})
     heartbeat("signal_worker", status="starting")
+    start_background_heartbeat("signal_worker", details_provider=lambda: {"stage": "running"})
     bot = _create_raw_bot()
     initialize_signal_pipeline(bot)
     try:
