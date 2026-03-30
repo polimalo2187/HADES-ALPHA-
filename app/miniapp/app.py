@@ -3,8 +3,9 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
+from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -37,6 +38,7 @@ from app.services.admin_runtime_service import (
     get_admin_operational_overview,
     get_admin_runtime_health_matrix,
     list_recent_audit_events,
+    list_recent_incidents,
 )
 from app.payment_service import cancel_payment_order, confirm_payment_order, create_payment_order, get_active_payment_order_for_user
 
@@ -90,8 +92,45 @@ def create_mini_app() -> FastAPI:
         allow_origins=cors_origins,
         allow_credentials=bool(cors_origins),
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
+        allow_headers=["Authorization", "Content-Type", "X-Requested-With", "X-Request-ID"],
+        expose_headers=["X-Request-ID"],
     )
+
+    @app.middleware("http")
+    async def add_request_context(request: Request, call_next):
+        request_id = (request.headers.get("X-Request-ID") or "").strip() or str(uuid4())
+        request.state.request_id = request_id
+        request.state.user_id = None
+        try:
+            response = await call_next(request)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            user_id = getattr(request.state, "user_id", None)
+            heartbeat("miniapp", status="degraded", details={"stage": "request_exception", "request_id": request_id})
+            record_audit_event(
+                event_type="miniapp_request_unhandled_exception",
+                status="error",
+                module="miniapp",
+                user_id=user_id,
+                message=str(exc),
+                metadata={
+                    "request_id": request_id,
+                    "method": request.method,
+                    "path": str(request.url.path),
+                },
+            )
+            logger.error("❌ MiniApp request failed | request_id=%s path=%s error=%s", request_id, request.url.path, exc, exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "ok": False,
+                    "detail": "internal_server_error",
+                    "request_id": request_id,
+                },
+            )
+        response.headers["X-Request-ID"] = request_id
+        return response
 
     @app.on_event("startup")
     async def on_startup() -> None:
@@ -115,6 +154,28 @@ def create_mini_app() -> FastAPI:
                 "dev_auth_enabled": is_mini_app_dev_auth_enabled(),
             },
         )
+        record_audit_event(
+            event_type="miniapp_started",
+            status="info",
+            module="miniapp",
+            message="miniapp_started",
+            metadata={
+                "runtime_role": get_runtime_role(),
+                "cors_origins": cors_origins,
+                "dev_auth_enabled": is_mini_app_dev_auth_enabled(),
+            },
+        )
+
+    @app.on_event("shutdown")
+    async def on_shutdown() -> None:
+        heartbeat("miniapp", status="stopped", details={"stage": "shutdown", "runtime_role": get_runtime_role()})
+        record_audit_event(
+            event_type="miniapp_stopped",
+            status="warning",
+            module="miniapp",
+            message="miniapp_stopped",
+            metadata={"runtime_role": get_runtime_role()},
+        )
 
     app.mount("/miniapp/static", StaticFiles(directory=str(STATIC_DIR)), name="miniapp_static")
 
@@ -124,7 +185,7 @@ def create_mini_app() -> FastAPI:
             raise HTTPException(status_code=401, detail="missing_bearer_token")
         return raw.split(" ", 1)[1].strip()
 
-    def get_authenticated_user(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    def get_authenticated_user(request: Request, authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
         token = _get_bearer_token(authorization)
         try:
             payload = parse_session_token(token)
@@ -135,6 +196,7 @@ def create_mini_app() -> FastAPI:
             raise HTTPException(status_code=401, detail="session_user_not_found")
         if user.get("banned"):
             raise HTTPException(status_code=403, detail="user_banned")
+        request.state.user_id = int(user.get("user_id") or 0)
         return user
 
     def get_authenticated_admin_user(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
@@ -303,6 +365,15 @@ def create_mini_app() -> FastAPI:
             payload = list_recent_audit_events(limit=limit, status=status, module=module)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        payload["requested_by"] = int(admin_user.get("user_id") or 0)
+        return payload
+
+    @app.get("/api/miniapp/admin/incidents")
+    async def miniapp_admin_incidents(
+        limit: int = 25,
+        admin_user: Dict[str, Any] = Depends(get_authenticated_admin_user),
+    ) -> Dict[str, Any]:
+        payload = list_recent_incidents(limit=limit)
         payload["requested_by"] = int(admin_user.get("user_id") or 0)
         return payload
 
