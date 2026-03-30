@@ -1,40 +1,62 @@
 import os
 
-from app.config import is_mini_app_enabled
+from app.config import get_runtime_role
 
 
-def _run_bot_only() -> None:
-    from app.bot import run_bot
-
-    run_bot()
+_RUNTIME_ROLE = get_runtime_role()
 
 
-def _create_web_app():
-    from app.miniapp import create_mini_app
 
-    return create_mini_app()
-
-
-if is_mini_app_enabled():
-    # Modo WEB: solo Mini App / API.
-    app = _create_web_app()
-else:
-    # Modo BOT: exponemos una app mínima para que una importación ASGI accidental
-    # no falle, pero NO arrancamos la Mini App ni threads del bot aquí.
-    from fastapi import FastAPI
-
-    app = FastAPI(title="HADES BOT Process")
-
-    @app.get("/health")
-    async def health() -> dict:
-        return {"ok": True, "service": "bot"}
-
-
-if __name__ == "__main__":
-    if is_mini_app_enabled():
+def _run_role() -> None:
+    if _RUNTIME_ROLE == "web":
         import uvicorn
 
         port = int(os.getenv("PORT", "8000"))
         uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
-    else:
-        _run_bot_only()
+        return
+
+    if _RUNTIME_ROLE == "signal_worker":
+        from app.bot import run_signal_worker
+
+        run_signal_worker()
+        return
+
+    if _RUNTIME_ROLE == "scheduler":
+        from app.bot import run_scheduler_worker
+
+        run_scheduler_worker()
+        return
+
+    from app.bot import run_bot
+
+    if _RUNTIME_ROLE == "bot_ui":
+        run_bot(enable_scanner=False, enable_scheduler=False)
+        return
+
+    run_bot()
+
+
+
+def _create_runtime_app():
+    from fastapi import FastAPI
+
+    service_name = "miniapp" if _RUNTIME_ROLE == "web" else _RUNTIME_ROLE
+    runtime_app = FastAPI(title=f"HADES {service_name} Process")
+
+    @runtime_app.get("/health")
+    async def health() -> dict:
+        return {"ok": True, "service": service_name, "runtime_role": _RUNTIME_ROLE}
+
+    return runtime_app
+
+
+if _RUNTIME_ROLE == "web":
+    from app.miniapp import create_mini_app
+
+    app = create_mini_app()
+else:
+    app = _create_runtime_app()
+
+
+if __name__ == "__main__":
+    _run_role()
