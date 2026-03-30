@@ -671,6 +671,89 @@ h1 {
   margin-top: 6px;
 }
 
+.radar-section-header {
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.radar-summary-row {
+  justify-content: flex-end;
+}
+
+.radar-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.radar-item-card {
+  gap: 12px;
+  min-width: 0;
+}
+
+.radar-item-header {
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.radar-header-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: fit-content;
+}
+
+.radar-score-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 800;
+  color: #fff0c7;
+  border: 1px solid rgba(245,158,11,0.28);
+  background: rgba(245,158,11,0.14);
+}
+
+.radar-pill-row {
+  margin-top: 2px;
+}
+
+.radar-reason-list {
+  margin-top: 4px;
+}
+
+.radar-inline-meta {
+  margin-top: 4px;
+}
+
+@media (max-width: 920px) {
+  .radar-card-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .radar-section-header {
+    flex-direction: column;
+  }
+  .radar-summary-row {
+    justify-content: flex-start;
+  }
+  .radar-item-header {
+    flex-direction: column;
+  }
+  .radar-header-side {
+    width: 100%;
+    align-items: flex-start;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}
+
 @media (max-width: 420px) {
   .watchlist-metric-grid {
     grid-template-columns: 1fr;
