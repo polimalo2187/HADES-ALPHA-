@@ -11,6 +11,7 @@ from app.payment_service import get_active_payment_order_for_user
 from app.plans import get_plan_catalog, get_plan_name, normalize_plan, plan_status
 from app.statistics import get_performance_snapshot
 from app.user_service import get_or_create_user
+from app.watchlist import get_watchlist, get_watchlist_limit_for_plan
 
 
 def _iso(value: Any) -> Optional[str]:
@@ -321,9 +322,29 @@ def build_market_payload() -> Dict[str, Any]:
     return snapshot
 
 
+def build_watchlist_context(user: Dict[str, Any]) -> Dict[str, Any]:
+    raw_symbols = get_watchlist(int(user.get("user_id") or 0))
+    status = plan_status(user)
+    plan_value = normalize_plan(status.get("plan") or user.get("plan"))
+    max_symbols = get_watchlist_limit_for_plan(plan_value)
+    symbols_count = len(raw_symbols)
+    slots_left = None if max_symbols is None else max(max_symbols - symbols_count, 0)
+    return {
+        "items": _serialize_watchlist(raw_symbols),
+        "meta": {
+            "symbols": raw_symbols,
+            "symbols_count": symbols_count,
+            "max_symbols": max_symbols,
+            "slots_left": slots_left,
+            "plan": plan_value,
+            "plan_name": get_plan_name(plan_value),
+            "can_add_more": True if max_symbols is None else symbols_count < max_symbols,
+        },
+    }
+
+
 def build_watchlist_payload(user: Dict[str, Any]) -> List[Dict[str, Any]]:
-    doc = watchlists_collection().find_one({"user_id": int(user.get("user_id") or 0)}) or {}
-    return _serialize_watchlist(doc.get("symbols") or [])
+    return build_watchlist_context(user)["items"]
 
 
 def build_plans_payload(current_plan: Optional[str] = None) -> Dict[str, Any]:
@@ -389,6 +410,7 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
             "adv_ratio_pct": 0.0,
         }),
         "watchlist": _safe_call(lambda: build_watchlist_payload(user), []),
+        "watchlist_meta": _safe_call(lambda: build_watchlist_context(user)["meta"], {"symbols": [], "symbols_count": 0, "max_symbols": 2, "slots_left": 2, "plan": "free", "plan_name": "FREE", "can_add_more": True}),
         "plans": _safe_call(lambda: build_plans_payload(user.get("plan")), {"plus": [], "premium": []}),
         "support_url": "https://chat.whatsapp.com/JXxSGjaKtqRH9c0jTlGv2l?mode=gi_t",
         "generated_at": datetime.utcnow().isoformat(),
