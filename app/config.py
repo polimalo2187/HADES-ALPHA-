@@ -2,10 +2,12 @@
 
 import os
 from typing import List
+from urllib.parse import urlparse
 
 
 DEFAULT_BOT_DISPLAY_NAME = "HADES ALPHA V2"
 DEFAULT_BOT_USERNAME = "HADES_ALPHA_bot"
+_ALLOWED_RUNTIME_ROLES = {"web", "bot", "bot_ui", "signal_worker", "scheduler"}
 
 
 # ======================================================
@@ -20,6 +22,38 @@ def get_bot_display_name() -> str:
 def get_bot_username() -> str:
     value = os.getenv("BOT_USERNAME", DEFAULT_BOT_USERNAME).strip()
     return value.lstrip("@") or DEFAULT_BOT_USERNAME
+
+
+# ======================================================
+# ENTORNO / RUNTIME
+# ======================================================
+
+def get_environment_name() -> str:
+    return os.getenv("ENVIRONMENT", "production").strip().lower() or "production"
+
+
+
+def is_development_environment() -> bool:
+    return get_environment_name() in {"dev", "development", "local", "test", "testing", "staging"}
+
+
+
+def get_runtime_role() -> str:
+    raw = os.getenv("APP_RUNTIME_ROLE", "").strip().lower()
+    aliases = {
+        "miniapp": "web",
+        "api": "web",
+        "telegram": "bot",
+        "polling": "bot",
+        "telegram_ui": "bot_ui",
+        "worker": "signal_worker",
+        "scanner": "signal_worker",
+        "cron": "scheduler",
+    }
+    normalized = aliases.get(raw, raw)
+    if normalized in _ALLOWED_RUNTIME_ROLES:
+        return normalized
+    return "web" if is_mini_app_enabled() else "bot"
 
 
 # ======================================================
@@ -108,20 +142,25 @@ def get_payment_network() -> str:
     return os.getenv("PAYMENT_NETWORK", "bep20").strip().lower() or "bep20"
 
 
+
 def get_payment_token_symbol() -> str:
     return os.getenv("PAYMENT_TOKEN_SYMBOL", "USDT").strip().upper() or "USDT"
+
 
 
 def get_payment_token_contract() -> str:
     return os.getenv("PAYMENT_TOKEN_CONTRACT", "").strip().lower()
 
 
+
 def get_payment_receiver_address() -> str:
     return os.getenv("PAYMENT_RECEIVER_ADDRESS", "").strip().lower()
 
 
+
 def get_bsc_rpc_http_url() -> str:
     return os.getenv("BSC_RPC_HTTP_URL", "").strip()
+
 
 
 def get_payment_min_confirmations() -> int:
@@ -131,11 +170,13 @@ def get_payment_min_confirmations() -> int:
         return 3
 
 
+
 def get_payment_order_ttl_minutes() -> int:
     try:
         return max(int(os.getenv("PAYMENT_ORDER_TTL_MINUTES", "30")), 5)
     except Exception:
         return 30
+
 
 
 def get_payment_token_decimals() -> int:
@@ -145,11 +186,13 @@ def get_payment_token_decimals() -> int:
         return 18
 
 
+
 def get_payment_lookback_blocks() -> int:
     try:
         return max(int(os.getenv("PAYMENT_LOOKBACK_BLOCKS", "2500")), 100)
     except Exception:
         return 2500
+
 
 
 def is_payment_configuration_ready() -> bool:
@@ -164,9 +207,11 @@ def get_mini_app_url() -> str:
     return os.getenv("MINI_APP_URL", "").strip()
 
 
+
 def is_mini_app_enabled() -> bool:
     value = os.getenv("ENABLE_MINI_APP_SERVER", "false").strip().lower()
     return value in {"1", "true", "yes", "on"}
+
 
 
 def get_mini_app_session_secret() -> str:
@@ -176,11 +221,13 @@ def get_mini_app_session_secret() -> str:
     return os.getenv("BOT_TOKEN", "").strip()
 
 
+
 def get_mini_app_session_ttl_seconds() -> int:
     try:
         return max(int(os.getenv("MINI_APP_SESSION_TTL_SECONDS", "43200")), 900)
     except Exception:
         return 43200
+
 
 
 def get_mini_app_dev_user_id() -> int | None:
@@ -192,3 +239,55 @@ def get_mini_app_dev_user_id() -> int | None:
     except Exception:
         return None
     return value if value > 0 else None
+
+
+
+def is_mini_app_dev_auth_enabled() -> bool:
+    raw = os.getenv("MINI_APP_ALLOW_DEV_AUTH", "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return is_development_environment()
+    return False
+
+
+
+def _normalize_origin(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    if raw == "*":
+        return "*"
+    if raw.startswith("http://") or raw.startswith("https://"):
+        parsed = urlparse(raw)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+        return ""
+    return raw.rstrip("/")
+
+
+
+def get_mini_app_cors_origins() -> List[str]:
+    explicit = os.getenv("MINI_APP_CORS_ORIGINS", "").strip()
+    origins: List[str] = []
+
+    if explicit:
+        for item in explicit.split(","):
+            normalized = _normalize_origin(item)
+            if normalized and normalized not in origins:
+                origins.append(normalized)
+        return origins
+
+    mini_app_url = _normalize_origin(get_mini_app_url())
+    if mini_app_url and mini_app_url not in origins:
+        origins.append(mini_app_url)
+
+    if is_mini_app_dev_auth_enabled():
+        for local_origin in (
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ):
+            if local_origin not in origins:
+                origins.append(local_origin)
+
+    return origins
