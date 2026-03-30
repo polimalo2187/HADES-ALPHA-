@@ -631,6 +631,7 @@ h1 {
 .modal-body {
   display: grid;
   gap: 12px;
+  min-width: 0;
 }
 .modal-close {
   appearance: none;
@@ -654,11 +655,6 @@ h1 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
-}
-.detail-profile-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
 }
 .detail-hero-card {
   border-color: rgba(245, 158, 11, 0.22);
@@ -691,5 +687,129 @@ h1 {
   .modal-sheet {
     padding: 16px 14px 18px;
     max-height: 94vh;
+  }
+}
+
+
+.detail-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.detail-summary-card {
+  min-width: 0;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.03);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.detail-summary-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.detail-summary-value {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1.25;
+  word-break: break-word;
+}
+
+.detail-profile-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.detail-profile-button {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.detail-profile-button.is-active {
+  box-shadow: 0 0 0 1px rgba(245,158,11,0.22) inset;
+}
+
+.modal-sheet {
+  overflow-x: hidden;
+}
+
+.modal-header,
+.modal-body,
+.card,
+.item-header,
+.pill-row,
+.inline-meta,
+.detail-grid,
+.component-list,
+.component-row,
+.watchlist-metric-box,
+.watchlist-metric-value {
+  min-width: 0;
+}
+
+.inline-meta span,
+.pill,
+.component-row span,
+.item-title,
+.item-subtitle,
+.watchlist-metric-value {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.component-row {
+  align-items: flex-start;
+}
+
+.component-row span:last-child {
+  flex-shrink: 0;
+}
+
+@media (max-width: 720px) {
+  .detail-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 680px) {
+  .detail-profile-row {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-profile-button {
+    min-height: 40px;
+    padding: 9px 12px;
+  }
+
+  .modal-header {
+    align-items: flex-start;
+  }
+
+  .item-header {
+    align-items: flex-start;
+  }
+
+  .component-row {
+    flex-wrap: wrap;
+  }
+
+  .component-row span:last-child {
+    flex-shrink: 1;
   }
 }
