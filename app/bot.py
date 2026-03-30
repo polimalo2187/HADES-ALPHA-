@@ -8,6 +8,7 @@ import signal
 import sys
 from typing import Any
 
+from telegram import Bot
 from telegram.ext import Application
 
 from app.handlers import get_handlers
@@ -72,94 +73,104 @@ async def application_error_handler(update: object, context) -> None:
     heartbeat("bot", status="degraded", details={"last_error": message})
 
 
-# ======================================================
-# RUN BOT (ENTRYPOINT ÚNICO)
-# ======================================================
 
-def run_bot(*, background: bool = False):
-    initialize_database()
-    heartbeat("database", status="ok", details={"stage": "initialized"})
+def _create_raw_bot() -> Bot:
+    return Bot(token=BOT_TOKEN)
 
-    # Crear aplicación
-    application = Application.builder().token(BOT_TOKEN).build()
-    application.add_error_handler(application_error_handler)
 
-    # Handlers
-    for handler in get_handlers():
-        application.add_handler(handler)
 
-    # Obtener el bot del application
-    bot = application.bot
-
-    # Pipeline de señales en tiempo real
-    initialize_signal_pipeline(bot)
-    heartbeat("signal_pipeline", status="starting")
-
-    # ==============================
-    # BACKGROUND THREADS CON MANEJO DE ERRORES
-    # ==============================
-
-    def run_scanner():
-        """Ejecuta el scanner en un thread dedicado."""
+def _start_scanner_thread(bot: Bot) -> threading.Thread:
+    def run_scanner() -> None:
         heartbeat("scanner", status="starting")
         try:
             logger.info("📡 Iniciando thread del scanner...")
             scan_market(bot)
-        except Exception as e:
-            heartbeat("scanner", status="error", details={"error": str(e)})
+        except Exception as exc:
+            heartbeat("scanner", status="error", details={"error": str(exc)})
             record_audit_event(
                 event_type="scanner_thread_crashed",
                 status="error",
                 module="bot",
-                message=str(e),
+                message=str(exc),
             )
-            logger.error(f"❌ Thread scanner falló: {e}", exc_info=True)
+            logger.error("❌ Thread scanner falló: %s", exc, exc_info=True)
 
-    def run_scheduler():
-        """Ejecuta el scheduler en un thread dedicado (modo seguro)."""
+    scanner_thread = threading.Thread(
+        target=run_scanner,
+        daemon=True,
+        name="ScannerThread",
+    )
+    scanner_thread.start()
+    return scanner_thread
+
+
+
+def _start_scheduler_thread() -> threading.Thread:
+    def run_scheduler() -> None:
         heartbeat("scheduler", status="starting")
         try:
             logger.info("⏰ Iniciando thread del scheduler (modo seguro)...")
             asyncio.run(scheduler_loop())
-        except Exception as e:
-            heartbeat("scheduler", status="error", details={"error": str(e)})
+        except Exception as exc:
+            heartbeat("scheduler", status="error", details={"error": str(exc)})
             record_audit_event(
                 event_type="scheduler_thread_crashed",
                 status="error",
                 module="bot",
-                message=str(e),
+                message=str(exc),
             )
-            logger.error(f"❌ Thread scheduler falló: {e}", exc_info=True)
-
-    # Iniciar threads con nombres para debugging
-    scanner_thread = threading.Thread(
-        target=run_scanner,
-        daemon=True,
-        name="ScannerThread"
-    )
+            logger.error("❌ Thread scheduler falló: %s", exc, exc_info=True)
 
     scheduler_thread = threading.Thread(
         target=run_scheduler,
         daemon=True,
-        name="SchedulerThread"
+        name="SchedulerThread",
     )
-
-    scanner_thread.start()
     scheduler_thread.start()
+    return scheduler_thread
 
-    heartbeat("bot", status="ok", details={"threads": [scanner_thread.name, scheduler_thread.name]})
-    logger.info("✅ Threads de fondo iniciados correctamente")
 
-    # ==============================
-    # MANEJO DE SEÑALES PARA SHUTDOWN ELEGANTE
-    # ==============================
+# ======================================================
+# RUN BOT (ENTRYPOINT ÚNICO)
+# ======================================================
 
-    def signal_handler(sig: int, frame: Any):
-        """Maneja señales de terminación."""
-        logger.info(f"\n🛑 Recibida señal de terminación ({sig})...")
+def run_bot(*, background: bool = False, enable_scanner: bool = True, enable_scheduler: bool = True) -> None:
+    initialize_database()
+    heartbeat("database", status="ok", details={"stage": "initialized"})
+
+    application = Application.builder().token(BOT_TOKEN).build()
+    application.add_error_handler(application_error_handler)
+
+    for handler in get_handlers():
+        application.add_handler(handler)
+
+    bot = application.bot
+    started_threads: list[str] = []
+
+    if enable_scanner:
+        initialize_signal_pipeline(bot)
+        heartbeat("signal_pipeline", status="starting")
+        started_threads.append(_start_scanner_thread(bot).name)
+
+    if enable_scheduler:
+        started_threads.append(_start_scheduler_thread().name)
+
+    heartbeat(
+        "bot",
+        status="ok",
+        details={
+            "threads": started_threads,
+            "scanner_enabled": enable_scanner,
+            "scheduler_enabled": enable_scheduler,
+        },
+    )
+    logger.info("✅ Runtime bot inicializado (scanner=%s scheduler=%s)", enable_scanner, enable_scheduler)
+
+    def signal_handler(sig: int, frame: Any) -> None:
+        logger.info("
+🛑 Recibida señal de terminación (%s)...", sig)
         heartbeat("bot", status="stopping", details={"signal": sig})
 
-        # Detener la aplicación
         if application.running:
             logger.info("Deteniendo aplicación de Telegram...")
             application.stop()
@@ -167,39 +178,77 @@ def run_bot(*, background: bool = False):
         logger.info("Bot detenido correctamente")
         sys.exit(0)
 
-    # Registrar manejadores de señales solo en foreground
     if not background:
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
 
-    # ==============================
-    # INICIAR POLLING
-    # ==============================
-
-    logger.info(f"🤖 {get_bot_display_name()} iniciando...")
-    log_event("bot.starting", bot_name=get_bot_display_name())
+    logger.info("🤖 %s iniciando...", get_bot_display_name())
+    log_event(
+        "bot.starting",
+        bot_name=get_bot_display_name(),
+        scanner_enabled=enable_scanner,
+        scheduler_enabled=enable_scheduler,
+    )
 
     try:
+        run_kwargs = {
+            "poll_interval": 0.5,
+            "timeout": 30,
+            "drop_pending_updates": True,
+        }
         if background:
-            application.run_polling(
-                poll_interval=0.5,
-                timeout=30,
-                drop_pending_updates=True,
-                stop_signals=None,
-            )
-        else:
-            application.run_polling(
-                poll_interval=0.5,
-                timeout=30,
-                drop_pending_updates=True,
-            )
-    except Exception as e:
-        heartbeat("bot", status="error", details={"error": str(e)})
+            run_kwargs["stop_signals"] = None
+        application.run_polling(**run_kwargs)
+    except Exception as exc:
+        heartbeat("bot", status="error", details={"error": str(exc)})
         record_audit_event(
             event_type="run_polling_error",
             status="error",
             module="bot",
-            message=str(e),
+            message=str(exc),
         )
-        logger.error(f"❌ Error en run_polling: {e}", exc_info=True)
+        logger.error("❌ Error en run_polling: %s", exc, exc_info=True)
+        raise
+
+
+
+def run_signal_worker() -> None:
+    initialize_database()
+    heartbeat("database", status="ok", details={"stage": "initialized"})
+    heartbeat("signal_worker", status="starting")
+    bot = _create_raw_bot()
+    initialize_signal_pipeline(bot)
+    try:
+        logger.info("🚀 Iniciando signal worker dedicado...")
+        heartbeat("signal_worker", status="ok", details={"stage": "running"})
+        scan_market(bot)
+    except Exception as exc:
+        heartbeat("signal_worker", status="error", details={"error": str(exc)})
+        record_audit_event(
+            event_type="signal_worker_crashed",
+            status="error",
+            module="signal_worker",
+            message=str(exc),
+        )
+        logger.error("❌ Signal worker falló: %s", exc, exc_info=True)
+        raise
+
+
+
+def run_scheduler_worker() -> None:
+    initialize_database()
+    heartbeat("database", status="ok", details={"stage": "initialized"})
+    heartbeat("scheduler", status="starting", details={"mode": "dedicated_process"})
+    try:
+        logger.info("⏰ Iniciando scheduler dedicado...")
+        asyncio.run(scheduler_loop())
+    except Exception as exc:
+        heartbeat("scheduler", status="error", details={"error": str(exc), "mode": "dedicated_process"})
+        record_audit_event(
+            event_type="scheduler_worker_crashed",
+            status="error",
+            module="scheduler",
+            message=str(exc),
+        )
+        logger.error("❌ Scheduler worker falló: %s", exc, exc_info=True)
         raise
