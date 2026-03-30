@@ -10,7 +10,12 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app.config import get_mini_app_dev_user_id
+from app.config import (
+    get_mini_app_cors_origins,
+    get_mini_app_dev_user_id,
+    get_runtime_role,
+    is_mini_app_dev_auth_enabled,
+)
 from app.database import initialize_database
 from app.miniapp.auth import MiniAppAuthError, issue_session_token, parse_session_token, validate_telegram_init_data
 from app.miniapp.service import (
@@ -49,20 +54,52 @@ class MiniAppPaymentActionRequest(BaseModel):
     order_id: str
 
 
+
+def _resolve_dev_telegram_user(payload: MiniAppAuthRequest) -> Dict[str, Any]:
+    if not is_mini_app_dev_auth_enabled():
+        raise MiniAppAuthError("autenticación dev deshabilitada")
+
+    configured_dev_user_id = get_mini_app_dev_user_id()
+    requested_dev_user_id = payload.dev_user_id
+
+    if not configured_dev_user_id:
+        raise MiniAppAuthError("MINI_APP_DEV_USER_ID no configurado")
+
+    if requested_dev_user_id is not None and int(requested_dev_user_id) != int(configured_dev_user_id):
+        raise MiniAppAuthError("dev_user_id no autorizado")
+
+    return {
+        "id": int(configured_dev_user_id),
+        "username": f"dev_{int(configured_dev_user_id)}",
+        "language_code": "es",
+    }
+
+
+
 def create_mini_app() -> FastAPI:
-    app = FastAPI(title="HADES Mini App", version="1.0.0")
+    app = FastAPI(title="HADES Mini App", version="1.0.1")
+    cors_origins = get_mini_app_cors_origins()
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=cors_origins,
+        allow_credentials=bool(cors_origins),
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
     )
 
     @app.on_event("startup")
     async def on_startup() -> None:
         initialize_database()
-        heartbeat("miniapp", status="ok", details={"stage": "startup"})
+        heartbeat(
+            "miniapp",
+            status="ok",
+            details={
+                "stage": "startup",
+                "runtime_role": get_runtime_role(),
+                "cors_origins": cors_origins,
+                "dev_auth_enabled": is_mini_app_dev_auth_enabled(),
+            },
+        )
 
     app.mount("/miniapp/static", StaticFiles(directory=str(STATIC_DIR)), name="miniapp_static")
 
@@ -91,7 +128,13 @@ def create_mini_app() -> FastAPI:
 
     @app.get("/miniapp/health")
     async def miniapp_health() -> Dict[str, Any]:
-        return {"ok": True, "service": "miniapp"}
+        return {
+            "ok": True,
+            "service": "miniapp",
+            "runtime_role": get_runtime_role(),
+            "dev_auth_enabled": is_mini_app_dev_auth_enabled(),
+            "cors_origins": cors_origins,
+        }
 
     @app.post("/api/miniapp/auth")
     async def miniapp_auth(payload: MiniAppAuthRequest) -> Dict[str, Any]:
@@ -101,20 +144,18 @@ def create_mini_app() -> FastAPI:
                 parsed = validate_telegram_init_data(payload.init_data)
                 telegram_user = dict(parsed.get("user") or {})
             else:
-                dev_user_id = payload.dev_user_id or get_mini_app_dev_user_id()
-                if not dev_user_id:
-                    raise MiniAppAuthError("init_data vacío")
-                telegram_user = {
-                    "id": int(dev_user_id),
-                    "username": f"dev_{int(dev_user_id)}",
-                    "language_code": "es",
-                }
+                telegram_user = _resolve_dev_telegram_user(payload)
         except MiniAppAuthError as exc:
             record_audit_event(
                 event_type="miniapp_auth_failed",
                 status="error",
                 module="miniapp",
                 message=str(exc),
+                metadata={
+                    "runtime_role": get_runtime_role(),
+                    "dev_auth_enabled": is_mini_app_dev_auth_enabled(),
+                    "requested_dev_user_id": payload.dev_user_id,
+                },
             )
             raise HTTPException(status_code=401, detail=str(exc)) from exc
 
@@ -127,6 +168,13 @@ def create_mini_app() -> FastAPI:
             user_id=int(user.get("user_id") or 0),
             username=user.get("username"),
             language=user.get("language") or "es",
+        )
+        record_audit_event(
+            event_type="miniapp_auth_succeeded",
+            status="ok",
+            module="miniapp",
+            user_id=int(user.get("user_id") or 0),
+            metadata={"auth_source": "telegram_init_data" if payload.init_data else "dev_auth"},
         )
         heartbeat("miniapp", status="ok", details={"stage": "authenticated", "user_id": int(user.get("user_id") or 0)})
         return {
