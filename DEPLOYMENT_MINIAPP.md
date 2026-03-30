@@ -100,10 +100,12 @@ Crea servicios separados apuntando al mismo repo:
    - Start command: `APP_RUNTIME_ROLE=bot_ui python main.py`
 
 ## Health checks
-- `web`: usa `/health`
-- `signal_worker`: vigílalo por logs + heartbeats en DB
-- `scheduler`: vigílalo por logs + heartbeats en DB
-- `bot_ui`: vigílalo por logs + heartbeats en DB
+- `web`: usa `/miniapp/health/live`, `/miniapp/health/ready` y `/miniapp/health`
+- `signal_worker`: vigílalo por heartbeats en DB (`signal_worker`, `scanner`, `signal_pipeline`)
+- `scheduler`: vigílalo por heartbeats en DB (`scheduler`, `statistics`, `history`, `database`)
+- `bot_ui`: vigílalo por heartbeats en DB (`bot`, `database`)
+
+`/miniapp/health/ready` devuelve `503` cuando faltan componentes requeridos, cuando un componente reporta error o cuando un heartbeat está viejo.
 
 ## Falla rápida de configuración
 `main.py` ahora valida variables críticas según el rol. Si falta algo esencial, el proceso falla al arrancar con un error explícito.
