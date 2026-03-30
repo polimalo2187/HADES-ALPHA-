@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from typing import Iterable
 from typing import Any, Dict, List, Optional
 
 from app.config import is_payment_configuration_ready
@@ -10,6 +11,8 @@ from app.models import utcnow
 
 _RUNTIME_ROLES = ["web", "bot", "signal_worker", "scheduler"]
 _ALLOWED_AUDIT_STATUSES = {"info", "ok", "success", "warning", "error"}
+_INCIDENT_AUDIT_STATUSES = {"warning", "error"}
+_INCIDENT_RUNTIME_STATUSES = {"degraded", "stale", "missing", "error", "stopped"}
 
 
 def _utcnow() -> datetime:
@@ -97,6 +100,76 @@ def get_admin_operational_overview() -> Dict[str, Any]:
     }
     return overview
 
+
+
+def _iter_runtime_incidents(runtime_payload: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
+    generated_at = runtime_payload.get("generated_at")
+    for role, report in (runtime_payload.get("runtimes") or {}).items():
+        components = (report.get("components") or {})
+        for component_name, component in components.items():
+            effective_status = str(component.get("effective_status") or component.get("status") or "unknown")
+            if effective_status not in _INCIDENT_RUNTIME_STATUSES:
+                continue
+            yield {
+                "source": "runtime_health",
+                "runtime_role": str(role),
+                "component": str(component_name),
+                "status": effective_status,
+                "severity": "error" if effective_status in {"error", "stopped"} else "warning",
+                "created_at": component.get("updated_at") or generated_at,
+                "message": f"runtime={role} component={component_name} status={effective_status}",
+                "metadata": {
+                    "age_seconds": component.get("age_seconds"),
+                    "stale_after_seconds": component.get("stale_after_seconds"),
+                    "details": component.get("details") or {},
+                },
+            }
+
+
+def list_recent_incidents(*, limit: int = 25) -> Dict[str, Any]:
+    clamped_limit = _clamp_limit(limit)
+    runtime_payload = get_admin_runtime_health_matrix()
+    audit_payload = list_recent_audit_events(limit=clamped_limit, status=None, module=None)
+
+    items: List[Dict[str, Any]] = []
+
+    for incident in _iter_runtime_incidents(runtime_payload):
+        items.append(incident)
+
+    for item in audit_payload.get("items") or []:
+        status = str(item.get("status") or "info").lower()
+        if status not in _INCIDENT_AUDIT_STATUSES:
+            continue
+        items.append({
+            "source": "audit",
+            "runtime_role": None,
+            "component": item.get("module"),
+            "status": status,
+            "severity": status,
+            "created_at": item.get("created_at"),
+            "message": item.get("message") or item.get("event_type"),
+            "event_type": item.get("event_type"),
+            "metadata": item.get("metadata") or {},
+        })
+
+    def _sort_key(row: Dict[str, Any]) -> str:
+        return str(row.get("created_at") or "")
+
+    items.sort(key=_sort_key, reverse=True)
+    items = items[:clamped_limit]
+
+    severity_counts = {
+        "error": sum(1 for item in items if item.get("severity") == "error"),
+        "warning": sum(1 for item in items if item.get("severity") == "warning"),
+    }
+
+    return {
+        "items": items,
+        "limit": clamped_limit,
+        "counts": severity_counts,
+        "runtime_overall_status": runtime_payload.get("overall_status"),
+        "generated_at": _serialize_datetime(_utcnow()),
+    }
 
 
 def list_recent_audit_events(*, limit: int = 25, status: Optional[str] = None, module: Optional[str] = None) -> Dict[str, Any]:
