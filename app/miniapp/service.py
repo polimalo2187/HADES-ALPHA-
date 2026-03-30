@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
-from math import isfinite
+from datetime import datetime, timezone
+from math import isfinite, log10
 from typing import Any, Dict, Iterable, List, Optional
 
 from app.binance_api import get_futures_24h_tickers, get_radar_opportunities
@@ -161,7 +161,192 @@ def _watchlist_volatility_label(range_pct: float) -> str:
     return "Calmo"
 
 
-def _serialize_watchlist(symbols: Iterable[str]) -> List[Dict[str, Any]]:
+def _watchlist_priority_label(score: float) -> str:
+    if score >= 85.0:
+        return "Máxima"
+    if score >= 70.0:
+        return "Alta"
+    if score >= 55.0:
+        return "Media"
+    if score >= 40.0:
+        return "Vigilancia"
+    return "Baja"
+
+
+def _watchlist_proximity_label(score: float, *, has_active_signal: bool = False) -> str:
+    if has_active_signal:
+        return "Setup activo"
+    if score >= 85.0:
+        return "Muy alta"
+    if score >= 70.0:
+        return "Alta"
+    if score >= 55.0:
+        return "Media"
+    if score >= 40.0:
+        return "Temprana"
+    return "Baja"
+
+
+def _watchlist_activity_score(quote_volume: float, trade_count: int) -> float:
+    volume_score = 0.0
+    if quote_volume > 0:
+        volume_score = max(0.0, min(100.0, (log10(quote_volume + 1.0) - 5.0) * 24.0))
+    trade_score = 0.0
+    if trade_count > 0:
+        trade_score = max(0.0, min(100.0, (log10(float(trade_count) + 1.0) - 2.0) * 34.0))
+    return (0.7 * volume_score) + (0.3 * trade_score)
+
+
+def _watchlist_extreme_score(position_pct: Optional[float]) -> float:
+    if position_pct is None:
+        return 0.0
+    return max(0.0, min(100.0, abs(float(position_pct) - 50.0) * 2.0))
+
+
+def _watchlist_signal_score(doc: Optional[Dict[str, Any]]) -> float:
+    if not doc:
+        return 0.0
+    return max(0.0, min(100.0, _safe_float(doc.get("normalized_score", doc.get("score")), 0.0)))
+
+
+def _serialize_watchlist_signal(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not doc:
+        return None
+    visibility = normalize_plan(doc.get("visibility"))
+    return {
+        "signal_id": str(doc.get("signal_id") or doc.get("_id") or ""),
+        "direction": str(doc.get("direction") or "").upper(),
+        "visibility": visibility,
+        "visibility_name": get_plan_name(visibility),
+        "score": round(_watchlist_signal_score(doc), 1),
+        "setup_group": doc.get("setup_group"),
+        "status": doc.get("status") or doc.get("result") or "active",
+        "result": doc.get("result"),
+        "resolution": doc.get("resolution"),
+        "created_at": _iso(doc.get("created_at") or doc.get("signal_created_at")),
+    }
+
+
+def _is_active_signal_doc(doc: Dict[str, Any], *, now_utc: Optional[datetime] = None) -> bool:
+    now_value = now_utc or datetime.utcnow()
+    result = str(doc.get("result") or "").lower().strip()
+    resolution = str(doc.get("resolution") or "").lower().strip()
+    if result in {"won", "lost", "expired"}:
+        return False
+    if resolution in {"tp1", "tp2", "sl", "expired_clean"}:
+        return False
+
+    status = str(doc.get("status") or "").lower().strip()
+    if status in {"active", "pending", "open"}:
+        return True
+
+    valid_until = doc.get("telegram_valid_until")
+    if isinstance(valid_until, datetime):
+        if valid_until.tzinfo is not None:
+            valid_until = valid_until.astimezone(timezone.utc).replace(tzinfo=None)
+        return valid_until >= now_value
+    return False
+
+
+def _load_watchlist_signal_context(user_id: int, symbols: Iterable[str]) -> tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    ordered_symbols = [str(symbol).upper() for symbol in symbols if symbol]
+    if not user_id or not ordered_symbols:
+        return {}, {}
+
+    lookup = set(ordered_symbols)
+    limit = max(20, len(ordered_symbols) * 6)
+    docs = _safe_call(
+        lambda: list(
+            user_signals_collection()
+            .find({"user_id": user_id, "symbol": {"$in": list(lookup)}})
+            .sort("created_at", -1)
+            .limit(limit)
+        ),
+        [],
+    )
+
+    latest_by_symbol: Dict[str, Dict[str, Any]] = {}
+    active_by_symbol: Dict[str, Dict[str, Any]] = {}
+    now_value = datetime.utcnow()
+    for doc in docs:
+        symbol = str(doc.get("symbol") or "").upper()
+        if not symbol or symbol not in lookup:
+            continue
+        if symbol not in latest_by_symbol:
+            latest_by_symbol[symbol] = doc
+        if symbol not in active_by_symbol and _is_active_signal_doc(doc, now_utc=now_value):
+            active_by_symbol[symbol] = doc
+    return latest_by_symbol, active_by_symbol
+
+
+def _watchlist_action_label(
+    direction: Optional[str],
+    position_pct: Optional[float],
+    proximity_score: float,
+    *,
+    has_active_signal: bool = False,
+) -> str:
+    if has_active_signal:
+        return "Ya tienes una señal activa en seguimiento"
+
+    direction_value = str(direction or "").upper().strip()
+    if direction_value not in {"LONG", "SHORT"}:
+        if proximity_score >= 55.0:
+            return "Vigilar confirmación operativa"
+        return "Sin gatillo claro todavía"
+
+    if direction_value == "LONG":
+        if position_pct is not None and position_pct >= 70.0:
+            return "Vigilar continuación long"
+        if position_pct is not None and position_pct <= 35.0:
+            return "Vigilar pullback long"
+        if proximity_score >= 55.0:
+            return "Vigilar confirmación long"
+        return "Long en observación"
+
+    if position_pct is not None and position_pct <= 30.0:
+        return "Vigilar continuación short"
+    if position_pct is not None and position_pct >= 65.0:
+        return "Vigilar pullback short"
+    if proximity_score >= 55.0:
+        return "Vigilar confirmación short"
+    return "Short en observación"
+
+
+def _watchlist_priority_reasons(
+    *,
+    radar_score: float,
+    range_score: float,
+    change_score: float,
+    activity_score: float,
+    extreme_score: float,
+    signal_score: float,
+    has_active_signal: bool,
+    missing_market_data: bool,
+) -> List[str]:
+    reasons: List[str] = []
+    if has_active_signal:
+        reasons.append("Señal activa ya visible en tu flujo")
+    if radar_score >= 70.0:
+        reasons.append("Radar caliente y bien rankeado")
+    if signal_score >= 70.0:
+        reasons.append("Señal reciente con score alto")
+    if range_score >= 55.0:
+        reasons.append("Rango intradía expandido")
+    if change_score >= 45.0:
+        reasons.append("Movimiento 24h con desplazamiento útil")
+    if activity_score >= 55.0:
+        reasons.append("Volumen y actividad sostienen la lectura")
+    if extreme_score >= 60.0:
+        reasons.append("Cotiza cerca de un extremo del rango")
+    if missing_market_data:
+        reasons.append("Sin datos frescos de Binance ahora mismo")
+    if not reasons:
+        reasons.append("En observación, sin gatillo operativo claro")
+    return reasons[:3]
+
+
+def _serialize_watchlist(symbols: Iterable[str], *, user_id: int = 0) -> List[Dict[str, Any]]:
     selected_order = [str(symbol).upper() for symbol in symbols if symbol]
     if not selected_order:
         return []
@@ -174,47 +359,103 @@ def _serialize_watchlist(symbols: Iterable[str]) -> List[Dict[str, Any]]:
         if symbol and symbol in selected:
             ticker_by_symbol[symbol] = item
 
+    radar_rows = _safe_call(get_radar_opportunities, [], limit=max(30, len(selected_order) * 8)) or []
+    radar_by_symbol = {
+        str(item.get("symbol") or "").upper(): item
+        for item in radar_rows
+        if item.get("symbol")
+    }
+    latest_signal_by_symbol, active_signal_by_symbol = _load_watchlist_signal_context(user_id, selected_order)
+
     rows: List[Dict[str, Any]] = []
     for symbol in selected_order:
         item = ticker_by_symbol.get(symbol)
+        missing_market_data = item is None
         if not item:
-            rows.append({
-                "symbol": symbol,
-                "last_price": 0.0,
-                "change_pct": 0.0,
-                "quote_volume": 0.0,
-                "volume_base": 0.0,
-                "trade_count": 0,
-                "high_24h": 0.0,
-                "low_24h": 0.0,
-                "range_pct_24h": 0.0,
-                "range_position_pct": None,
-                "range_bias_label": "Sin datos de Binance",
-                "volatility_label": "Sin datos",
-                "price_change_abs": 0.0,
-                "is_positive": True,
-            })
-            continue
-
-        last_price = _safe_float(item.get("lastPrice"))
-        change_pct = _safe_float(item.get("priceChangePercent"))
-        quote_volume = _safe_float(item.get("quoteVolume"))
-        volume_base = _safe_float(item.get("volume"))
-        high_24h = _safe_float(item.get("highPrice"), last_price)
-        low_24h = _safe_float(item.get("lowPrice"), last_price)
-        trade_count = int(_safe_float(item.get("count"), 0.0))
-        price_change_abs = _safe_float(item.get("priceChange"))
-
-        if high_24h > 0 and low_24h > 0 and high_24h >= low_24h:
-            range_width = max(high_24h - low_24h, 0.0)
-            range_pct_24h = (range_width / low_24h * 100.0) if low_24h > 0 else 0.0
-            if range_width > 0 and last_price > 0:
-                range_position_pct: Optional[float] = max(0.0, min(100.0, ((last_price - low_24h) / range_width) * 100.0))
-            else:
-                range_position_pct = None
-        else:
+            last_price = 0.0
+            change_pct = 0.0
+            quote_volume = 0.0
+            volume_base = 0.0
+            high_24h = 0.0
+            low_24h = 0.0
+            trade_count = 0
+            price_change_abs = 0.0
             range_pct_24h = 0.0
             range_position_pct = None
+            range_bias_label = "Sin datos de Binance"
+            volatility_label = "Sin datos"
+        else:
+            last_price = _safe_float(item.get("lastPrice"))
+            change_pct = _safe_float(item.get("priceChangePercent"))
+            quote_volume = _safe_float(item.get("quoteVolume"))
+            volume_base = _safe_float(item.get("volume"))
+            high_24h = _safe_float(item.get("highPrice"), last_price)
+            low_24h = _safe_float(item.get("lowPrice"), last_price)
+            trade_count = int(_safe_float(item.get("count"), 0.0))
+            price_change_abs = _safe_float(item.get("priceChange"))
+
+            if high_24h > 0 and low_24h > 0 and high_24h >= low_24h:
+                range_width = max(high_24h - low_24h, 0.0)
+                range_pct_24h = (range_width / low_24h * 100.0) if low_24h > 0 else 0.0
+                if range_width > 0 and last_price > 0:
+                    range_position_pct = max(0.0, min(100.0, ((last_price - low_24h) / range_width) * 100.0))
+                else:
+                    range_position_pct = None
+            else:
+                range_pct_24h = 0.0
+                range_position_pct = None
+            range_bias_label = _watchlist_range_bias(range_position_pct)
+            volatility_label = _watchlist_volatility_label(range_pct_24h)
+
+        radar_entry = radar_by_symbol.get(symbol) or {}
+        radar_score = max(0.0, min(100.0, _safe_float(radar_entry.get("final_score", radar_entry.get("score")), 0.0)))
+        radar_direction = str(radar_entry.get("direction") or "").upper().strip() or None
+        radar_momentum = radar_entry.get("momentum")
+
+        latest_signal = latest_signal_by_symbol.get(symbol)
+        active_signal = active_signal_by_symbol.get(symbol)
+        latest_signal_public = _serialize_watchlist_signal(latest_signal)
+        active_signal_public = _serialize_watchlist_signal(active_signal)
+        signal_score = max(_watchlist_signal_score(latest_signal), _watchlist_signal_score(active_signal))
+
+        range_score = max(0.0, min(100.0, range_pct_24h * 8.0))
+        change_score = max(0.0, min(100.0, abs(change_pct) * 10.0))
+        activity_score = _watchlist_activity_score(quote_volume, trade_count)
+        extreme_score = _watchlist_extreme_score(range_position_pct)
+
+        priority_score = (
+            (0.38 * radar_score)
+            + (0.16 * range_score)
+            + (0.14 * change_score)
+            + (0.14 * activity_score)
+            + (0.08 * extreme_score)
+            + (0.10 * signal_score)
+        )
+        proximity_score = (
+            (0.45 * radar_score)
+            + (0.25 * extreme_score)
+            + (0.15 * range_score)
+            + (0.15 * change_score)
+        )
+        if signal_score > 0:
+            proximity_score = max(proximity_score, (0.6 * signal_score) + (20.0 if active_signal_public else 0.0))
+        if active_signal_public:
+            priority_score = max(priority_score, min(100.0, signal_score + 12.0))
+            proximity_score = 100.0
+
+        priority_score = max(0.0, min(100.0, priority_score))
+        proximity_score = max(0.0, min(100.0, proximity_score))
+        direction_hint = radar_direction or (active_signal_public or latest_signal_public or {}).get("direction")
+        reasons = _watchlist_priority_reasons(
+            radar_score=radar_score,
+            range_score=range_score,
+            change_score=change_score,
+            activity_score=activity_score,
+            extreme_score=extreme_score,
+            signal_score=signal_score,
+            has_active_signal=bool(active_signal_public),
+            missing_market_data=missing_market_data,
+        )
 
         rows.append({
             "symbol": symbol,
@@ -227,10 +468,24 @@ def _serialize_watchlist(symbols: Iterable[str]) -> List[Dict[str, Any]]:
             "low_24h": low_24h,
             "range_pct_24h": range_pct_24h,
             "range_position_pct": range_position_pct,
-            "range_bias_label": _watchlist_range_bias(range_position_pct),
-            "volatility_label": _watchlist_volatility_label(range_pct_24h),
+            "range_bias_label": range_bias_label,
+            "volatility_label": volatility_label,
             "price_change_abs": price_change_abs,
             "is_positive": change_pct >= 0,
+            "radar_score": round(radar_score, 1),
+            "radar_direction": radar_direction,
+            "radar_momentum": radar_momentum,
+            "setup_priority_score": round(priority_score, 1),
+            "setup_priority_label": _watchlist_priority_label(priority_score),
+            "setup_proximity_score": round(proximity_score, 1),
+            "setup_proximity_label": _watchlist_proximity_label(proximity_score, has_active_signal=bool(active_signal_public)),
+            "setup_action_label": _watchlist_action_label(direction_hint, range_position_pct, proximity_score, has_active_signal=bool(active_signal_public)),
+            "priority_reasons": reasons,
+            "priority_reason_short": reasons[0],
+            "priority_driver_label": reasons[0],
+            "active_signal": active_signal_public,
+            "latest_signal": latest_signal_public,
+            "has_active_signal": bool(active_signal_public),
         })
 
     return rows
@@ -583,7 +838,7 @@ def build_watchlist_context(user: Dict[str, Any]) -> Dict[str, Any]:
     symbols_count = len(raw_symbols)
     slots_left = None if max_symbols is None else max(max_symbols - symbols_count, 0)
     return {
-        "items": _serialize_watchlist(raw_symbols),
+        "items": _serialize_watchlist(raw_symbols, user_id=int(user.get("user_id") or 0)),
         "meta": {
             "symbols": raw_symbols,
             "symbols_count": symbols_count,
