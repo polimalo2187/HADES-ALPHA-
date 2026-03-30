@@ -491,6 +491,7 @@ function renderSignals() {
 function renderMarket() {
   const market = state.payload.market || {};
   const watchlist = state.payload.watchlist || [];
+  const watchlistMeta = state.payload.watchlist_meta || { symbols: [], symbols_count: 0, max_symbols: 0, slots_left: 0, can_add_more: false };
   const gainers = market.top_gainers || [];
   const losers = market.top_losers || [];
   const radar = market.radar || [];
@@ -591,6 +592,24 @@ function renderMarket() {
 
       <div class="card card-span-6">
         <h2>Watchlist</h2>
+        <div class="pill-row compact-pill-row">
+          <span class="pill">Límite: ${escapeHtml(watchlistLimitText(watchlistMeta))}</span>
+          <span class="pill">Slots libres: ${escapeHtml(watchlistMeta.slots_left ?? '∞')}</span>
+          <span class="pill">Plan: ${escapeHtml(String(watchlistMeta.plan_name || watchlistMeta.plan || 'FREE').toUpperCase())}</span>
+        </div>
+        <div class="watchlist-controls">
+          <input id="watchlistInput" class="text-input" placeholder="BTC, ETH, SOL o BTCUSDT" />
+          <div class="action-row compact">
+            <button class="button button-primary" data-watchlist-add>Agregar</button>
+            <button class="button button-secondary" data-watchlist-replace>Reemplazar</button>
+            <button class="button button-danger" data-watchlist-clear>Limpiar</button>
+          </div>
+        </div>
+        <div class="symbol-chip-row">
+          ${(watchlistMeta.symbols || []).length ? (watchlistMeta.symbols || []).map(symbol => `
+            <button class="symbol-chip" data-watchlist-remove="${escapeHtml(symbol)}">${escapeHtml(symbol)} ✕</button>
+          `).join('') : '<div class="empty-state">Todavía no tienes símbolos guardados.</div>'}
+        </div>
         <div class="list">
           ${watchlist.length ? watchlist.map(item => `
             <div class="item compact-item">
@@ -608,6 +627,32 @@ function renderMarket() {
       </div>
     </div>
   `;
+}
+
+function watchlistLimitText(meta) {
+  if (!meta) return '—';
+  if (meta.max_symbols === null || meta.max_symbols === undefined) return 'Sin límite';
+  return `${meta.symbols_count || 0} / ${meta.max_symbols}`;
+}
+
+async function refreshWatchlist() {
+  const payload = await api('/api/miniapp/watchlist');
+  state.payload.watchlist = payload.items || [];
+  state.payload.watchlist_meta = payload.meta || { symbols: [], symbols_count: 0, max_symbols: 0, slots_left: 0, can_add_more: false };
+}
+
+async function mutateWatchlist(path, body, successMessage) {
+  const payload = await api(path, {
+    method: 'POST',
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  state.payload.watchlist = payload.items || [];
+  state.payload.watchlist_meta = payload.meta || { symbols: [], symbols_count: 0, max_symbols: 0, slots_left: 0, can_add_more: false };
+  state.payload.dashboard.watchlist_count = payload.meta?.symbols_count || 0;
+  renderMarket();
+  renderHome();
+  bindViewButtons();
+  if (successMessage || payload.message) tg?.showAlert(successMessage || payload.message);
 }
 
 function renderHistory() {
@@ -733,6 +778,57 @@ function bindViewButtons() {
   document.querySelectorAll('[data-copy-value]').forEach(button => {
     button.onclick = () => copyValue(button.dataset.copyValue, 'Copiado correctamente.');
   });
+  const watchlistInput = document.getElementById('watchlistInput');
+  document.querySelectorAll('[data-watchlist-add]').forEach(button => {
+    button.onclick = async () => {
+      const raw = (watchlistInput?.value || '').trim();
+      if (!raw) {
+        tg?.showAlert('Escribe al menos un símbolo.');
+        return;
+      }
+      try {
+        const symbols = raw.split(/[\s,;]+/).map(item => item.trim()).filter(Boolean);
+        if (symbols.length > 1) {
+          await mutateWatchlist('/api/miniapp/watchlist/replace', { symbols: [...new Set([...(state.payload.watchlist_meta?.symbols || []), ...symbols])] });
+        } else {
+          await mutateWatchlist('/api/miniapp/watchlist/add', { symbol: raw });
+        }
+        if (watchlistInput) watchlistInput.value = '';
+      } catch (error) {
+        tg?.showAlert(error.message || 'No se pudo añadir a watchlist.');
+      }
+    };
+  });
+  document.querySelectorAll('[data-watchlist-replace]').forEach(button => {
+    button.onclick = async () => {
+      const raw = (watchlistInput?.value || '').trim();
+      try {
+        await mutateWatchlist('/api/miniapp/watchlist/replace', { raw });
+        if (watchlistInput) watchlistInput.value = '';
+      } catch (error) {
+        tg?.showAlert(error.message || 'No se pudo reemplazar la watchlist.');
+      }
+    };
+  });
+  document.querySelectorAll('[data-watchlist-clear]').forEach(button => {
+    button.onclick = async () => {
+      try {
+        await mutateWatchlist('/api/miniapp/watchlist/clear');
+      } catch (error) {
+        tg?.showAlert(error.message || 'No se pudo limpiar la watchlist.');
+      }
+    };
+  });
+  document.querySelectorAll('[data-watchlist-remove]').forEach(button => {
+    button.onclick = async () => {
+      try {
+        await mutateWatchlist('/api/miniapp/watchlist/remove', { symbol: button.dataset.watchlistRemove });
+      } catch (error) {
+        tg?.showAlert(error.message || 'No se pudo eliminar el símbolo.');
+      }
+    };
+  });
+
   document.querySelectorAll('[data-create-order]').forEach(button => {
     button.onclick = async () => {
       const [plan, days] = button.dataset.createOrder.split(':');
