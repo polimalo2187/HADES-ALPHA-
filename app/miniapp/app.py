@@ -29,6 +29,7 @@ from app.miniapp.service import (
     build_market_payload,
     build_me_payload,
     build_plans_payload,
+    build_performance_center_payload,
     build_risk_center_payload,
     build_signals_payload,
     build_watchlist_context,
@@ -489,6 +490,15 @@ def create_mini_app() -> FastAPI:
     async def miniapp_cancel_payment(payload: MiniAppPaymentActionRequest, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
         cancelled = cancel_payment_order(payload.order_id, int(user.get("user_id") or 0))
         return {"ok": cancelled}
+
+    @app.get("/api/miniapp/performance")
+    async def miniapp_performance_center(
+        days: int = 30,
+        user: Dict[str, Any] = Depends(get_authenticated_user),
+    ) -> Dict[str, Any]:
+        if int(days) not in {7, 30, 3650}:
+            raise HTTPException(status_code=400, detail="unsupported_performance_window")
+        return build_performance_center_payload(user, focus_days=int(days))
 
     @app.get("/api/miniapp/risk")
     async def miniapp_risk_center(
