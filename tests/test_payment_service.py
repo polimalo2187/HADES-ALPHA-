@@ -60,6 +60,12 @@ class PaymentServiceTests(unittest.TestCase):
             'plan': 'premium',
             'days': 30,
             'status': 'awaiting_payment',
+            'amount_usdt': 20.077,
+            'base_price_usdt': 20.0,
+            'network': 'bep20',
+            'token_symbol': 'USDT',
+            'token_contract': '0xabc',
+            'deposit_address': '0xreceiver',
             'expires_at': utcnow() + timedelta(minutes=10),
         }
         collection = MagicMock()
@@ -67,6 +73,10 @@ class PaymentServiceTests(unittest.TestCase):
              patch('app.payment_service.get_active_payment_order_for_user', return_value=existing), \
              patch('app.payment_service.payment_orders_collection', return_value=collection), \
              patch('app.payment_service.cancel_open_orders_for_user') as mocked_cancel, \
+             patch('app.payment_service.get_payment_network', return_value='bep20'), \
+             patch('app.payment_service.get_payment_token_symbol', return_value='USDT'), \
+             patch('app.payment_service.get_payment_token_contract', return_value='0xabc'), \
+             patch('app.payment_service.get_payment_receiver_address', return_value='0xreceiver'), \
              patch('app.payment_service.record_audit_event') as mocked_audit:
             order = create_payment_order(77, 'premium', 30)
 
@@ -96,6 +106,65 @@ class PaymentServiceTests(unittest.TestCase):
         collection.insert_one.assert_called_once()
         inserted_order = collection.insert_one.call_args.args[0]
         self.assertLessEqual(Decimal(str(inserted_order['amount_usdt'])) - Decimal(str(inserted_order['base_price_usdt'])), Decimal('0.150'))
+
+
+    def test_create_payment_order_reissues_matching_order_when_close_to_expiry(self):
+        existing = {
+            'order_id': 'ord-expiring',
+            'user_id': 77,
+            'plan': 'premium',
+            'days': 30,
+            'status': 'awaiting_payment',
+            'amount_usdt': 20.041,
+            'base_price_usdt': 20.0,
+            'network': 'bep20',
+            'token_symbol': 'USDT',
+            'token_contract': '0xabc',
+            'deposit_address': '0xreceiver',
+            'expires_at': utcnow() + timedelta(minutes=2),
+        }
+        collection = MagicMock()
+        collection.find_one.return_value = None
+        with patch('app.payment_service.get_payment_configuration_status', return_value={'ready': True, 'missing_keys': []}), \
+             patch('app.payment_service.get_active_payment_order_for_user', return_value=existing), \
+             patch('app.payment_service.payment_orders_collection', return_value=collection), \
+             patch('app.payment_service.cancel_open_orders_for_user', return_value=1) as mocked_cancel, \
+             patch('app.payment_service.get_payment_network', return_value='bep20'), \
+             patch('app.payment_service.get_payment_token_symbol', return_value='USDT'), \
+             patch('app.payment_service.get_payment_token_contract', return_value='0xabc'), \
+             patch('app.payment_service.get_payment_receiver_address', return_value='0xreceiver'), \
+             patch('app.payment_service.record_audit_event') as mocked_audit, \
+             patch('app.payment_service.heartbeat'):
+            order = create_payment_order(77, 'premium', 30)
+
+        self.assertEqual(order['plan'], 'premium')
+        mocked_cancel.assert_called_once_with(77, reason='reissued_for_short_ttl')
+        collection.insert_one.assert_called_once()
+        self.assertTrue(any(call.kwargs.get('event_type') == 'payment_order_reissued' for call in mocked_audit.mock_calls))
+
+    def test_create_payment_order_does_not_replace_paid_unconfirmed_order_with_other_plan(self):
+        existing = {
+            'order_id': 'ord-paid',
+            'user_id': 77,
+            'plan': 'plus',
+            'days': 15,
+            'status': 'paid_unconfirmed',
+            'matched_tx_hash': '0xhash',
+            'confirmations': 0,
+            'expires_at': utcnow() + timedelta(minutes=10),
+        }
+        collection = MagicMock()
+        with patch('app.payment_service.get_payment_configuration_status', return_value={'ready': True, 'missing_keys': []}), \
+             patch('app.payment_service.get_active_payment_order_for_user', return_value=existing), \
+             patch('app.payment_service.payment_orders_collection', return_value=collection), \
+             patch('app.payment_service.cancel_open_orders_for_user') as mocked_cancel, \
+             patch('app.payment_service.record_audit_event') as mocked_audit:
+            order = create_payment_order(77, 'premium', 30)
+
+        self.assertEqual(order['order_id'], 'ord-paid')
+        mocked_cancel.assert_not_called()
+        collection.insert_one.assert_not_called()
+        self.assertTrue(any(call.kwargs.get('event_type') == 'payment_order_replacement_blocked' for call in mocked_audit.mock_calls))
 
     def test_create_payment_order_supersedes_existing_mismatched_order(self):
         existing = {
@@ -156,6 +225,7 @@ class PaymentServiceTests(unittest.TestCase):
 
         self.assertFalse(result['ok'])
         self.assertEqual(result['reason'], 'verification_in_progress')
+        self.assertGreaterEqual(result.get('retry_after_seconds') or 0, 0)
         mocked_verify.assert_not_called()
 
     def test_confirm_payment_order_is_idempotent_when_purchase_was_already_applied(self):
