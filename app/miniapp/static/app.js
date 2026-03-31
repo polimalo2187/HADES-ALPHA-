@@ -90,6 +90,40 @@ function formatFractionPercent(value, digits = 2) {
   return `${(Number(value) * 100).toFixed(digits)}%`;
 }
 
+function billingToneClass(value) {
+  const normalized = String(value || '').toLowerCase();
+  if (normalized === 'positive') return 'is-positive';
+  if (normalized === 'warning') return 'is-warning';
+  if (normalized === 'accent') return 'is-accent';
+  return '';
+}
+
+function billingStepClass(value) {
+  const normalized = String(value || '').toLowerCase();
+  if (normalized === 'done') return 'is-done';
+  if (normalized === 'current') return 'is-current';
+  if (normalized === 'blocked') return 'is-blocked';
+  return 'is-upcoming';
+}
+
+function paymentReasonMessage(reason, fallbackOk) {
+  const normalized = String(reason || '').toLowerCase();
+  const map = {
+    payment_confirmed: 'Pago confirmado correctamente.',
+    already_completed: 'La orden ya estaba completada.',
+    verification_in_progress: 'Ya hay una verificación en curso para esa orden.',
+    order_expired: 'La orden expiró. Genera una nueva si todavía quieres pagar.',
+    order_cancelled: 'La orden ya estaba cancelada.',
+    tx_already_used: 'Esa transacción ya fue usada por otra orden.',
+    payment_config_missing: 'La configuración de pagos no está lista todavía.',
+    activation_failed: 'El pago se detectó, pero la activación falló. Revisa soporte.',
+    no_match: 'Todavía no aparece un pago válido para esa orden.',
+    no_transfer_found: 'Todavía no aparece una transferencia válida para esa orden.',
+    awaiting_confirmations: 'Se detectó el pago, pero aún faltan confirmaciones.',
+  };
+  return map[normalized] || fallbackOk || 'Estado de pago actualizado.';
+}
+
 function profileLabel(value) {
   const map = { conservador: 'Conservador', moderado: 'Moderado', agresivo: 'Agresivo' };
   return map[String(value || '').toLowerCase()] || String(value || '—');
@@ -498,21 +532,41 @@ function historyCard(item) {
   `;
 }
 
-function paymentInstructions(order) {
+function paymentInstructions(order, focus = null) {
   if (!order) return '';
   const address = order.deposit_address || '';
   const addressHref = address ? `https://bscscan.com/address/${encodeURIComponent(address)}` : '#';
   const uniqueExtra = order.amount_unique_delta ? `(+${formatMoney(order.amount_unique_delta)} único)` : 'Monto único por orden';
+  const steps = Array.isArray(order.steps) && order.steps.length ? order.steps : (focus?.steps || []);
+  const toneClass = billingToneClass(focus?.tone || (order.status === 'paid_unconfirmed' ? 'positive' : order.status === 'verification_in_progress' ? 'warning' : 'accent'));
+  const canConfirm = order.status === 'awaiting_payment' || order.status === 'paid_unconfirmed';
+  const canCancel = order.status === 'awaiting_payment';
   return `
     <div class="card payment-card card-span-12">
-      <h2>Pago actual</h2>
+      <div class="payment-focus-card ${toneClass}">
+        <div class="payment-focus-copy">
+          <div class="payment-focus-kicker">Billing activo</div>
+          <div class="payment-focus-title">${escapeHtml(focus?.title || 'Pago actual')}</div>
+          <div class="payment-focus-headline">${escapeHtml(focus?.headline || `${order.plan_name || String(order.plan || '').toUpperCase()} · ${order.days} días`)}</div>
+          <div class="payment-focus-message">${escapeHtml(focus?.message || 'Revisa el estado antes de enviar o volver a confirmar.')}</div>
+          ${focus?.hint ? `<div class="payment-focus-hint">${escapeHtml(focus.hint)}</div>` : ''}
+        </div>
+        <div class="payment-focus-side">
+          <span class="plan-tag">${escapeHtml(formatStatusLabel(order.status_label || order.status))}</span>
+          <div class="payment-timer">${escapeHtml(order.time_left_label || '—')}</div>
+          <div class="payment-timer-label">Tiempo restante</div>
+        </div>
+      </div>
+
+      ${steps.length ? `<div class="billing-step-row">${steps.map(step => `<div class="billing-step ${billingStepClass(step.state)}"><span class="billing-step-dot"></span><span>${escapeHtml(step.label)}</span></div>`).join('')}</div>` : ''}
+
       <div class="item">
         <div class="item-header">
           <div>
             <div class="item-title">${escapeHtml(order.plan_name || String(order.plan || '').toUpperCase())} · ${escapeHtml(order.days)} días</div>
-            <div class="item-subtitle">Red ${escapeHtml(String(order.network || '').toUpperCase())} · ${escapeHtml(order.token_symbol || 'USDT')}</div>
+            <div class="item-subtitle">Red ${escapeHtml(String(order.network || '').toUpperCase())} · ${escapeHtml(order.token_symbol || 'USDT')} · ${escapeHtml(order.confirmations ?? 0)} confirmaciones</div>
           </div>
-          <span class="plan-tag">${escapeHtml(formatStatusLabel(order.status_label || order.status))}</span>
+          <span class="plan-tag">${escapeHtml(order.time_left_label || formatDate(order.expires_at))}</span>
         </div>
 
         <div class="payment-grid">
@@ -537,14 +591,16 @@ function paymentInstructions(order) {
         </div>
 
         <div class="notice-list">
-          <div class="notice-item">Envía exactamente el monto indicado.</div>
+          <div class="notice-item">Envía exactamente el monto indicado y desde la red correcta.</div>
           <div class="notice-item">Usa únicamente la red BEP-20.</div>
           <div class="notice-item">Expira: ${escapeHtml(formatDate(order.expires_at))}</div>
+          ${order.status === 'paid_unconfirmed' ? `<div class="notice-item">El pago ya fue detectado. No reenvíes fondos; espera confirmaciones y vuelve a revisar.</div>` : ''}
+          ${order.status === 'verification_in_progress' ? `<div class="notice-item">Ya hay una verificación corriendo. Evita tocar varias veces hasta que termine.</div>` : ''}
         </div>
 
         <div class="action-row">
-          <button class="button button-success" data-confirm-order="${escapeHtml(order.order_id)}">Confirmar pago</button>
-          <button class="button button-danger" data-cancel-order="${escapeHtml(order.order_id)}">Cancelar orden</button>
+          <button class="button button-success" data-confirm-order="${escapeHtml(order.order_id)}" ${canConfirm ? '' : 'disabled'}>${order.status === 'paid_unconfirmed' ? 'Revisar confirmaciones' : 'Confirmar pago'}</button>
+          <button class="button button-danger" data-cancel-order="${escapeHtml(order.order_id)}" ${canCancel ? '' : 'disabled'}>Cancelar orden</button>
         </div>
       </div>
     </div>
@@ -1117,10 +1173,12 @@ function renderHistory() {
   `;
 }
 
-function planBlock(planKey, items, currentPlan) {
+function planBlock(planKey, items, currentPlan, billing = {}) {
   const current = String(currentPlan || '').toLowerCase();
   const featureRows = items[0]?.features || [];
   const isCurrentPlan = items[0]?.is_current_plan || current === planKey;
+  const activeOrder = billing.active_order || null;
+  const paymentReady = billing.payment_config_ready !== false;
   return `
     <div class="card card-span-6">
       <div class="item-header" style="margin-bottom: 14px;">
@@ -1133,15 +1191,29 @@ function planBlock(planKey, items, currentPlan) {
       ${featureRows.length ? `<div class="feature-list">${featureRows.map(feature => `<div class="feature-item">• ${escapeHtml(feature)}</div>`).join('')}</div>` : ''}
       <div class="list" style="margin-top: 12px;">
         ${items.map(item => {
-          const cta = isCurrentPlan ? 'Renovar' : 'Comprar';
+          const sameOpenOrder = activeOrder && String(activeOrder.plan || '').toLowerCase() === String(planKey).toLowerCase() && Number(activeOrder.days || 0) === Number(item.days || 0);
+          const hasOtherOpenOrder = activeOrder && !sameOpenOrder;
+          const disabled = !paymentReady || sameOpenOrder;
+          let cta = isCurrentPlan ? 'Renovar' : 'Comprar';
+          let tone = isCurrentPlan ? 'button-secondary' : 'button-primary';
+          if (!paymentReady) {
+            cta = 'Pago no listo';
+            tone = 'button-secondary';
+          } else if (sameOpenOrder) {
+            cta = 'Orden abierta';
+            tone = 'button-secondary';
+          } else if (hasOtherOpenOrder) {
+            cta = 'Reemplazar';
+            tone = 'button-secondary';
+          }
           return `
             <div class="item">
               <div class="item-header">
                 <div>
                   <div class="item-title">${escapeHtml(item.days)} días</div>
-                  <div class="item-subtitle">${escapeHtml(formatMoney(item.price_usdt))}</div>
+                  <div class="item-subtitle">${escapeHtml(formatMoney(item.price_usdt))}${sameOpenOrder ? ' · Ya pendiente' : hasOtherOpenOrder ? ' · Reemplaza orden actual' : ''}</div>
                 </div>
-                <button class="button ${isCurrentPlan ? 'button-secondary' : 'button-primary'}" data-create-order="${escapeHtml(planKey)}:${escapeHtml(item.days)}">${cta}</button>
+                <button class="button ${tone}" data-create-order="${escapeHtml(planKey)}:${escapeHtml(item.days)}" ${disabled ? 'disabled' : ''}>${cta}</button>
               </div>
             </div>
           `;
@@ -1451,6 +1523,30 @@ async function openSignalDetail(signalId, profile = 'moderado') {
   }
 }
 
+function billingFocusCard(focus = {}) {
+  const toneClass = billingToneClass(focus.tone);
+  const steps = Array.isArray(focus.steps) ? focus.steps : [];
+  return `
+    <div class="card card-span-12 payment-focus-panel ${toneClass}">
+      <div class="payment-focus-card ${toneClass}">
+        <div class="payment-focus-copy">
+          <div class="payment-focus-kicker">Billing overview</div>
+          <div class="payment-focus-title">${escapeHtml(focus.title || 'Centro de billing')}</div>
+          <div class="payment-focus-headline">${escapeHtml(focus.headline || 'Sin orden abierta')}</div>
+          <div class="payment-focus-message">${escapeHtml(focus.message || 'Sin novedades de cobro por ahora.')}</div>
+          ${focus.hint ? `<div class="payment-focus-hint">${escapeHtml(focus.hint)}</div>` : ''}
+        </div>
+        <div class="payment-focus-side">
+          <span class="plan-tag">${escapeHtml(focus.primary_cta || 'Listo')}</span>
+          ${focus.time_left_label ? `<div class="payment-timer">${escapeHtml(focus.time_left_label)}</div><div class="payment-timer-label">Tiempo</div>` : ''}
+          ${focus.confirmations !== undefined ? `<div class="payment-timer">${escapeHtml(focus.confirmations)}/${escapeHtml(focus.required_confirmations || 0)}</div><div class="payment-timer-label">Confirmaciones</div>` : ''}
+        </div>
+      </div>
+      ${steps.length ? `<div class="billing-step-row">${steps.map(step => `<div class="billing-step ${billingStepClass(step.state)}"><span class="billing-step-dot"></span><span>${escapeHtml(step.label)}</span></div>`).join('')}</div>` : ''}
+    </div>
+  `;
+}
+
 function accountMetricCard(label, value, tone = '') {
   return `
     <div class="account-metric-card ${tone}">
@@ -1526,6 +1622,7 @@ function renderAccount() {
   const timeline = account.timeline || [];
   const support = account.support || { url: state.payload.support_url || '#' };
   const activeOrder = billing.active_order || state.payload.dashboard?.active_payment_order || null;
+  const billingFocus = billing.focus || {};
   const expiresText = me.expires_at ? formatDate(me.expires_at) : 'Sin vencimiento';
   const watchlistMeta = subscription.watchlist || {};
   const billingSummary = billing.summary || {};
@@ -1585,6 +1682,8 @@ function renderAccount() {
         ${rewardRules.length ? `<div class="feature-list" style="margin-top:12px;">${rewardRules.map(rule => `<div class="feature-item">• ${escapeHtml(rule)}</div>`).join('')}</div>` : '<div class="empty-state">Sin reglas de recompensa disponibles.</div>'}
       </div>
 
+      ${billingFocusCard(billingFocus)}
+
       <div class="card card-span-12">
         <h2>Billing</h2>
         <div class="account-metric-grid">
@@ -1597,9 +1696,9 @@ function renderAccount() {
         </div>
       </div>
 
-      ${planBlock('plus', plans.plus || [], me.plan)}
-      ${planBlock('premium', plans.premium || [], me.plan)}
-      ${paymentInstructions(activeOrder) || '<div class="card card-span-12"><h2>Pago actual</h2><div class="empty-state">No tienes una orden de pago pendiente.</div></div>'}
+      ${planBlock('plus', plans.plus || [], me.plan, billing)}
+      ${planBlock('premium', plans.premium || [], me.plan, billing)}
+      ${paymentInstructions(activeOrder, billingFocus) || '<div class="card card-span-12"><h2>Pago actual</h2><div class="empty-state">No tienes una orden de pago pendiente.</div></div>'}
 
       <div class="card card-span-6">
         <h2>Órdenes recientes</h2>
@@ -1823,7 +1922,11 @@ function bindViewButtons() {
 
   document.querySelectorAll('[data-create-order]').forEach(button => {
     button.onclick = async () => {
+      if (button.disabled) return;
       const [plan, days] = button.dataset.createOrder.split(':');
+      const original = button.textContent;
+      button.disabled = true;
+      button.textContent = 'Procesando...';
       try {
         await api('/api/miniapp/payment-order', {
           method: 'POST',
@@ -1831,28 +1934,46 @@ function bindViewButtons() {
         });
         await bootstrap();
         setView('account');
-        tg?.showAlert('Orden de pago generada correctamente.');
+        tg?.showAlert('Orden de pago lista. Revisa el bloque de billing para pagar y confirmar.');
       } catch (error) {
         tg?.showAlert(`No se pudo generar la orden: ${error.message}`);
+      } finally {
+        if (button.isConnected) {
+          button.disabled = false;
+          button.textContent = original;
+        }
       }
     };
   });
   document.querySelectorAll('[data-confirm-order]').forEach(button => {
     button.onclick = async () => {
+      if (button.disabled) return;
+      const original = button.textContent;
+      button.disabled = true;
+      button.textContent = 'Verificando...';
       try {
         const result = await api('/api/miniapp/payment-order/confirm', {
           method: 'POST',
           body: JSON.stringify({ order_id: button.dataset.confirmOrder }),
         });
         await bootstrap();
-        tg?.showAlert(result.ok ? 'Pago confirmado correctamente.' : `Pago pendiente: ${result.reason || 'no_match'}`);
+        tg?.showAlert(paymentReasonMessage(result.reason, result.ok ? 'Estado de pago actualizado.' : 'Pago pendiente.'));
       } catch (error) {
         tg?.showAlert(`No se pudo confirmar: ${error.message}`);
+      } finally {
+        if (button.isConnected) {
+          button.disabled = false;
+          button.textContent = original;
+        }
       }
     };
   });
   document.querySelectorAll('[data-cancel-order]').forEach(button => {
     button.onclick = async () => {
+      if (button.disabled) return;
+      const original = button.textContent;
+      button.disabled = true;
+      button.textContent = 'Cancelando...';
       try {
         await api('/api/miniapp/payment-order/cancel', {
           method: 'POST',
@@ -1862,6 +1983,11 @@ function bindViewButtons() {
         tg?.showAlert('Orden cancelada correctamente.');
       } catch (error) {
         tg?.showAlert(`No se pudo cancelar: ${error.message}`);
+      } finally {
+        if (button.isConnected) {
+          button.disabled = false;
+          button.textContent = original;
+        }
       }
     };
   });
