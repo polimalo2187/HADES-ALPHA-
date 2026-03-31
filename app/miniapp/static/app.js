@@ -1173,6 +1173,140 @@ function renderHistory() {
   `;
 }
 
+
+function accountMetricCard(label, value, toneClass = '') {
+  return `
+    <div class="account-metric-card ${escapeHtml(toneClass)}">
+      <div class="account-metric-label">${escapeHtml(label)}</div>
+      <div class="account-metric-value">${escapeHtml(value ?? '—')}</div>
+    </div>
+  `;
+}
+
+function billingFocusCard(focus = {}, billing = {}) {
+  if (!focus || !Object.keys(focus).length) return '';
+  const toneClass = billingToneClass(focus.tone);
+  const steps = Array.isArray(focus.steps) ? focus.steps : [];
+  const supportUrl = billing?.support_url || '#';
+  const primaryCta = String(focus.primary_cta || '').trim();
+  const primaryAction = primaryCta
+    ? (primaryCta.toLowerCase() === 'soporte'
+        ? `<a class="button button-secondary" target="_blank" rel="noopener" href="${escapeHtml(supportUrl)}">${escapeHtml(primaryCta)}</a>`
+        : `<span class="button button-secondary" aria-disabled="true">${escapeHtml(primaryCta)}</span>`)
+    : '';
+  const diagnostics = !billing?.payment_config_ready ? paymentConfigDiagnosticsInline(billing) : '';
+  return `
+    <div class="card payment-focus-panel card-span-12 ${toneClass}">
+      <div class="payment-focus-card ${toneClass}">
+        <div class="payment-focus-copy">
+          <div class="payment-focus-kicker">Billing Overview</div>
+          <div class="payment-focus-title">${escapeHtml(focus.title || 'Billing')}</div>
+          <div class="payment-focus-headline">${escapeHtml(focus.headline || focus.message || 'Estado comercial disponible.')}</div>
+          ${focus.message ? `<div class="payment-focus-message">${escapeHtml(focus.message)}</div>` : ''}
+          ${focus.hint ? `<div class="payment-focus-hint">${escapeHtml(focus.hint)}</div>` : ''}
+          ${primaryAction ? `<div class="action-row compact" style="margin-top:12px;">${primaryAction}</div>` : ''}
+          ${diagnostics}
+        </div>
+      </div>
+      ${steps.length ? `<div class="billing-step-row">${steps.map(step => `<div class="billing-step ${billingStepClass(step.state)}"><span class="billing-step-dot"></span><span>${escapeHtml(step.label)}</span></div>`).join('')}</div>` : ''}
+    </div>
+  `;
+}
+
+function paymentConfigDiagnosticsInline(billing = {}) {
+  const status = billing?.payment_config_status || {};
+  const checks = Array.isArray(status.checks) ? status.checks : [];
+  const missingKeys = Array.isArray(status.missing_keys) ? status.missing_keys : [];
+  if (!checks.length && !missingKeys.length) return '';
+  return `
+    <div class="payment-focus-diagnostics">
+      <div class="payment-focus-diagnostics-title">Diagnóstico de configuración</div>
+      <div class="payment-focus-diagnostics-list">
+        ${checks.length ? checks.map(check => `<span class="pill ${check.value_present ? '' : 'pill-warning'}">${escapeHtml(check.label || check.key)}: ${check.value_present ? 'OK' : 'Falta'}</span>`).join('') : missingKeys.map(key => `<span class="pill pill-warning">${escapeHtml(key)}: Falta</span>`).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function paymentConfigDiagnosticsCard(billing = {}) {
+  const status = billing?.payment_config_status || {};
+  const checks = Array.isArray(status.checks) ? status.checks : [];
+  const missingKeys = Array.isArray(status.missing_keys) ? status.missing_keys : [];
+  if (billing?.payment_config_ready || (!checks.length && !missingKeys.length)) return '';
+  return `
+    <div class="card config-diagnostics-card card-span-12">
+      <h2>Diagnóstico de pago</h2>
+      <div class="config-check-grid">
+        ${(checks.length ? checks : missingKeys.map(key => ({ key, label: key, value_present: false }))).map(check => `
+          <div class="config-check-item ${check.value_present ? 'is-positive' : 'is-warning'}">
+            <div class="item-title">${escapeHtml(check.label || check.key)}</div>
+            <div class="item-subtitle">${check.value_present ? 'Configuración detectada' : 'Falta en el proceso web'}</div>
+            <code>${escapeHtml(check.key || '—')}</code>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function recentOrderItem(order = {}) {
+  return `
+    <div class="item">
+      <div class="item-header">
+        <div>
+          <div class="item-title">${escapeHtml(order.plan_name || String(order.plan || '').toUpperCase())} · ${escapeHtml(order.days ?? '—')} días</div>
+          <div class="item-subtitle">${escapeHtml(formatMoney(order.amount_usdt))} · ${escapeHtml(formatStatusLabel(order.status_label || order.status || '—'))}</div>
+        </div>
+        <span class="plan-tag">${escapeHtml(order.time_left_label || formatDate(order.updated_at || order.created_at))}</span>
+      </div>
+      <div class="inline-meta">
+        <span>Creada: ${escapeHtml(formatDate(order.created_at))}</span>
+        <span>Actualizada: ${escapeHtml(formatDate(order.updated_at))}</span>
+      </div>
+    </div>
+  `;
+}
+
+function referralRewardItem(reward = {}) {
+  return `
+    <div class="item">
+      <div class="item-header">
+        <div>
+          <div class="item-title">Recompensa ${escapeHtml(reward.reward_plan_name || reward.reward_plan || '—')} · ${escapeHtml(reward.reward_days ?? 0)} días</div>
+          <div class="item-subtitle">Referido ${escapeHtml(reward.activated_plan_name || reward.activated_plan || '—')} · ${escapeHtml(reward.activated_days ?? 0)} días</div>
+        </div>
+        <span class="plan-tag">#${escapeHtml(reward.referred_id ?? 0)}</span>
+      </div>
+      <div class="inline-meta">
+        <span>Aplicada: ${escapeHtml(formatDate(reward.created_at))}</span>
+      </div>
+    </div>
+  `;
+}
+
+function accountTimelineItem(event = {}) {
+  const meta = event.metadata && Object.keys(event.metadata).length
+    ? Object.entries(event.metadata).slice(0, 2).map(([key, value]) => `${key}: ${value}`).join(' · ')
+    : '';
+  return `
+    <div class="item">
+      <div class="item-header">
+        <div>
+          <div class="item-title">${escapeHtml(event.event_label || event.event_type || 'Evento')}</div>
+          <div class="item-subtitle">${escapeHtml(event.after_plan_name || event.plan_name || event.plan || '—')} ${event.days ? `· ${escapeHtml(event.days)} días` : ''}</div>
+        </div>
+        <span class="plan-tag">${escapeHtml(formatDate(event.created_at))}</span>
+      </div>
+      <div class="inline-meta">
+        <span>Antes: ${escapeHtml(event.before_plan_name || event.before_plan || '—')}</span>
+        <span>Después: ${escapeHtml(event.after_plan_name || event.after_plan || '—')}</span>
+        ${event.source ? `<span>Fuente: ${escapeHtml(event.source)}</span>` : ''}
+      </div>
+      ${meta ? `<div class="item-subtitle" style="margin-top:8px;">${escapeHtml(meta)}</div>` : ''}
+    </div>
+  `;
+}
+
 function planBlock(planKey, items, currentPlan, billing = {}, options = {}) {
   const current = String(currentPlan || '').toLowerCase();
   const featureRows = items[0]?.features || [];
