@@ -1124,6 +1124,18 @@ h1 {
   color: var(--muted);
 }
 
+.radar-check-list {
+  margin-top: 12px;
+}
+
+.radar-profile-grid {
+  margin-top: 12px;
+}
+
+.radar-profile-grid .detail-stat-card {
+  background: rgba(255,255,255,0.025);
+}
+
 .modal-sheet {
   overflow-x: hidden;
 }
