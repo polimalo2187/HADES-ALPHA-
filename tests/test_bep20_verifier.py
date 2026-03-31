@@ -3,7 +3,7 @@ import unittest
 from datetime import timedelta
 from unittest.mock import patch
 
-from app.bep20_verifier import _get_transfer_logs, verify_payment
+from app.bep20_verifier import _estimate_from_block, _get_transfer_logs, verify_payment
 from app.models import utcnow
 
 
@@ -30,6 +30,38 @@ class Bep20VerifierTests(unittest.TestCase):
         self.assertEqual(calls[1], (1000, 1124))
         self.assertEqual(calls[2], (1000, 1061))
         self.assertEqual(calls[3], (1062, 1123))
+
+    def test_get_transfer_logs_falls_back_to_block_hash_when_single_block_range_still_fails(self):
+        range_calls = []
+        block_hash_calls = []
+
+        def fake_query(base_filter, *, from_block=None, to_block=None, block_hash=None):
+            if block_hash:
+                block_hash_calls.append(block_hash)
+                return []
+            range_calls.append((from_block, to_block))
+            if from_block == to_block == 100:
+                raise RuntimeError("RPC error en eth_getLogs: {'code': -32005, 'message': 'limit exceeded'}")
+            return []
+
+        with patch('app.bep20_verifier._query_transfer_logs', side_effect=fake_query), \
+             patch('app.bep20_verifier._get_block_hash', return_value='0xblockhash100'):
+            logs = _get_transfer_logs('0xtoken', '0xreceiver', 100, 100)
+
+        self.assertEqual(logs, [])
+        self.assertEqual(range_calls, [(100, 100)])
+        self.assertEqual(block_hash_calls, ['0xblockhash100'])
+
+    def test_estimate_from_block_uses_recent_creation_time_instead_of_full_lookback(self):
+        latest_block = 1_000_000
+        created_at = utcnow() - timedelta(minutes=3)
+        expires_at = utcnow() + timedelta(minutes=27)
+
+        with patch('app.bep20_verifier.get_payment_lookback_blocks', return_value=2500):
+            from_block = _estimate_from_block(latest_block, created_at, expires_at)
+
+        self.assertGreaterEqual(from_block, latest_block - 200)
+        self.assertLessEqual(from_block, latest_block)
 
     def test_verify_payment_confirms_match_with_chunked_log_queries(self):
         order = {
