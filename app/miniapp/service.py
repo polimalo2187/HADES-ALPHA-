@@ -14,7 +14,7 @@ from app.market import get_market_state_snapshot
 from app.payment_service import get_active_payment_order_for_user
 from app.referrals import get_referral_link, get_referral_reward_rules, get_user_referral_stats
 from app.plans import get_plan_catalog, get_plan_name, normalize_plan, plan_status
-from app.statistics import get_performance_snapshot
+from app.statistics import build_performance_window, get_materialized_window, get_performance_snapshot
 from app.user_service import get_or_create_user
 from app.models import utcnow
 from app.watchlist import get_watchlist, get_watchlist_limit_for_plan
@@ -1995,6 +1995,224 @@ def build_me_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         "reward_days_total": int(user.get("reward_days_total") or 0),
     }
 
+
+
+
+def _finite_metric(value: Any, digits: Optional[int] = None) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not isfinite(number):
+        return None
+    return round(number, digits) if digits is not None else number
+
+
+def _serialize_performance_summary(summary: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    base = _empty_summary()
+    if isinstance(summary, dict):
+        base.update(summary)
+    profit_factor_raw = base.get("profit_factor")
+    return {
+        "total": int(base.get("total") or 0),
+        "resolved": int(base.get("resolved") or 0),
+        "won": int(base.get("won") or 0),
+        "lost": int(base.get("lost") or 0),
+        "expired": int(base.get("expired") or 0),
+        "tp1": int(base.get("tp1") or 0),
+        "tp2": int(base.get("tp2") or 0),
+        "sl": int(base.get("sl") or 0),
+        "winrate": _finite_metric(base.get("winrate"), 2) or 0.0,
+        "loss_rate": _finite_metric(base.get("loss_rate"), 2) or 0.0,
+        "expiry_rate": _finite_metric(base.get("expiry_rate"), 2) or 0.0,
+        "gross_profit_r": _finite_metric(base.get("gross_profit_r"), 4) or 0.0,
+        "gross_loss_r": _finite_metric(base.get("gross_loss_r"), 4) or 0.0,
+        "net_r": _finite_metric(base.get("net_r"), 4) or 0.0,
+        "profit_factor": _finite_metric(profit_factor_raw, 2),
+        "profit_factor_infinite": bool(profit_factor_raw == float("inf")),
+        "expectancy_r": _finite_metric(base.get("expectancy_r"), 4) or 0.0,
+        "max_drawdown_r": _finite_metric(base.get("max_drawdown_r"), 4) or 0.0,
+        "avg_resolution_minutes": _finite_metric(base.get("avg_resolution_minutes"), 2),
+    }
+
+
+def _serialize_performance_activity(activity: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    base = activity if isinstance(activity, dict) else {}
+    return {
+        "signals_total": int(base.get("signals_total") or 0),
+        "avg_score": _finite_metric(base.get("avg_score"), 2),
+    }
+
+
+def _serialize_performance_window(payload: Optional[Dict[str, Any]], *, days: int, label: str, materialized: bool = False) -> Dict[str, Any]:
+    base = payload if isinstance(payload, dict) else {}
+    computed = base.get("computed_for_range") if isinstance(base.get("computed_for_range"), dict) else {}
+    return {
+        "days": int(days),
+        "label": label,
+        "materialized": bool(materialized),
+        "summary": _serialize_performance_summary(base.get("summary")),
+        "activity": _serialize_performance_activity(base.get("activity")),
+        "computed_for_range": {
+            "from": _iso(computed.get("from")),
+            "to": _iso(computed.get("to")),
+        },
+    }
+
+
+def _serialize_performance_breakdown_row(name: str, stats: Optional[Dict[str, Any]], activity: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    return {
+        "plan": name,
+        "plan_name": get_plan_name(name),
+        "summary": _serialize_performance_summary(stats),
+        "activity": _serialize_performance_activity(activity),
+    }
+
+
+def _serialize_performance_direction_row(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    item = row if isinstance(row, dict) else {}
+    profit_factor_raw = item.get("profit_factor")
+    return {
+        "direction": str(item.get("direction") or "—").upper(),
+        "resolved": int(item.get("resolved") or 0),
+        "won": int(item.get("won") or 0),
+        "lost": int(item.get("lost") or 0),
+        "expired": int(item.get("expired") or 0),
+        "winrate": _finite_metric(item.get("winrate"), 2) or 0.0,
+        "profit_factor": _finite_metric(profit_factor_raw, 2),
+        "profit_factor_infinite": bool(profit_factor_raw == float("inf")),
+        "expectancy_r": _finite_metric(item.get("expectancy_r"), 4) or 0.0,
+    }
+
+
+def _serialize_performance_setup_row(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    item = row if isinstance(row, dict) else {}
+    profit_factor_raw = item.get("profit_factor")
+    return {
+        "setup_group": str(item.get("setup_group") or "—").upper(),
+        "resolved": int(item.get("resolved") or 0),
+        "won": int(item.get("won") or 0),
+        "lost": int(item.get("lost") or 0),
+        "expired": int(item.get("expired") or 0),
+        "winrate": _finite_metric(item.get("winrate"), 2) or 0.0,
+        "profit_factor": _finite_metric(profit_factor_raw, 2),
+        "profit_factor_infinite": bool(profit_factor_raw == float("inf")),
+        "expectancy_r": _finite_metric(item.get("expectancy_r"), 4) or 0.0,
+    }
+
+
+def _serialize_performance_symbol_row(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    item = row if isinstance(row, dict) else {}
+    profit_factor_raw = item.get("profit_factor")
+    return {
+        "symbol": str(item.get("symbol") or "—").upper(),
+        "resolved": int(item.get("resolved") or 0),
+        "won": int(item.get("won") or 0),
+        "lost": int(item.get("lost") or 0),
+        "expired": int(item.get("expired") or 0),
+        "winrate": _finite_metric(item.get("winrate"), 2) or 0.0,
+        "loss_rate": _finite_metric(item.get("loss_rate"), 2) or 0.0,
+        "profit_factor": _finite_metric(profit_factor_raw, 2),
+        "profit_factor_infinite": bool(profit_factor_raw == float("inf")),
+        "expectancy_r": _finite_metric(item.get("expectancy_r"), 4) or 0.0,
+    }
+
+
+def _serialize_performance_score_bucket(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    item = row if isinstance(row, dict) else {}
+    return {
+        "label": str(item.get("label") or "—"),
+        "n": int(item.get("n") or 0),
+        "won": int(item.get("won") or 0),
+        "lost": int(item.get("lost") or 0),
+        "winrate": _finite_metric(item.get("winrate"), 2) or 0.0,
+        "net_r": _finite_metric(item.get("net_r"), 4) or 0.0,
+    }
+
+
+def _serialize_performance_diagnostics(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    base = payload if isinstance(payload, dict) else {}
+    profit_factor_raw = base.get("profit_factor")
+    return {
+        "evaluated_total": int(base.get("evaluated_total") or 0),
+        "resolved_total": int(base.get("resolved_total") or 0),
+        "won": int(base.get("won") or 0),
+        "lost": int(base.get("lost") or 0),
+        "expired": int(base.get("expired") or 0),
+        "scanner_signals_total": int(base.get("scanner_signals_total") or 0),
+        "pending_to_evaluate": int(base.get("pending_to_evaluate") or 0),
+        "winrate": _finite_metric(base.get("winrate"), 2) or 0.0,
+        "loss_rate": _finite_metric(base.get("loss_rate"), 2) or 0.0,
+        "expiry_rate": _finite_metric(base.get("expiry_rate"), 2) or 0.0,
+        "avg_result_score": _finite_metric(base.get("avg_result_score"), 2),
+        "profit_factor": _finite_metric(profit_factor_raw, 2),
+        "profit_factor_infinite": bool(profit_factor_raw == float("inf")),
+        "expectancy_r": _finite_metric(base.get("expectancy_r"), 4) or 0.0,
+        "max_drawdown_r": _finite_metric(base.get("max_drawdown_r"), 4) or 0.0,
+        "avg_resolution_minutes": _finite_metric(base.get("avg_resolution_minutes"), 2),
+    }
+
+
+def build_performance_center_payload(user: Dict[str, Any], *, focus_days: int = 30) -> Dict[str, Any]:
+    requested_focus = int(focus_days or 30)
+    focus_days = requested_focus if requested_focus in {7, 30, 3650} else 30
+
+    snapshot = _safe_call(get_performance_snapshot, {}) or {}
+    total_materialized = _safe_call(lambda: get_materialized_window(3650), None)
+    total_payload = total_materialized or (_safe_call(lambda: build_performance_window(3650), None) or {})
+
+    windows = [
+        _serialize_performance_window(
+            {
+                "summary": snapshot.get("summary_7d"),
+                "activity": snapshot.get("activity_7d"),
+            },
+            days=7,
+            label="7D",
+            materialized=bool(snapshot.get("materialized_7d")),
+        ),
+        _serialize_performance_window(
+            {
+                "summary": snapshot.get("summary_30d"),
+                "activity": snapshot.get("activity_30d"),
+            },
+            days=30,
+            label="30D",
+            materialized=bool(snapshot.get("materialized_30d")),
+        ),
+        _serialize_performance_window(
+            total_payload,
+            days=3650,
+            label="Total",
+            materialized=bool(total_materialized),
+        ),
+    ]
+
+    focus_payload = next((item for item in windows if item["days"] == focus_days), windows[1])
+    by_plan = snapshot.get("by_plan_30d") if isinstance(snapshot.get("by_plan_30d"), dict) else {}
+    activity_by_plan = snapshot.get("activity_by_plan_30d") if isinstance(snapshot.get("activity_by_plan_30d"), dict) else {}
+
+    return {
+        "overview": {
+            "focus_days": focus_payload["days"],
+            "focus_label": focus_payload["label"],
+            "user_plan": normalize_plan(plan_status(user).get("plan") or user.get("plan")),
+            "windows": [{"days": item["days"], "label": item["label"], "materialized": item["materialized"]} for item in windows],
+            "generated_at": datetime.utcnow().isoformat(),
+        },
+        "windows": windows,
+        "focus": focus_payload,
+        "plan_breakdown_30d": [
+            _serialize_performance_breakdown_row("free", by_plan.get("free"), activity_by_plan.get("free")),
+            _serialize_performance_breakdown_row("plus", by_plan.get("plus"), activity_by_plan.get("plus")),
+            _serialize_performance_breakdown_row("premium", by_plan.get("premium"), activity_by_plan.get("premium")),
+        ],
+        "direction_30d": [_serialize_performance_direction_row(row) for row in (snapshot.get("direction_30d") or [])],
+        "setup_groups_30d": [_serialize_performance_setup_row(row) for row in (snapshot.get("setup_groups_30d") or [])],
+        "weak_symbols_30d": [_serialize_performance_symbol_row(row) for row in (snapshot.get("worst_symbols_30d") or [])],
+        "score_buckets_30d": [_serialize_performance_score_bucket(row) for row in ((snapshot.get("by_score_30d") or {}).get("buckets") or [])],
+        "diagnostics_30d": _serialize_performance_diagnostics(snapshot.get("diagnostics_30d")),
+    }
 
 def build_account_center_payload(user: Dict[str, Any]) -> Dict[str, Any]:
     user_id = int(user.get("user_id") or 0)
