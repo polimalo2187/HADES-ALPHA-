@@ -27,11 +27,9 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
             'applyPaymentOrderPreview',
             'refreshAccountState',
             'focusPaymentCard',
-            'focusPlanBlocks',
-            'focusPaymentDiagnostics',
-            'safeShowAlert',
-            'setAccountAction',
-            'accountActionBanner',
+            'focusPlanBlock',
+            'setAccountNotice',
+            'accountNoticeCard',
         ]:
             self.assertIn(f'function {name}(', text)
 
@@ -45,15 +43,14 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
         self.assertLess(payment_idx, premium_idx)
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
-    def test_billing_primary_cta_and_plan_actions_are_clickable_or_explained(self):
+    def test_billing_focus_and_account_notice_hooks_are_present(self):
         app_js = Path(__file__).resolve().parents[1] / 'app' / 'miniapp' / 'static' / 'app.js'
         text = app_js.read_text(encoding='utf-8')
-        self.assertIn('data-billing-primary-action="browse-plans"', text)
-        self.assertIn('data-billing-primary-action="show-payment-diagnostics"', text)
-        self.assertIn('data-order-guard=\"${escapeHtml(softBlockedReason)}\" aria-disabled=\"true\"', text)
-        self.assertIn('No se puede generar la orden porque la configuración de pagos BEP-20 está incompleta.', text)
-        self.assertIn('Ya tienes una orden abierta para ese mismo plan.', text)
+        self.assertIn('data-billing-focus-action="open-plans"', text)
+        self.assertIn('data-billing-focus-action="focus-order"', text)
+        self.assertIn('data-billing-focus-action="refresh-account"', text)
+        self.assertIn('${accountNoticeCard(state.accountNotice)}', text)
+        self.assertIn('data-plan-block="${escapeHtml(planKey)}"', text)
+
+if __name__ == '__main__':
+    unittest.main()
