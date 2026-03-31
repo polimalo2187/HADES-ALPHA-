@@ -15,10 +15,26 @@ from app.payment_service import (
 
 class PaymentServiceTests(unittest.TestCase):
     def test_unique_amount_candidates_are_deterministic_and_unique(self):
-        candidates = build_unique_amount_candidates(20.0, 12345, limit=10)
+        with patch('app.payment_service.get_payment_unique_max_delta', return_value=0.150):
+            candidates = build_unique_amount_candidates(20.0, 12345, limit=10)
         self.assertEqual(len(candidates), 10)
         self.assertEqual(len(set(candidates)), 10)
         self.assertEqual(candidates, build_unique_amount_candidates(20.0, 12345, limit=10))
+        self.assertLessEqual(max(candidates) - Decimal('20.000'), Decimal('0.150'))
+
+    def test_unique_amount_candidates_respect_configured_delta_cap(self):
+        with patch('app.payment_service.get_payment_unique_max_delta', return_value=0.120):
+            candidates = build_unique_amount_candidates(10.0, 99999, limit=200)
+        self.assertEqual(len(candidates), 120)
+        self.assertEqual(min(candidates), Decimal('10.001'))
+        self.assertEqual(max(candidates), Decimal('10.120'))
+
+    def test_unique_amount_candidates_never_exceed_fifteen_cents(self):
+        with patch('app.payment_service.get_payment_unique_max_delta', return_value=0.999):
+            candidates = build_unique_amount_candidates(5.0, 42, limit=999)
+        self.assertEqual(len(candidates), 150)
+        self.assertEqual(min(candidates), Decimal('5.001'))
+        self.assertEqual(max(candidates), Decimal('5.150'))
 
     def test_format_payment_amount_keeps_three_decimals(self):
         self.assertEqual(format_payment_amount(Decimal('20.1299')), '20.129')
@@ -51,6 +67,28 @@ class PaymentServiceTests(unittest.TestCase):
         mocked_cancel.assert_not_called()
         collection.insert_one.assert_not_called()
         self.assertTrue(any(call.kwargs.get('event_type') == 'payment_order_reused' for call in mocked_audit.mock_calls))
+
+    def test_create_payment_order_reissues_matching_order_when_unique_delta_is_too_high(self):
+        existing = {
+            'order_id': 'ord-legacy',
+            'user_id': 77,
+            'plan': 'premium',
+            'days': 7,
+            'amount_usdt': 5.513,
+            'base_price_usdt': 5.0,
+            'status': 'awaiting_payment',
+            'expires_at': utcnow() + timedelta(minutes=10),
+        }
+        collection = MagicMock()
+        collection.find_one.return_value = None
+        with patch('app.payment_service.get_payment_configuration_status', return_value={'ready': True, 'missing_keys': []}),              patch('app.payment_service.get_active_payment_order_for_user', return_value=existing),              patch('app.payment_service.payment_orders_collection', return_value=collection),              patch('app.payment_service.cancel_open_orders_for_user', return_value=1) as mocked_cancel,              patch('app.payment_service.get_payment_network', return_value='bep20'),              patch('app.payment_service.get_payment_token_symbol', return_value='USDT'),              patch('app.payment_service.get_payment_token_contract', return_value='0xabc'),              patch('app.payment_service.get_payment_receiver_address', return_value='0xreceiver'),              patch('app.payment_service.record_audit_event'),              patch('app.payment_service.heartbeat'):
+            order = create_payment_order(77, 'premium', 7)
+
+        self.assertEqual(order['plan'], 'premium')
+        mocked_cancel.assert_called_once_with(77, reason='reissued_for_lower_unique_delta')
+        collection.insert_one.assert_called_once()
+        inserted_order = collection.insert_one.call_args.args[0]
+        self.assertLessEqual(Decimal(str(inserted_order['amount_usdt'])) - Decimal(str(inserted_order['base_price_usdt'])), Decimal('0.150'))
 
     def test_create_payment_order_supersedes_existing_mismatched_order(self):
         existing = {
