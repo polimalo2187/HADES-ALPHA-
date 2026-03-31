@@ -184,9 +184,39 @@ class AccountCenterPayloadTests(unittest.TestCase):
         self.assertEqual(payload['account']['overview']['days_left'], 25)
         self.assertIsNone(payload['account']['overview']['watchlist_limit'])
         self.assertEqual(payload['account']['subscription']['watchlist']['plan'], 'premium')
+        self.assertEqual(payload['account']['billing']['focus']['state'], 'config_missing')
+        self.assertEqual(payload['account']['billing']['focus']['missing_keys'], ['BSC_RPC_HTTP_URL', 'PAYMENT_TOKEN_CONTRACT', 'PAYMENT_RECEIVER_ADDRESS'])
         self.assertEqual(len(payload['account']['plans']['premium']), 1)
         self.assertTrue(payload['account']['referrals']['reward_rules'])
         self.assertIn('PAYMENT_RECEIVER_ADDRESS', payload['account']['billing']['payment_config_status']['missing_keys'])
+
+
+    def test_bootstrap_account_fallback_does_not_force_renewal_when_days_left_is_healthy(self):
+        user = {
+            'user_id': 12,
+            'username': 'neo',
+            'language': 'es',
+            'plan': 'premium',
+            'subscription_status': 'active',
+        }
+        me_payload = {
+            'user_id': 12,
+            'plan': 'premium',
+            'plan_name': 'PREMIUM',
+            'subscription_status': 'active',
+            'subscription_status_label': 'Activo',
+            'days_left': 24,
+            'expires_at': '2026-04-25T11:35:17',
+            'ref_code': 'ref_12',
+            'valid_referrals_total': 0,
+            'reward_days_total': 0,
+        }
+        with patch('app.miniapp.service.build_me_payload', return_value=me_payload),              patch('app.miniapp.service.build_dashboard_payload', return_value={'active_payment_order': None}),              patch('app.miniapp.service.build_signals_payload', return_value=[]),              patch('app.miniapp.service.build_history_payload', return_value=[]),              patch('app.miniapp.service.build_market_payload', return_value={'radar': [], 'radar_summary': {'total': 0}}),              patch('app.miniapp.service.build_watchlist_payload', return_value=[]),              patch('app.miniapp.service.build_watchlist_context', return_value={'meta': {'symbols': [], 'symbols_count': 0, 'max_symbols': None, 'slots_left': None, 'plan': 'premium', 'plan_name': 'PREMIUM', 'can_add_more': True}}),              patch('app.miniapp.service.build_plans_payload', return_value={'plus': [], 'premium': [{'plan': 'premium', 'days': 30, 'price_usdt': 20.0}]}),              patch('app.miniapp.service.build_account_center_payload', side_effect=RuntimeError('boom')),              patch('app.miniapp.service.get_payment_configuration_status', return_value={'ready': True, 'checks': [], 'missing_keys': []}):
+            payload = build_bootstrap_payload(user)
+
+        self.assertEqual(payload['account']['billing']['focus']['state'], 'idle')
+        self.assertNotEqual(payload['account']['billing']['focus']['state'], 'renew_soon')
+        self.assertEqual(payload['account']['subscription']['days_left'], 24)
 
     def test_bootstrap_exposes_top_level_payment_status_and_bot_username(self):
         user = {
