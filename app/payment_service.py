@@ -14,6 +14,7 @@ from app.config import (
     get_payment_network,
     get_payment_order_ttl_minutes,
     get_payment_receiver_address,
+    get_payment_unique_max_delta,
     get_payment_token_contract,
     get_payment_token_symbol,
 )
@@ -48,15 +49,39 @@ def build_unique_amount_candidates(base_price: float, user_id: int, *, limit: in
     user_id = int(user_id)
     if user_id <= 0:
         raise ValueError("user_id inválido")
-    max_candidates = max(1, min(int(limit), 999))
-    start_suffix = user_id % 999
+
+    max_delta = Decimal(str(get_payment_unique_max_delta()))
+    max_suffix = int((max_delta * Decimal("1000")).to_integral_value(rounding=ROUND_DOWN))
+    max_suffix = max(1, min(max_suffix, 150))
+    max_candidates = max(1, min(int(limit), max_suffix))
+    start_suffix = user_id % max_suffix
     if start_suffix <= 0:
         start_suffix = 1
     candidates: list[Decimal] = []
     for offset in range(0, max_candidates):
-        suffix_int = ((start_suffix + offset - 1) % 999) + 1
+        suffix_int = ((start_suffix + offset - 1) % max_suffix) + 1
         candidates.append(_quantize_amount(base + (Decimal(suffix_int) / Decimal("1000"))))
     return candidates
+
+
+def _order_unique_delta(order: Optional[Dict[str, Any]]) -> Optional[Decimal]:
+    if not order:
+        return None
+    try:
+        amount = Decimal(str(order.get("amount_usdt") or "0"))
+        base_price = Decimal(str(order.get("base_price_usdt") or "0"))
+    except Exception:
+        return None
+    if amount <= 0 or base_price <= 0:
+        return None
+    return _quantize_amount(amount - base_price)
+
+
+def _existing_order_uses_oversized_unique_delta(order: Optional[Dict[str, Any]]) -> bool:
+    unique_delta = _order_unique_delta(order)
+    if unique_delta is None:
+        return False
+    return unique_delta > Decimal("0.150")
 
 
 def _next_unique_amount(base_price: float, user_id: int) -> Decimal:
@@ -68,7 +93,7 @@ def _next_unique_amount(base_price: float, user_id: int) -> Decimal:
         })
         if not exists:
             return amount
-    raise RuntimeError("No se pudo generar un monto único de pago")
+    raise RuntimeError("No se pudo generar un monto único de pago dentro del rango permitido")
 
 
 def _is_order_expired(order: Optional[Dict[str, Any]], *, now: Optional[datetime] = None) -> bool:
@@ -192,17 +217,21 @@ def create_payment_order(user_id: int, plan: str, days: int) -> Dict[str, Any]:
         existing_plan = normalize_plan(existing_open.get("plan"))
         existing_days = int(existing_open.get("days") or 0)
         if existing_plan == plan and existing_days == int(days):
-            record_audit_event(
-                event_type="payment_order_reused",
-                status="info",
-                module="payments",
-                user_id=user_id,
-                order_id=existing_open.get("order_id"),
-                message="payment_order_reused",
-                metadata={"plan": plan, "days": days, "status": existing_open.get("status")},
-            )
-            return existing_open
-        cancel_open_orders_for_user(user_id, reason="superseded_by_new_order")
+            if _existing_order_uses_oversized_unique_delta(existing_open):
+                cancel_open_orders_for_user(user_id, reason="reissued_for_lower_unique_delta")
+            else:
+                record_audit_event(
+                    event_type="payment_order_reused",
+                    status="info",
+                    module="payments",
+                    user_id=user_id,
+                    order_id=existing_open.get("order_id"),
+                    message="payment_order_reused",
+                    metadata={"plan": plan, "days": days, "status": existing_open.get("status")},
+                )
+                return existing_open
+        else:
+            cancel_open_orders_for_user(user_id, reason="superseded_by_new_order")
 
     amount = _next_unique_amount(base_price, user_id)
     now = utcnow()
