@@ -1451,42 +1451,181 @@ async function openSignalDetail(signalId, profile = 'moderado') {
   }
 }
 
+function accountMetricCard(label, value, tone = '') {
+  return `
+    <div class="account-metric-card ${tone}">
+      <span class="account-metric-label">${escapeHtml(label)}</span>
+      <span class="account-metric-value">${escapeHtml(value)}</span>
+    </div>
+  `;
+}
+
+function recentOrderItem(order) {
+  const subtitle = `${order.plan_name || String(order.plan || '').toUpperCase()} · ${order.days} días · ${formatMoney(order.amount_usdt)}`;
+  const stamp = order.confirmed_at || order.updated_at || order.created_at;
+  return `
+    <div class="item">
+      <div class="item-header">
+        <div>
+          <div class="item-title">${escapeHtml(order.status_label || formatStatusLabel(order.status || 'awaiting_payment'))}</div>
+          <div class="item-subtitle">${escapeHtml(subtitle)}</div>
+        </div>
+        <span class="plan-tag">${escapeHtml((order.network || 'bep20').toUpperCase())}</span>
+      </div>
+      <div class="inline-meta">
+        <span>Creada/actualizada: ${escapeHtml(formatDate(stamp))}</span>
+        <span>Confirmaciones: ${escapeHtml(order.confirmations ?? 0)}</span>
+      </div>
+    </div>
+  `;
+}
+
+function referralRewardItem(item) {
+  return `
+    <div class="item">
+      <div class="item-header">
+        <div>
+          <div class="item-title">Referido ${escapeHtml(item.referred_id || '—')}</div>
+          <div class="item-subtitle">Compró ${escapeHtml(item.activated_plan_name || '—')} · ${escapeHtml(item.activated_days || 0)} días</div>
+        </div>
+        <span class="plan-tag">+${escapeHtml(item.reward_days || 0)} días ${escapeHtml(item.reward_plan_name || '')}</span>
+      </div>
+      <div class="inline-meta">
+        <span>Aplicada: ${escapeHtml(formatDate(item.created_at))}</span>
+      </div>
+    </div>
+  `;
+}
+
+function accountTimelineItem(item) {
+  return `
+    <div class="item">
+      <div class="item-header">
+        <div>
+          <div class="item-title">${escapeHtml(item.event_label || 'Actualización')}</div>
+          <div class="item-subtitle">${escapeHtml(item.after_plan_name || item.plan_name || 'FREE')} · ${escapeHtml(item.days || 0)} días</div>
+        </div>
+        <span class="plan-tag">${escapeHtml(item.source || 'system')}</span>
+      </div>
+      <div class="inline-meta">
+        <span>Antes: ${escapeHtml(item.before_plan_name || 'FREE')}</span>
+        <span>Después: ${escapeHtml(item.after_plan_name || item.plan_name || 'FREE')}</span>
+        <span>Fecha: ${escapeHtml(formatDate(item.created_at))}</span>
+      </div>
+    </div>
+  `;
+}
+
 function renderAccount() {
-  const me = state.payload.me || {};
-  const plans = state.payload.plans || {};
-  const activeOrder = state.payload.dashboard?.active_payment_order || null;
+  const account = state.payload.account || {};
+  const me = account.overview || state.payload.me || {};
+  const plans = account.plans || state.payload.plans || {};
+  const subscription = account.subscription || {};
+  const billing = account.billing || {};
+  const referrals = account.referrals || {};
+  const timeline = account.timeline || [];
+  const support = account.support || { url: state.payload.support_url || '#' };
+  const activeOrder = billing.active_order || state.payload.dashboard?.active_payment_order || null;
   const expiresText = me.expires_at ? formatDate(me.expires_at) : 'Sin vencimiento';
+  const watchlistMeta = subscription.watchlist || {};
+  const billingSummary = billing.summary || {};
+  const recentOrders = billing.recent_orders || [];
+  const recentRewards = referrals.recent_rewards || [];
+  const rewardRules = referrals.reward_rules || [];
+
   els.account.innerHTML = `
     <div class="section-grid">
       <div class="card card-span-12">
-        <h2>Mi cuenta</h2>
+        <div class="item-header">
+          <div>
+            <h2 style="margin:0;">Centro de cuenta</h2>
+            <div class="item-subtitle">Estado comercial, suscripción, billing y referidos desde la MiniApp.</div>
+          </div>
+          <span class="plan-tag">${escapeHtml(me.plan_name || 'FREE')}</span>
+        </div>
         <div class="pill-row">
-          <span class="pill">Plan: ${escapeHtml(me.plan_name || 'FREE')}</span>
           <span class="pill">Estado: ${escapeHtml(me.subscription_status_label || me.subscription_status || 'free')}</span>
           <span class="pill">Vence: ${escapeHtml(expiresText)}</span>
           <span class="pill">Días restantes: ${escapeHtml(me.days_left || 0)}</span>
           <span class="pill">Idioma: ${escapeHtml(me.language || 'es')}</span>
-          <span class="pill">Referidos válidos: ${escapeHtml(me.valid_referrals_total || 0)}</span>
-          <span class="pill">Días ganados: ${escapeHtml(me.reward_days_total || 0)}</span>
+          <span class="pill">Código: ${escapeHtml(me.ref_code || '—')}</span>
+        </div>
+        <div class="account-metric-grid">
+          ${accountMetricCard('Watchlist', `${watchlistMeta.symbols_count ?? me.watchlist_symbols ?? 0}/${watchlistMeta.max_symbols ?? me.watchlist_limit ?? '∞'}`)}
+          ${accountMetricCard('Referidos válidos', referrals.valid_referrals_total ?? me.valid_referrals_total ?? 0)}
+          ${accountMetricCard('Días ganados', referrals.reward_days_total ?? me.reward_days_total ?? 0)}
+          ${accountMetricCard('Órdenes', billingSummary.total ?? 0)}
         </div>
       </div>
 
-      <div class="card card-span-12">
-        <h2>Suscripción actual</h2>
-        <p>${escapeHtml(me.plan_name || 'FREE')} · ${escapeHtml(me.subscription_status_label || me.subscription_status || 'free')} · ${escapeHtml(expiresText)}</p>
+      <div class="card card-span-6">
+        <h2>Suscripción</h2>
+        <p>${escapeHtml(subscription.plan_name || me.plan_name || 'FREE')} · ${escapeHtml(subscription.status_label || me.subscription_status_label || me.subscription_status || 'free')} · ${escapeHtml(expiresText)}</p>
         <div class="inline-meta">
           <span>ID usuario: ${escapeHtml(me.user_id)}</span>
-          <span>Código referido: ${escapeHtml(me.ref_code || '—')}</span>
+          <span>Inicio: ${escapeHtml(formatDate(subscription.plan_started_at))}</span>
+          <span>Última compra: ${escapeHtml(formatDate(subscription.last_purchase_at))}</span>
+          <span>Último ciclo: ${escapeHtml(subscription.last_purchase_days || 0)} días</span>
+        </div>
+        ${subscription.features?.length ? `<div class="feature-list" style="margin-top:12px;">${subscription.features.map(feature => `<div class="feature-item">• ${escapeHtml(feature)}</div>`).join('')}</div>` : '<div class="empty-state">Sin beneficios listados por ahora.</div>'}
+      </div>
+
+      <div class="card card-span-6">
+        <h2>Referidos</h2>
+        <div class="pill-row">
+          <span class="pill">Totales: ${escapeHtml(referrals.total_referred || 0)}</span>
+          <span class="pill">PLUS: ${escapeHtml(referrals.plus_referred || 0)}</span>
+          <span class="pill">PREMIUM: ${escapeHtml(referrals.premium_referred || 0)}</span>
+          <span class="pill">Válidos: ${escapeHtml(referrals.valid_referrals_total || 0)}</span>
+        </div>
+        <div class="action-row compact">
+          <button class="button button-secondary" data-copy-value="${escapeHtml(referrals.ref_code || me.ref_code || '')}">Copiar código</button>
+          <button class="button button-secondary" data-copy-value="${escapeHtml(referrals.referral_link || '')}">Copiar enlace</button>
+        </div>
+        ${rewardRules.length ? `<div class="feature-list" style="margin-top:12px;">${rewardRules.map(rule => `<div class="feature-item">• ${escapeHtml(rule)}</div>`).join('')}</div>` : '<div class="empty-state">Sin reglas de recompensa disponibles.</div>'}
+      </div>
+
+      <div class="card card-span-12">
+        <h2>Billing</h2>
+        <div class="account-metric-grid">
+          ${accountMetricCard('Config pago', billing.payment_config_ready ? 'Lista' : 'Incompleta', billing.payment_config_ready ? 'is-positive' : 'is-warning')}
+          ${accountMetricCard('Abiertas', billingSummary.open ?? 0)}
+          ${accountMetricCard('Completadas', billingSummary.completed ?? 0, 'is-positive')}
+          ${accountMetricCard('Expiradas', billingSummary.expired ?? 0, 'is-warning')}
+          ${accountMetricCard('Canceladas', billingSummary.cancelled ?? 0)}
+          ${accountMetricCard('Último cobro', formatDate(billing.latest_completed_at))}
         </div>
       </div>
 
       ${planBlock('plus', plans.plus || [], me.plan)}
       ${planBlock('premium', plans.premium || [], me.plan)}
       ${paymentInstructions(activeOrder) || '<div class="card card-span-12"><h2>Pago actual</h2><div class="empty-state">No tienes una orden de pago pendiente.</div></div>'}
+
+      <div class="card card-span-6">
+        <h2>Órdenes recientes</h2>
+        <div class="list">
+          ${recentOrders.length ? recentOrders.map(recentOrderItem).join('') : '<div class="empty-state">Todavía no hay órdenes registradas.</div>'}
+        </div>
+      </div>
+
+      <div class="card card-span-6">
+        <h2>Recompensas recientes</h2>
+        <div class="list">
+          ${recentRewards.length ? recentRewards.map(referralRewardItem).join('') : '<div class="empty-state">Todavía no tienes recompensas aplicadas.</div>'}
+        </div>
+      </div>
+
+      <div class="card card-span-12">
+        <h2>Timeline comercial</h2>
+        <div class="list">
+          ${timeline.length ? timeline.map(accountTimelineItem).join('') : '<div class="empty-state">Sin eventos comerciales recientes.</div>'}
+        </div>
+      </div>
+
       <div class="card card-span-12">
         <h2>Soporte</h2>
         <div class="action-row">
-          <a class="button button-secondary" target="_blank" rel="noopener" href="${escapeHtml(state.payload.support_url || '#')}">Abrir grupo de soporte</a>
+          <a class="button button-secondary" target="_blank" rel="noopener" href="${escapeHtml(support.url || state.payload.support_url || '#')}">Abrir grupo de soporte</a>
         </div>
       </div>
     </div>
@@ -1686,14 +1825,11 @@ function bindViewButtons() {
     button.onclick = async () => {
       const [plan, days] = button.dataset.createOrder.split(':');
       try {
-        const result = await api('/api/miniapp/payment-order', {
+        await api('/api/miniapp/payment-order', {
           method: 'POST',
           body: JSON.stringify({ plan, days: Number(days) }),
         });
-        state.payload.dashboard.active_payment_order = result.order;
-        renderAccount();
-        renderHome();
-        bindViewButtons();
+        await bootstrap();
         setView('account');
         tg?.showAlert('Orden de pago generada correctamente.');
       } catch (error) {
