@@ -14,6 +14,15 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
             'recentOrderItem',
             'referralRewardItem',
             'accountTimelineItem',
+            'detailInfoChip',
+            'detailStatCard',
+            'scoreListsEqual',
+            'renderScoreBreakdown',
+            'renderRadarDetailModal',
+            'openRadarDetail',
+            'closeSignalDetailModal',
+            'renderSignalDetailModal',
+            'openSignalDetail',
         ]:
             self.assertIn(f'function {name}(', text)
 
