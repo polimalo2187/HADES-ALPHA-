@@ -99,5 +99,63 @@ class Bep20VerifierTests(unittest.TestCase):
         self.assertEqual(verification['confirmations'], 21)
 
 
+    def test_get_transfer_logs_uses_receipts_fallback_when_block_hash_query_also_hits_limit(self):
+        def fake_query(base_filter, *, from_block=None, to_block=None, block_hash=None):
+            raise RuntimeError("RPC error en eth_getLogs: {'code': -32005, 'message': 'limit exceeded'}")
+
+        fallback_logs = [{'transactionHash': '0xabc', 'topics': [], 'data': '0x0'}]
+        with patch('app.bep20_verifier._query_transfer_logs', side_effect=fake_query), \
+             patch('app.bep20_verifier._get_block_hash', return_value='0xblockhash100'), \
+             patch('app.bep20_verifier._scan_blocks_for_transfer_logs', return_value=fallback_logs) as scan_mock:
+            logs = _get_transfer_logs('0xtoken', '0xreceiver', 100, 100)
+
+        self.assertEqual(logs, fallback_logs)
+        scan_mock.assert_called_once_with('0xtoken', '0xreceiver', 100, 100)
+
+    def test_scan_block_for_transfer_logs_uses_block_receipts_when_available(self):
+        from app.bep20_verifier import _scan_block_for_transfer_logs
+
+        matching_log = {
+            'address': '0x000000000000000000000000000000000000CAFE',
+            'transactionHash': '0xabc123',
+            'topics': [
+                '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef',
+                '0x0000000000000000000000000000000000000000000000000000000000001234',
+                '0x000000000000000000000000000000000000000000000000000000000000beef',
+            ],
+            'data': '0x01',
+            'blockNumber': hex(100),
+        }
+        receipts = [{'logs': [matching_log]}]
+        with patch('app.bep20_verifier._get_block_receipts', return_value=receipts):
+            logs = _scan_block_for_transfer_logs(100, '0x000000000000000000000000000000000000cafe', '0x000000000000000000000000000000000000beef')
+
+        self.assertEqual(logs, [matching_log])
+
+    def test_scan_block_for_transfer_logs_falls_back_to_transaction_receipts(self):
+        from app.bep20_verifier import _scan_block_for_transfer_logs
+
+        matching_log = {
+            'address': '0x000000000000000000000000000000000000cafe',
+            'transactionHash': '0xabc123',
+            'topics': [
+                '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef',
+                '0x0000000000000000000000000000000000000000000000000000000000001234',
+                '0x000000000000000000000000000000000000000000000000000000000000beef',
+            ],
+            'data': '0x01',
+            'blockNumber': hex(101),
+        }
+        block = {'timestamp': hex(1710000000), 'transactions': ['0xtx1', '0xtx2'], 'hash': '0xblock'}
+        receipt1 = {'logs': []}
+        receipt2 = {'logs': [matching_log]}
+        with patch('app.bep20_verifier._get_block_receipts', side_effect=RuntimeError('method not supported')), \
+             patch('app.bep20_verifier._get_block', return_value=block), \
+             patch('app.bep20_verifier._get_transaction_receipt', side_effect=[receipt1, receipt2]):
+            logs = _scan_block_for_transfer_logs(101, '0x000000000000000000000000000000000000cafe', '0x000000000000000000000000000000000000beef')
+
+        self.assertEqual(logs, [matching_log])
+
+
 if __name__ == '__main__':
     unittest.main()
