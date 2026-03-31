@@ -9,12 +9,12 @@ from uuid import uuid4
 from pymongo import ReturnDocument
 
 from app.bep20_verifier import VerificationConfigError, verify_payment
+from app import config as app_config
 from app.config import (
     get_payment_configuration_status,
     get_payment_network,
     get_payment_order_ttl_minutes,
     get_payment_receiver_address,
-    get_payment_unique_max_delta,
     get_payment_token_contract,
     get_payment_token_symbol,
 )
@@ -50,7 +50,12 @@ def build_unique_amount_candidates(base_price: float, user_id: int, *, limit: in
     if user_id <= 0:
         raise ValueError("user_id inválido")
 
-    max_delta = Decimal(str(get_payment_unique_max_delta()))
+    get_unique_max_delta = getattr(app_config, "get_payment_unique_max_delta", None)
+    try:
+        configured_max_delta = get_unique_max_delta() if callable(get_unique_max_delta) else 0.150
+    except Exception:
+        configured_max_delta = 0.150
+    max_delta = Decimal(str(configured_max_delta))
     max_suffix = int((max_delta * Decimal("1000")).to_integral_value(rounding=ROUND_DOWN))
     max_suffix = max(1, min(max_suffix, 150))
     max_candidates = max(1, min(int(limit), max_suffix))
