@@ -2083,6 +2083,8 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
                     "plan_name": get_plan_name(me_plan),
                     "status": me_payload.get("subscription_status"),
                     "status_label": me_payload.get("subscription_status_label"),
+                    "days_left": int(me_payload.get("days_left") or 0),
+                    "expires_at": me_payload.get("expires_at"),
                 },
                 payment_config_status=payment_config_status,
             ),
