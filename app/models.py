@@ -229,6 +229,8 @@ def new_payment_order(
         "declared_sender_address": None,
         "status": "awaiting_payment",
         "verification_attempts": 0,
+        "verification_started_at": None,
+        "verification_lock_token": None,
         "last_verification_reason": None,
         "matched_tx_hash": None,
         "matched_from": None,
