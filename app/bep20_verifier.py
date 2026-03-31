@@ -62,8 +62,8 @@ def _get_latest_block() -> int:
     return int(_rpc_call("eth_blockNumber", []), 16)
 
 
-def _get_block(block_number: int) -> Dict[str, Any]:
-    block = _rpc_call("eth_getBlockByNumber", [hex(block_number), False])
+def _get_block(block_number: int, *, full_transactions: bool = False) -> Dict[str, Any]:
+    block = _rpc_call("eth_getBlockByNumber", [hex(block_number), bool(full_transactions)])
     if not isinstance(block, dict) or not block.get("timestamp"):
         raise RuntimeError(f"No se pudo cargar el bloque {block_number}")
     return block
@@ -81,6 +81,81 @@ def _get_block_hash(block_number: int) -> str:
     if not block_hash:
         raise RuntimeError(f"No se pudo resolver el hash del bloque {block_number}")
     return block_hash
+
+
+def _get_block_receipts(block_number: int) -> list[Dict[str, Any]]:
+    receipts = _rpc_call("eth_getBlockReceipts", [hex(block_number)])
+    if receipts is None:
+        return []
+    if not isinstance(receipts, list):
+        raise RuntimeError(f"Respuesta inválida para eth_getBlockReceipts en bloque {block_number}")
+    return receipts
+
+
+def _get_transaction_receipt(tx_hash: str) -> Dict[str, Any] | None:
+    receipt = _rpc_call("eth_getTransactionReceipt", [str(tx_hash)])
+    if receipt is None:
+        return None
+    if not isinstance(receipt, dict):
+        raise RuntimeError(f"Respuesta inválida para eth_getTransactionReceipt en tx {tx_hash}")
+    return receipt
+
+
+def _normalize_topic(value: Any) -> str:
+    return str(value or "").lower()
+
+
+def _extract_matching_transfer_logs(
+    receipts: list[Dict[str, Any]],
+    token_contract: str,
+    receiver_address: str,
+) -> list[Dict[str, Any]]:
+    token_contract = _normalize_hex_address(token_contract).lower()
+    receiver_topic = _topic_for_address(receiver_address).lower()
+    matched: list[Dict[str, Any]] = []
+    for receipt in receipts or []:
+        for log in (receipt.get("logs") or []):
+            if _normalize_hex_address(str(log.get("address") or "")).lower() != token_contract:
+                continue
+            topics = log.get("topics") or []
+            if len(topics) < 3:
+                continue
+            if _normalize_topic(topics[0]) != TRANSFER_TOPIC:
+                continue
+            if _normalize_topic(topics[2]) != receiver_topic:
+                continue
+            matched.append(log)
+    return matched
+
+
+def _scan_block_for_transfer_logs(block_number: int, token_contract: str, receiver_address: str) -> list[Dict[str, Any]]:
+    try:
+        receipts = _get_block_receipts(block_number)
+        return _extract_matching_transfer_logs(receipts, token_contract, receiver_address)
+    except RuntimeError as exc:
+        logger.warning(
+            "eth_getBlockReceipts no disponible o falló para bloque %s; usando receipts por transacción: %s",
+            block_number,
+            exc,
+        )
+
+    block = _get_block(block_number)
+    tx_hashes = block.get("transactions") or []
+    receipts: list[Dict[str, Any]] = []
+    for tx_hash in tx_hashes:
+        receipt = _get_transaction_receipt(str(tx_hash))
+        if receipt:
+            receipts.append(receipt)
+    return _extract_matching_transfer_logs(receipts, token_contract, receiver_address)
+
+
+def _scan_blocks_for_transfer_logs(token_contract: str, receiver_address: str, from_block: int, to_block: int) -> list[Dict[str, Any]]:
+    if from_block > to_block:
+        return []
+    matched: list[Dict[str, Any]] = []
+    for block_number in range(int(from_block), int(to_block) + 1):
+        matched.extend(_scan_block_for_transfer_logs(block_number, token_contract, receiver_address))
+    return matched
 
 
 def _quantize_amount(value: Decimal) -> Decimal:
@@ -162,10 +237,22 @@ def _get_transfer_logs(token_contract: str, receiver_address: str, from_block: i
                 current_from,
             )
             block_hash = _get_block_hash(current_from)
-            batch = _query_transfer_logs(base_filter, block_hash=block_hash)
-            logs.extend(batch)
-            current_from += 1
-            window = _MIN_LOG_WINDOW
+            try:
+                batch = _query_transfer_logs(base_filter, block_hash=block_hash)
+                logs.extend(batch)
+                current_from += 1
+                window = _MIN_LOG_WINDOW
+                continue
+            except RuntimeError as block_hash_exc:
+                if not _is_limit_exceeded_error(block_hash_exc):
+                    raise
+                logger.warning(
+                    "RPC limit exceeded también con blockHash; usando fallback por receipts desde bloque %s hasta %s",
+                    current_from,
+                    to_block,
+                )
+                logs.extend(_scan_blocks_for_transfer_logs(token_contract, receiver_address, current_from, to_block))
+                break
 
     return logs
 
