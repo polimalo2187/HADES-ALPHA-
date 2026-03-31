@@ -96,6 +96,9 @@ class AccountCenterPayloadTests(unittest.TestCase):
         self.assertEqual(payload['billing']['summary']['completed'], 2)
         self.assertTrue(payload['billing']['payment_config_ready'])
         self.assertEqual(payload['billing']['active_order']['order_id'], 'ord-active')
+        self.assertEqual(payload['billing']['focus']['state'], 'awaiting_payment')
+        self.assertEqual(payload['billing']['focus']['title'], 'Orden abierta y lista para pago')
+        self.assertEqual(len(payload['billing']['focus']['steps']), 4)
         self.assertEqual(payload['referrals']['total_referred'], 5)
         self.assertEqual(payload['referrals']['recent_rewards'][0]['reward_days'], 15)
         self.assertEqual(payload['timeline'][0]['event_label'], 'Compra aplicada')
@@ -117,6 +120,24 @@ class AccountCenterPayloadTests(unittest.TestCase):
 
         self.assertIn('account', payload)
         self.assertEqual(payload['account']['overview']['user_id'], 7)
+
+
+    def test_build_account_center_payload_marks_billing_config_missing(self):
+        user = {
+            'user_id': 77,
+            'username': 'jarold',
+            'language': 'es',
+            'plan': 'free',
+            'subscription_status': 'free',
+            'ref_code': 'ref_77',
+        }
+        with patch('app.miniapp.service.build_watchlist_context', return_value={'meta': {'symbols': [], 'symbols_count': 0, 'max_symbols': 2, 'slots_left': 2, 'plan': 'free', 'plan_name': 'FREE', 'can_add_more': True}}),              patch('app.miniapp.service.get_active_payment_order_for_user', return_value=None),              patch('app.miniapp.service._load_recent_payment_orders', return_value=[]),              patch('app.miniapp.service._load_payment_order_summary', return_value={'open': 0, 'completed': 0, 'expired': 0, 'cancelled': 0, 'total': 0}),              patch('app.miniapp.service.get_user_referral_stats', return_value={}),              patch('app.miniapp.service.get_referral_link', return_value='https://t.me/HADES_ALPHA_bot?start=ref_77'),              patch('app.miniapp.service._load_recent_referral_rewards', return_value=[]),              patch('app.miniapp.service._load_recent_subscription_events', return_value=[]),              patch('app.miniapp.service.is_payment_configuration_ready', return_value=False),              patch('app.miniapp.service.plan_status', return_value={'plan': 'free', 'status': 'free', 'expires': None, 'days_left': 0}):
+            payload = build_account_center_payload(user)
+
+        self.assertFalse(payload['billing']['payment_config_ready'])
+        self.assertEqual(payload['billing']['focus']['state'], 'config_missing')
+        self.assertFalse(payload['billing']['focus']['can_create_order'])
+        self.assertEqual(payload['billing']['focus']['primary_cta'], 'Soporte')
 
 
 if __name__ == '__main__':
