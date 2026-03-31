@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from app.binance_api import get_futures_24h_tickers, get_open_interest, get_premium_index, get_radar_opportunities
 from app.services.market_data_service import get_funding_rate_pct_map, get_open_interest_map
-from app.config import get_bot_username, get_payment_configuration_status, get_payment_min_confirmations
+from app.config import get_bot_username, get_payment_configuration_status, get_payment_min_confirmations, is_admin
 from app.database import payment_orders_collection, subscription_events_collection, users_collection, user_signals_collection, watchlists_collection
 from app.history_service import get_history_entries_for_user
 from app.market import get_market_state_snapshot
@@ -1726,6 +1726,7 @@ def build_me_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         "user_id": int(user.get("user_id") or 0),
         "username": user.get("username"),
         "language": user.get("language") or "es",
+        "is_admin": bool(is_admin(int(user.get("user_id") or 0))),
         "plan": plan_for_display,
         "plan_name": get_plan_name(plan_for_display),
         "subscription_status": subscription_status,
@@ -1988,6 +1989,7 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         "plan_name": get_plan_name(user.get("plan")),
         "subscription_status": str(user.get("subscription_status") or "free").lower(),
         "subscription_status_label": _label_subscription_status(user.get("subscription_status") or "free"),
+        "is_admin": bool(is_admin(int(user.get("user_id") or 0))),
         "days_left": 0,
         "expires_at": None,
         "banned": bool(user.get("banned")),
