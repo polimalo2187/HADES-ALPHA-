@@ -1459,3 +1459,29 @@ h1 {
   color: rgba(255, 255, 255, 0.72);
   word-break: break-all;
 }
+
+.payment-focus-diagnostics {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 184, 77, 0.24);
+  background: rgba(255, 184, 77, 0.08);
+}
+
+.payment-focus-diagnostics-title {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.payment-focus-diagnostics-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pill-warning {
+  border-color: rgba(255, 184, 77, 0.24);
+  color: #ffd28f;
+}
