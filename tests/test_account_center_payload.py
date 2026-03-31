@@ -139,6 +139,48 @@ class AccountCenterPayloadTests(unittest.TestCase):
         self.assertFalse(payload['billing']['focus']['can_create_order'])
         self.assertEqual(payload['billing']['focus']['primary_cta'], 'Soporte')
 
+    def test_bootstrap_account_fallback_reuses_me_watchlist_and_plans(self):
+        user = {
+            'user_id': 9,
+            'username': 'neo',
+            'language': 'es',
+            'plan': 'premium',
+            'subscription_status': 'active',
+        }
+        me_payload = {
+            'user_id': 9,
+            'plan': 'premium',
+            'plan_name': 'PREMIUM',
+            'subscription_status': 'active',
+            'subscription_status_label': 'Activo',
+            'days_left': 25,
+            'expires_at': '2026-04-30T00:00:00',
+            'ref_code': 'ref_9',
+            'valid_referrals_total': 0,
+            'reward_days_total': 0,
+        }
+        watchlist_meta = {
+            'symbols': ['BTCUSDT'],
+            'symbols_count': 1,
+            'max_symbols': None,
+            'slots_left': None,
+            'plan': 'premium',
+            'plan_name': 'PREMIUM',
+            'can_add_more': True,
+        }
+        plans_payload = {
+            'plus': [{'plan': 'plus', 'days': 30, 'price_usdt': 15.0}],
+            'premium': [{'plan': 'premium', 'days': 30, 'price_usdt': 20.0}],
+        }
+        with patch('app.miniapp.service.build_me_payload', return_value=me_payload),              patch('app.miniapp.service.build_dashboard_payload', return_value={'active_payment_order': None}),              patch('app.miniapp.service.build_signals_payload', return_value=[]),              patch('app.miniapp.service.build_history_payload', return_value=[]),              patch('app.miniapp.service.build_market_payload', return_value={'radar': [], 'radar_summary': {'total': 0}}),              patch('app.miniapp.service.build_watchlist_payload', return_value=[]),              patch('app.miniapp.service.build_watchlist_context', return_value={'meta': watchlist_meta}),              patch('app.miniapp.service.build_plans_payload', return_value=plans_payload),              patch('app.miniapp.service.build_account_center_payload', side_effect=RuntimeError('boom')):
+            payload = build_bootstrap_payload(user)
+
+        self.assertEqual(payload['account']['overview']['plan_name'], 'PREMIUM')
+        self.assertEqual(payload['account']['overview']['days_left'], 25)
+        self.assertIsNone(payload['account']['overview']['watchlist_limit'])
+        self.assertEqual(payload['account']['subscription']['watchlist']['plan'], 'premium')
+        self.assertEqual(len(payload['account']['plans']['premium']), 1)
+
 
 if __name__ == '__main__':
     unittest.main()
