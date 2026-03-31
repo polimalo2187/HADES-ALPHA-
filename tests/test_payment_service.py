@@ -15,7 +15,7 @@ from app.payment_service import (
 
 class PaymentServiceTests(unittest.TestCase):
     def test_unique_amount_candidates_are_deterministic_and_unique(self):
-        with patch('app.payment_service.get_payment_unique_max_delta', return_value=0.150):
+        with patch('app.payment_service.app_config.get_payment_unique_max_delta', return_value=0.150):
             candidates = build_unique_amount_candidates(20.0, 12345, limit=10)
         self.assertEqual(len(candidates), 10)
         self.assertEqual(len(set(candidates)), 10)
@@ -23,14 +23,21 @@ class PaymentServiceTests(unittest.TestCase):
         self.assertLessEqual(max(candidates) - Decimal('20.000'), Decimal('0.150'))
 
     def test_unique_amount_candidates_respect_configured_delta_cap(self):
-        with patch('app.payment_service.get_payment_unique_max_delta', return_value=0.120):
+        with patch('app.payment_service.app_config.get_payment_unique_max_delta', return_value=0.120):
             candidates = build_unique_amount_candidates(10.0, 99999, limit=200)
         self.assertEqual(len(candidates), 120)
         self.assertEqual(min(candidates), Decimal('10.001'))
         self.assertEqual(max(candidates), Decimal('10.120'))
 
     def test_unique_amount_candidates_never_exceed_fifteen_cents(self):
-        with patch('app.payment_service.get_payment_unique_max_delta', return_value=0.999):
+        with patch('app.payment_service.app_config.get_payment_unique_max_delta', return_value=0.999):
+            candidates = build_unique_amount_candidates(5.0, 42, limit=999)
+        self.assertEqual(len(candidates), 150)
+        self.assertEqual(min(candidates), Decimal('5.001'))
+        self.assertEqual(max(candidates), Decimal('5.150'))
+
+    def test_unique_amount_candidates_fall_back_when_config_helper_is_missing(self):
+        with patch.object(__import__('app.payment_service', fromlist=['app_config']).app_config, 'get_payment_unique_max_delta', new=None, create=False):
             candidates = build_unique_amount_candidates(5.0, 42, limit=999)
         self.assertEqual(len(candidates), 150)
         self.assertEqual(min(candidates), Decimal('5.001'))
