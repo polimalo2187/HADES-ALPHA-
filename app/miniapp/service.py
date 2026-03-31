@@ -6,10 +6,12 @@ from math import isfinite, log10
 from typing import Any, Dict, Iterable, List, Optional
 
 from app.binance_api import get_futures_24h_tickers, get_open_interest, get_premium_index, get_radar_opportunities
-from app.database import users_collection, user_signals_collection, watchlists_collection
+from app.config import is_payment_configuration_ready
+from app.database import payment_orders_collection, subscription_events_collection, users_collection, user_signals_collection, watchlists_collection
 from app.history_service import get_history_entries_for_user
 from app.market import get_market_state_snapshot
 from app.payment_service import get_active_payment_order_for_user
+from app.referrals import get_referral_link, get_user_referral_stats
 from app.plans import get_plan_catalog, get_plan_name, normalize_plan, plan_status
 from app.statistics import get_performance_snapshot
 from app.user_service import get_or_create_user
@@ -113,9 +115,100 @@ def serialize_order_public(order: Optional[Dict[str, Any]]) -> Optional[Dict[str
         "deposit_address": order.get("deposit_address"),
         "status": order.get("status"),
         "status_label": _label_order_status(order.get("status")),
+        "last_verification_reason": order.get("last_verification_reason"),
+        "confirmations": int(order.get("confirmations") or 0),
         "expires_at": _iso(order.get("expires_at")),
         "created_at": _iso(order.get("created_at")),
+        "updated_at": _iso(order.get("updated_at")),
+        "confirmed_at": _iso(order.get("confirmed_at")),
     }
+
+
+def _label_subscription_event(value: Any) -> str:
+    normalized = str(value or "update").lower().strip()
+    mapping = {
+        "purchase": "Compra aplicada",
+        "manual_activation": "Activación manual",
+        "referral_reward": "Recompensa por referido",
+        "extend": "Extensión",
+        "expired": "Expiración",
+    }
+    return mapping.get(normalized, normalized.replace("_", " ").title())
+
+
+def _serialize_subscription_event(doc: Dict[str, Any]) -> Dict[str, Any]:
+    plan = normalize_plan(doc.get("plan") or doc.get("after_plan"))
+    before_plan = normalize_plan(doc.get("before_plan"))
+    after_plan = normalize_plan(doc.get("after_plan") or doc.get("plan"))
+    return {
+        "event_type": str(doc.get("event_type") or "update"),
+        "event_label": _label_subscription_event(doc.get("event_type")),
+        "plan": plan,
+        "plan_name": get_plan_name(plan),
+        "days": int(doc.get("days") or 0),
+        "source": doc.get("source"),
+        "before_plan": before_plan,
+        "before_plan_name": get_plan_name(before_plan),
+        "after_plan": after_plan,
+        "after_plan_name": get_plan_name(after_plan),
+        "created_at": _iso(doc.get("created_at")),
+        "metadata": dict(doc.get("metadata") or {}),
+    }
+
+
+def _serialize_referral_reward(doc: Dict[str, Any]) -> Dict[str, Any]:
+    activated_plan = normalize_plan(doc.get("activated_plan"))
+    reward_plan = normalize_plan(doc.get("reward_plan_applied") or activated_plan)
+    return {
+        "referred_id": int(doc.get("referred_id") or 0),
+        "activated_plan": activated_plan,
+        "activated_plan_name": get_plan_name(activated_plan),
+        "activated_days": int(doc.get("activated_days") or 0),
+        "reward_plan": reward_plan,
+        "reward_plan_name": get_plan_name(reward_plan),
+        "reward_days": int(doc.get("reward_days_applied") or 0),
+        "created_at": _iso(doc.get("created_at") or doc.get("activated_at")),
+    }
+
+
+def _load_recent_payment_orders(user_id: int, *, limit: int = 6) -> List[Dict[str, Any]]:
+    return list(
+        payment_orders_collection()
+        .find({"user_id": int(user_id)})
+        .sort("created_at", -1)
+        .limit(max(1, int(limit)))
+    )
+
+
+def _load_payment_order_summary(user_id: int) -> Dict[str, int]:
+    coll = payment_orders_collection()
+    user_id = int(user_id)
+    return {
+        "open": int(coll.count_documents({"user_id": user_id, "status": {"$in": ["awaiting_payment", "verification_in_progress", "paid_unconfirmed"]}})),
+        "completed": int(coll.count_documents({"user_id": user_id, "status": "completed"})),
+        "expired": int(coll.count_documents({"user_id": user_id, "status": "expired"})),
+        "cancelled": int(coll.count_documents({"user_id": user_id, "status": "cancelled"})),
+        "total": int(coll.count_documents({"user_id": user_id})),
+    }
+
+
+def _load_recent_subscription_events(user_id: int, *, limit: int = 6) -> List[Dict[str, Any]]:
+    return list(
+        subscription_events_collection()
+        .find({"user_id": int(user_id)})
+        .sort("created_at", -1)
+        .limit(max(1, int(limit)))
+    )
+
+
+def _load_recent_referral_rewards(user_id: int, *, limit: int = 5) -> List[Dict[str, Any]]:
+    from app.database import referrals_collection
+    return list(
+        referrals_collection()
+        .find({"referrer_id": int(user_id)})
+        .sort("created_at", -1)
+        .limit(max(1, int(limit)))
+    )
 
 
 def _serialize_signal(doc: Dict[str, Any]) -> Dict[str, Any]:
@@ -1478,6 +1571,94 @@ def build_me_payload(user: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def build_account_center_payload(user: Dict[str, Any]) -> Dict[str, Any]:
+    user_id = int(user.get("user_id") or 0)
+    me = build_me_payload(user)
+    status = plan_status(user)
+    display_plan = normalize_plan(me.get("plan"))
+
+    watchlist_meta = _safe_call(
+        lambda: build_watchlist_context(user)["meta"],
+        {"symbols": [], "symbols_count": 0, "max_symbols": 2, "slots_left": 2, "plan": display_plan, "plan_name": get_plan_name(display_plan), "can_add_more": True},
+    )
+    active_order = _safe_call(lambda: get_active_payment_order_for_user(user_id), None)
+    recent_orders_raw = _safe_call(lambda: _load_recent_payment_orders(user_id), []) or []
+    recent_orders = [serialize_order_public(order) for order in recent_orders_raw]
+    billing_summary = _safe_call(lambda: _load_payment_order_summary(user_id), {"open": 0, "completed": 0, "expired": 0, "cancelled": 0, "total": 0})
+    latest_completed_at = next((order.get("updated_at") or order.get("created_at") for order in recent_orders if str(order.get("status") or "") == "completed"), None)
+
+    referral_stats = _safe_call(lambda: get_user_referral_stats(user_id), None) or {}
+    referral_link = _safe_call(lambda: get_referral_link(user_id), f"https://t.me/share/url?url=HADES")
+    referral_rewards = [
+        _serialize_referral_reward(doc)
+        for doc in (_safe_call(lambda: _load_recent_referral_rewards(user_id), []) or [])
+    ]
+
+    subscription_events = [
+        _serialize_subscription_event(doc)
+        for doc in (_safe_call(lambda: _load_recent_subscription_events(user_id), []) or [])
+    ]
+
+    last_purchase_plan = normalize_plan(user.get("last_purchase_plan"))
+
+    return {
+        "overview": {
+            **me,
+            "watchlist_symbols": int(watchlist_meta.get("symbols_count") or 0),
+            "watchlist_limit": watchlist_meta.get("max_symbols"),
+            "watchlist_slots_left": watchlist_meta.get("slots_left"),
+        },
+        "subscription": {
+            "plan": display_plan,
+            "plan_name": get_plan_name(display_plan),
+            "status": me.get("subscription_status"),
+            "status_label": me.get("subscription_status_label"),
+            "days_left": int(me.get("days_left") or 0),
+            "expires_at": me.get("expires_at"),
+            "plan_started_at": _iso(user.get("plan_started_at")),
+            "last_purchase_at": _iso(user.get("last_purchase_at")),
+            "last_purchase_plan": last_purchase_plan,
+            "last_purchase_plan_name": get_plan_name(last_purchase_plan),
+            "last_purchase_days": int(user.get("last_purchase_days") or 0),
+            "last_entitlement_source": user.get("last_entitlement_source"),
+            "features": _plan_features(display_plan),
+            "is_trial": str(me.get("subscription_status") or "") == "trial",
+            "is_paid": display_plan in {"plus", "premium"} and str(me.get("subscription_status") or "") == "active",
+            "can_upgrade_plus": display_plan == "free",
+            "can_upgrade_premium": display_plan in {"free", "plus"},
+            "watchlist": watchlist_meta,
+        },
+        "billing": {
+            "payment_config_ready": bool(is_payment_configuration_ready()),
+            "active_order": serialize_order_public(active_order),
+            "recent_orders": recent_orders,
+            "summary": billing_summary,
+            "latest_completed_at": latest_completed_at,
+        },
+        "referrals": {
+            "ref_code": me.get("ref_code"),
+            "referral_link": referral_link,
+            "share_text": f"Únete a HADES Alpha con mi enlace: {referral_link}",
+            "total_referred": int(referral_stats.get("total_referred") or 0),
+            "plus_referred": int(referral_stats.get("plus_referred") or 0),
+            "premium_referred": int(referral_stats.get("premium_referred") or 0),
+            "current_plus": int(referral_stats.get("current_plus") or 0),
+            "current_premium": int(referral_stats.get("current_premium") or 0),
+            "valid_referrals_total": int(referral_stats.get("valid_referrals_total") or 0),
+            "reward_days_total": int(referral_stats.get("reward_days_total") or 0),
+            "reward_rules": list(referral_stats.get("pending_rewards") or []),
+            "recent_rewards": referral_rewards,
+        },
+        "plans": build_plans_payload(display_plan),
+        "timeline": subscription_events,
+        "support": {
+            "url": "https://chat.whatsapp.com/JXxSGjaKtqRH9c0jTlGv2l?mode=gi_t",
+            "label": "Soporte HADES",
+        },
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+
+
 def build_dashboard_payload(user: Dict[str, Any]) -> Dict[str, Any]:
     user_id = int(user.get("user_id") or 0)
     snapshot = _safe_call(get_performance_snapshot, {}) or {}
@@ -1657,6 +1838,32 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         "watchlist": _safe_call(lambda: build_watchlist_payload(user), []),
         "watchlist_meta": _safe_call(lambda: build_watchlist_context(user)["meta"], {"symbols": [], "symbols_count": 0, "max_symbols": 2, "slots_left": 2, "plan": "free", "plan_name": "FREE", "can_add_more": True}),
         "plans": _safe_call(lambda: build_plans_payload(user.get("plan")), {"plus": [], "premium": []}),
+        "account": _safe_call(lambda: build_account_center_payload(user), {
+            "overview": {
+                "user_id": int(user.get("user_id") or 0),
+                "username": user.get("username"),
+                "language": user.get("language") or "es",
+                "plan": normalize_plan(user.get("plan")),
+                "plan_name": get_plan_name(user.get("plan")),
+                "subscription_status": str(user.get("subscription_status") or "free").lower(),
+                "subscription_status_label": _label_subscription_status(user.get("subscription_status") or "free"),
+                "days_left": 0,
+                "expires_at": None,
+                "banned": bool(user.get("banned")),
+                "ref_code": user.get("ref_code"),
+                "valid_referrals_total": int(user.get("valid_referrals_total") or 0),
+                "reward_days_total": int(user.get("reward_days_total") or 0),
+                "watchlist_symbols": 0,
+                "watchlist_limit": 2,
+                "watchlist_slots_left": 2,
+            },
+            "subscription": {"plan": normalize_plan(user.get("plan")), "plan_name": get_plan_name(user.get("plan")), "status": str(user.get("subscription_status") or "free").lower(), "status_label": _label_subscription_status(user.get("subscription_status") or "free"), "days_left": 0, "expires_at": None, "features": _plan_features(user.get("plan")), "watchlist": {"symbols": [], "symbols_count": 0, "max_symbols": 2, "slots_left": 2, "plan": normalize_plan(user.get("plan")), "plan_name": get_plan_name(user.get("plan")), "can_add_more": True}},
+            "billing": {"payment_config_ready": False, "active_order": None, "recent_orders": [], "summary": {"open": 0, "completed": 0, "expired": 0, "cancelled": 0, "total": 0}, "latest_completed_at": None},
+            "referrals": {"ref_code": user.get("ref_code"), "referral_link": None, "share_text": None, "total_referred": 0, "plus_referred": 0, "premium_referred": 0, "current_plus": 0, "current_premium": 0, "valid_referrals_total": int(user.get("valid_referrals_total") or 0), "reward_days_total": int(user.get("reward_days_total") or 0), "reward_rules": [], "recent_rewards": []},
+            "plans": {"plus": [], "premium": []},
+            "timeline": [],
+            "support": {"url": "https://chat.whatsapp.com/JXxSGjaKtqRH9c0jTlGv2l?mode=gi_t", "label": "Soporte HADES"},
+        }),
         "support_url": "https://chat.whatsapp.com/JXxSGjaKtqRH9c0jTlGv2l?mode=gi_t",
         "generated_at": datetime.utcnow().isoformat(),
     }
