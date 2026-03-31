@@ -78,6 +78,8 @@ class PaymentServiceTests(unittest.TestCase):
         self.assertEqual(order['plan'], 'premium')
         mocked_cancel.assert_called_once_with(77, reason='superseded_by_new_order')
         collection.insert_one.assert_called_once()
+        inserted_order = collection.insert_one.call_args.args[0]
+        self.assertNotIn('matched_tx_hash', inserted_order)
 
 
     def test_create_payment_order_rejects_when_payment_configuration_is_incomplete(self):
