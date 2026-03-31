@@ -31,6 +31,7 @@ from app.miniapp.service import (
     build_watchlist_context,
     build_watchlist_payload,
     build_signal_detail_payload,
+    build_radar_symbol_payload,
     ensure_mini_app_user,
     get_user_by_id,
     serialize_order_public,
@@ -329,6 +330,13 @@ def create_mini_app() -> FastAPI:
     @app.get("/api/miniapp/market")
     async def miniapp_market(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
         return build_market_payload(user)
+
+    @app.get("/api/miniapp/radar/{symbol}")
+    async def miniapp_radar_detail(symbol: str, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
+        payload = build_radar_symbol_payload(user, symbol)
+        if not payload:
+            raise HTTPException(status_code=404, detail="radar_symbol_not_found")
+        return payload
 
     @app.get("/api/miniapp/watchlist")
     async def miniapp_watchlist(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
