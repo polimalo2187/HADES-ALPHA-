@@ -112,6 +112,7 @@ function paymentReasonMessage(reason, fallbackOk) {
     payment_confirmed: 'Pago confirmado correctamente.',
     already_completed: 'La orden ya estaba completada.',
     verification_in_progress: 'Ya hay una verificación en curso para esa orden.',
+    verification_error: 'La verificación falló temporalmente. Vuelve a intentarlo en unos segundos.',
     order_expired: 'La orden expiró. Genera una nueva si todavía quieres pagar.',
     order_cancelled: 'La orden ya estaba cancelada.',
     tx_already_used: 'Esa transacción ya fue usada por otra orden.',
@@ -119,7 +120,10 @@ function paymentReasonMessage(reason, fallbackOk) {
     activation_failed: 'El pago se detectó, pero la activación falló. Revisa soporte.',
     no_match: 'Todavía no aparece un pago válido para esa orden.',
     no_transfer_found: 'Todavía no aparece una transferencia válida para esa orden.',
+    payment_not_found: 'Todavía no aparece una transferencia válida para esa orden.',
     awaiting_confirmations: 'Se detectó el pago, pero aún faltan confirmaciones.',
+    payment_waiting_confirmations: 'Se detectó el pago, pero aún faltan confirmaciones.',
+    request_timeout: 'La actualización tardó demasiado. Revisa la cuenta otra vez sin reenviar el pago.',
   };
   return map[normalized] || fallbackOk || 'Estado de pago actualizado.';
 }
@@ -426,13 +430,33 @@ function showError(message) {
 }
 
 async function api(path, options = {}) {
-  const headers = Object.assign({}, options.headers || {});
+  const { timeoutMs = 15000, headers: customHeaders = {}, signal: providedSignal, ...fetchOptions } = options;
+  const headers = Object.assign({}, customHeaders || {});
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
-  if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-  const response = await fetch(path, { ...options, headers });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.detail || data.message || 'request_failed');
-  return data;
+  if (fetchOptions.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+
+  let controller = null;
+  let timeoutId = null;
+  let signal = providedSignal;
+  if (!signal && Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0) {
+    controller = new AbortController();
+    signal = controller.signal;
+    timeoutId = window.setTimeout(() => controller.abort(), Number(timeoutMs));
+  }
+
+  try {
+    const response = await fetch(path, { ...fetchOptions, headers, signal });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.detail || data.message || 'request_failed');
+    return data;
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error('request_timeout');
+    }
+    throw error;
+  } finally {
+    if (timeoutId) window.clearTimeout(timeoutId);
+  }
 }
 
 async function authenticate() {
@@ -447,7 +471,47 @@ async function authenticate() {
 }
 
 async function bootstrap() {
-  state.payload = await api('/api/miniapp/bootstrap');
+  state.payload = await api('/api/miniapp/bootstrap', { timeoutMs: 20000 });
+  renderAll();
+}
+
+function ensurePayloadShell() {
+  if (!state.payload || typeof state.payload !== 'object') state.payload = {};
+  if (!state.payload.account || typeof state.payload.account !== 'object') state.payload.account = {};
+  if (!state.payload.account.billing || typeof state.payload.account.billing !== 'object') state.payload.account.billing = {};
+}
+
+function applyPaymentOrderPreview(order) {
+  ensurePayloadShell();
+  const billing = state.payload.account.billing;
+  const summary = { ...(billing.summary || {}) };
+  const recentOrders = Array.isArray(billing.recent_orders) ? [...billing.recent_orders] : [];
+  const openStatuses = new Set(['awaiting_payment', 'verification_in_progress', 'paid_unconfirmed']);
+
+  if (!order) {
+    billing.active_order = null;
+    summary.open = 0;
+    billing.summary = summary;
+    return;
+  }
+
+  billing.active_order = order;
+  const filtered = recentOrders.filter(item => String(item?.order_id || '') !== String(order.order_id || ''));
+  billing.recent_orders = [order, ...filtered].slice(0, 6);
+  summary.total = Math.max(Number(summary.total || 0), billing.recent_orders.length);
+  summary.open = openStatuses.has(String(order.status || '').toLowerCase()) ? Math.max(Number(summary.open || 0), 1) : 0;
+  billing.summary = summary;
+}
+
+async function refreshAccountState(options = {}) {
+  const timeoutMs = Number(options.timeoutMs || 8000);
+  const [account, me] = await Promise.all([
+    api('/api/miniapp/account', { timeoutMs }),
+    api('/api/miniapp/me', { timeoutMs }),
+  ]);
+  ensurePayloadShell();
+  if (me && typeof me === 'object') state.payload.me = me;
+  if (account && typeof account === 'object') state.payload.account = account;
   renderAll();
 }
 
@@ -2019,15 +2083,22 @@ function bindViewButtons() {
       button.disabled = true;
       button.textContent = 'Procesando...';
       try {
-        await api('/api/miniapp/payment-order', {
+        const result = await api('/api/miniapp/payment-order', {
           method: 'POST',
           body: JSON.stringify({ plan, days: Number(days) }),
+          timeoutMs: 15000,
         });
-        await bootstrap();
+        applyPaymentOrderPreview(result.order || null);
+        renderAll();
         setView('account');
+        try {
+          await refreshAccountState({ timeoutMs: 8000 });
+        } catch (refreshError) {
+          console.warn('MiniApp account refresh after create order timed out or failed', refreshError);
+        }
         tg?.showAlert('Orden de pago lista. Revisa el bloque de billing para pagar y confirmar.');
       } catch (error) {
-        tg?.showAlert(`No se pudo generar la orden: ${error.message}`);
+        tg?.showAlert(`No se pudo generar la orden: ${paymentReasonMessage(error.message, error.message)}`);
       } finally {
         if (button.isConnected) {
           button.disabled = false;
@@ -2046,11 +2117,18 @@ function bindViewButtons() {
         const result = await api('/api/miniapp/payment-order/confirm', {
           method: 'POST',
           body: JSON.stringify({ order_id: button.dataset.confirmOrder }),
+          timeoutMs: 20000,
         });
-        await bootstrap();
+        applyPaymentOrderPreview(result.order || null);
+        renderAll();
+        try {
+          await refreshAccountState({ timeoutMs: 8000 });
+        } catch (refreshError) {
+          console.warn('MiniApp account refresh after confirm payment timed out or failed', refreshError);
+        }
         tg?.showAlert(paymentReasonMessage(result.reason, result.ok ? 'Estado de pago actualizado.' : 'Pago pendiente.'));
       } catch (error) {
-        tg?.showAlert(`No se pudo confirmar: ${error.message}`);
+        tg?.showAlert(`No se pudo confirmar: ${paymentReasonMessage(error.message, error.message)}`);
       } finally {
         if (button.isConnected) {
           button.disabled = false;
@@ -2069,11 +2147,18 @@ function bindViewButtons() {
         await api('/api/miniapp/payment-order/cancel', {
           method: 'POST',
           body: JSON.stringify({ order_id: button.dataset.cancelOrder }),
+          timeoutMs: 15000,
         });
-        await bootstrap();
+        applyPaymentOrderPreview(null);
+        renderAll();
+        try {
+          await refreshAccountState({ timeoutMs: 8000 });
+        } catch (refreshError) {
+          console.warn('MiniApp account refresh after cancel order timed out or failed', refreshError);
+        }
         tg?.showAlert('Orden cancelada correctamente.');
       } catch (error) {
-        tg?.showAlert(`No se pudo cancelar: ${error.message}`);
+        tg?.showAlert(`No se pudo cancelar: ${paymentReasonMessage(error.message, error.message)}`);
       } finally {
         if (button.isConnected) {
           button.disabled = false;
