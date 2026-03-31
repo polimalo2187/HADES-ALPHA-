@@ -257,8 +257,35 @@ def get_payment_lookback_blocks() -> int:
 
 
 
+def get_payment_configuration_status() -> dict:
+    checks = [
+        {
+            "key": "BSC_RPC_HTTP_URL",
+            "label": "RPC BSC",
+            "value_present": bool(get_bsc_rpc_http_url()),
+        },
+        {
+            "key": "PAYMENT_TOKEN_CONTRACT",
+            "label": "Contrato del token",
+            "value_present": bool(get_payment_token_contract()),
+        },
+        {
+            "key": "PAYMENT_RECEIVER_ADDRESS",
+            "label": "Wallet receptora",
+            "value_present": bool(get_payment_receiver_address()),
+        },
+    ]
+    missing = [item["key"] for item in checks if not item["value_present"]]
+    return {
+        "ready": not missing,
+        "checks": checks,
+        "missing_keys": missing,
+    }
+
+
+
 def is_payment_configuration_ready() -> bool:
-    return bool(get_bsc_rpc_http_url() and get_payment_token_contract() and get_payment_receiver_address())
+    return bool(get_payment_configuration_status().get("ready"))
 
 
 # ======================================================
