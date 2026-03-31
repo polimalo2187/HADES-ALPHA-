@@ -21,7 +21,9 @@ logger = logging.getLogger(__name__)
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 _DECIMAL_QUANT = Decimal("0.001")
 _DEFAULT_LOG_WINDOW = 250
-_MIN_LOG_WINDOW = 25
+_MIN_LOG_WINDOW = 1
+_APPROX_BSC_BLOCK_SECONDS = 3
+_SEARCH_SAFETY_BLOCKS = 40
 
 
 class VerificationConfigError(RuntimeError):
@@ -60,10 +62,25 @@ def _get_latest_block() -> int:
     return int(_rpc_call("eth_blockNumber", []), 16)
 
 
-def _get_block_timestamp(block_number: int) -> datetime:
+def _get_block(block_number: int) -> Dict[str, Any]:
     block = _rpc_call("eth_getBlockByNumber", [hex(block_number), False])
+    if not isinstance(block, dict) or not block.get("timestamp"):
+        raise RuntimeError(f"No se pudo cargar el bloque {block_number}")
+    return block
+
+
+def _get_block_timestamp(block_number: int) -> datetime:
+    block = _get_block(block_number)
     ts = int(block["timestamp"], 16)
     return datetime.utcfromtimestamp(ts)
+
+
+def _get_block_hash(block_number: int) -> str:
+    block = _get_block(block_number)
+    block_hash = str(block.get("hash") or "")
+    if not block_hash:
+        raise RuntimeError(f"No se pudo resolver el hash del bloque {block_number}")
+    return block_hash
 
 
 def _quantize_amount(value: Decimal) -> Decimal:
@@ -81,6 +98,31 @@ def _is_limit_exceeded_error(exc: Exception) -> bool:
     )
 
 
+def _query_transfer_logs(base_filter: Dict[str, Any], *, from_block: int | None = None, to_block: int | None = None, block_hash: str | None = None) -> list[Dict[str, Any]]:
+    payload = dict(base_filter)
+    if block_hash:
+        payload["blockHash"] = block_hash
+    else:
+        if from_block is None or to_block is None:
+            raise ValueError("from_block y to_block son obligatorios si no se usa block_hash")
+        payload["fromBlock"] = hex(int(from_block))
+        payload["toBlock"] = hex(int(to_block))
+    return _rpc_call("eth_getLogs", [payload]) or []
+
+
+def _estimate_from_block(latest_block: int, created_at: datetime | None, expires_at: datetime | None) -> int:
+    max_lookback = max(int(get_payment_lookback_blocks()), 1)
+    fallback = max(latest_block - max_lookback, 1)
+    if not isinstance(created_at, datetime):
+        return fallback
+
+    upper_bound = expires_at if isinstance(expires_at, datetime) else datetime.utcnow()
+    reference_time = min(datetime.utcnow(), upper_bound)
+    age_seconds = max((reference_time - created_at).total_seconds(), 0.0)
+    estimated_blocks = int(age_seconds / _APPROX_BSC_BLOCK_SECONDS) + _SEARCH_SAFETY_BLOCKS
+    return max(latest_block - min(max_lookback, max(estimated_blocks, _SEARCH_SAFETY_BLOCKS)), 1)
+
+
 def _get_transfer_logs(token_contract: str, receiver_address: str, from_block: int, to_block: int) -> list[Dict[str, Any]]:
     if from_block > to_block:
         return []
@@ -91,34 +133,39 @@ def _get_transfer_logs(token_contract: str, receiver_address: str, from_block: i
     }
     logs: list[Dict[str, Any]] = []
     current_from = int(from_block)
-    initial_window = min(max(_MIN_LOG_WINDOW, _DEFAULT_LOG_WINDOW), max(to_block - from_block + 1, _MIN_LOG_WINDOW))
-    window = initial_window
+    window = min(max(_MIN_LOG_WINDOW, _DEFAULT_LOG_WINDOW), max(to_block - from_block + 1, _MIN_LOG_WINDOW))
 
     while current_from <= to_block:
         current_to = min(current_from + window - 1, to_block)
-        params = [{
-            **base_filter,
-            "fromBlock": hex(current_from),
-            "toBlock": hex(current_to),
-        }]
         try:
-            batch = _rpc_call("eth_getLogs", params) or []
+            batch = _query_transfer_logs(base_filter, from_block=current_from, to_block=current_to)
             logs.extend(batch)
             current_from = current_to + 1
             continue
         except RuntimeError as exc:
             if not _is_limit_exceeded_error(exc):
                 raise
-            if window <= _MIN_LOG_WINDOW:
-                raise
-            next_window = max(window // 2, _MIN_LOG_WINDOW)
+            if window > _MIN_LOG_WINDOW:
+                next_window = max(window // 2, _MIN_LOG_WINDOW)
+                if next_window == window:
+                    next_window = max(window - 1, _MIN_LOG_WINDOW)
+                logger.warning(
+                    "RPC limit exceeded consultando logs BEP20; reduciendo ventana de %s a %s bloques",
+                    window,
+                    next_window,
+                )
+                window = next_window
+                continue
+
             logger.warning(
-                "RPC limit exceeded consultando logs BEP20; reduciendo ventana de %s a %s bloques",
-                window,
-                next_window,
+                "RPC limit exceeded incluso en un solo bloque (%s); reintentando con blockHash",
+                current_from,
             )
-            window = next_window
-            continue
+            block_hash = _get_block_hash(current_from)
+            batch = _query_transfer_logs(base_filter, block_hash=block_hash)
+            logs.extend(batch)
+            current_from += 1
+            window = _MIN_LOG_WINDOW
 
     return logs
 
@@ -133,11 +180,11 @@ def verify_payment(order: Dict[str, Any]) -> Dict[str, Any]:
     min_confirmations = get_payment_min_confirmations()
     token_decimals = get_payment_token_decimals()
     latest_block = _get_latest_block()
-    from_block = max(latest_block - get_payment_lookback_blocks(), 1)
 
     created_at = order.get("created_at") or datetime.utcnow() - timedelta(minutes=60)
     expires_at = order.get("expires_at") or datetime.utcnow() + timedelta(minutes=5)
     expected_amount = _quantize_amount(Decimal(str(order.get("amount_usdt") or "0")))
+    from_block = _estimate_from_block(latest_block, created_at, expires_at)
 
     logs = _get_transfer_logs(token_contract, receiver_address, from_block, latest_block)
 
