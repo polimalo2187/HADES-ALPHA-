@@ -46,6 +46,7 @@ from app.services.admin_runtime_service import (
     list_recent_incidents,
 )
 from app.payment_service import cancel_payment_order, confirm_payment_order, create_payment_order, get_active_payment_order_for_user
+from app.statistics import reset_statistics
 from app.plans import normalize_plan, plan_status
 from app.watchlist import add_symbol, normalize_many, remove_symbol, set_symbols, clear_watchlist
 
@@ -77,6 +78,9 @@ class MiniAppWatchlistReplaceRequest(BaseModel):
     symbols: Optional[list[str]] = None
     raw: Optional[str] = None
 
+
+class MiniAppAdminResetRequest(BaseModel):
+    confirm: bool = False
 
 
 def _resolve_dev_telegram_user(payload: MiniAppAuthRequest) -> Dict[str, Any]:
@@ -507,5 +511,29 @@ def create_mini_app() -> FastAPI:
         payload = list_recent_incidents(limit=limit)
         payload["requested_by"] = int(admin_user.get("user_id") or 0)
         return payload
+
+    @app.post("/api/miniapp/admin/reset-results")
+    async def miniapp_admin_reset_results(
+        payload: MiniAppAdminResetRequest,
+        admin_user: Dict[str, Any] = Depends(get_authenticated_admin_user),
+    ) -> Dict[str, Any]:
+        admin_id = int(admin_user.get("user_id") or 0)
+        if not payload.confirm:
+            raise HTTPException(status_code=400, detail="confirm_required")
+        summary = reset_statistics(preserve_signals=False)
+        record_audit_event(
+            event_type="miniapp_admin_results_reset",
+            status="warning",
+            module="miniapp_admin",
+            user_id=admin_id,
+            admin_id=admin_id,
+            message="miniapp_admin_results_reset",
+            metadata=_sanitize_json_payload(summary),
+        )
+        return {
+            "ok": True,
+            "requested_by": admin_id,
+            "summary": _sanitize_json_payload(summary),
+        }
 
     return app
