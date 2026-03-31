@@ -16,6 +16,7 @@ from app.referrals import get_referral_link, get_referral_reward_rules, get_user
 from app.plans import get_plan_catalog, get_plan_name, normalize_plan, plan_status
 from app.statistics import get_performance_snapshot
 from app.user_service import get_or_create_user
+from app.models import utcnow
 from app.watchlist import get_watchlist, get_watchlist_limit_for_plan
 from app.signals import get_signal_analysis_for_user, get_signal_tracking_for_user
 
