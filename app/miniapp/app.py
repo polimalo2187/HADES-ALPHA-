@@ -22,6 +22,7 @@ from app.database import initialize_database
 from app.miniapp.auth import MiniAppAuthError, issue_session_token, parse_session_token, validate_telegram_init_data
 from app.miniapp.service import (
     build_bootstrap_payload,
+    build_account_center_payload,
     build_dashboard_payload,
     build_history_payload,
     build_market_payload,
@@ -310,6 +311,10 @@ def create_mini_app() -> FastAPI:
     @app.get("/api/miniapp/dashboard")
     async def miniapp_dashboard(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
         return build_dashboard_payload(user)
+
+    @app.get("/api/miniapp/account")
+    async def miniapp_account(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
+        return build_account_center_payload(user)
 
     @app.get("/api/miniapp/signals")
     async def miniapp_signals(limit: int = 20, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
