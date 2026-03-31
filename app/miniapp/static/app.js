@@ -20,6 +20,7 @@ const state = {
   payload: null,
   currentView: 'home',
   signalDetail: null,
+  radarDetail: null,
   radarView: { ...DEFAULT_RADAR_VIEW },
 };
 
@@ -974,6 +975,7 @@ function renderMarket() {
                 <span>Volatilidad: ${escapeHtml(item.volatility_label || '—')}</span>
               </div>
               <div class="action-row compact watchlist-card-actions radar-card-actions">
+                <button class="button button-secondary" data-radar-detail="${escapeHtml(item.symbol)}">Radar táctico</button>
                 ${item.latest_signal?.signal_id ? `<button class="button button-secondary" data-signal-detail="${escapeHtml(item.latest_signal.signal_id)}" data-signal-source="radar">Ver inteligencia</button>` : ''}
                 ${inWatchlist
                   ? `<button class="button button-secondary" disabled>En watchlist</button>`
@@ -1204,6 +1206,131 @@ function renderScoreBreakdown(items) {
   `).join('')}</div>`;
 }
 
+function renderRadarDetailModal(payload) {
+  const radar = payload?.radar || {};
+  const scanner = payload?.scanner || {};
+  const signalContext = payload?.signal_context || {};
+  const marketContext = payload?.market_context || {};
+  const tacticalChecks = payload?.tactical_checks || [];
+  const profiles = scanner.profiles || [];
+  const components = scanner.components || [];
+
+  els.signalDetailTitle.textContent = `${radar.symbol || payload?.symbol || 'Radar'} · táctica`;
+  els.signalDetailBody.innerHTML = `
+    <div class="signal-intel-layout">
+      <div class="card detail-status-card">
+        <div class="detail-status-top">
+          <div class="detail-status-copy-block">
+            <span class="detail-kicker">Radar táctico</span>
+            <div class="item-title">${escapeHtml(radar.execution_state_label || 'Observación')} · ${escapeHtml(radar.direction || '—')}</div>
+            <div class="item-subtitle">${escapeHtml(radar.operator_note || radar.action_label || 'Sin lectura táctica disponible')}</div>
+          </div>
+          <span class="radar-score-chip">Radar ${escapeHtml(formatNumber(radar.final_score, 0))}</span>
+        </div>
+        <p class="detail-status-copy">${escapeHtml(marketContext.recommendation || 'Sin recomendación general de mercado.')}</p>
+      </div>
+
+      <div class="detail-info-grid">
+        ${detailInfoChip('Sesgo', marketContext.bias || '—')}
+        ${detailInfoChip('Lado', marketContext.preferred_side || '—')}
+        ${detailInfoChip('Régimen', marketContext.regime || '—')}
+        ${detailInfoChip('Setup', radar.setup_mode_label || '—')}
+        ${detailInfoChip('Alineación', radar.alignment_label || '—')}
+        ${detailInfoChip('Riesgo', radar.risk_label || '—')}
+      </div>
+
+      <div class="pill-row compact-pill-row">
+        <span class="watchlist-priority-pill ${radarExecutionClass(radar.execution_state_label)}">${escapeHtml(radar.execution_state_label || 'Observación')}</span>
+        <span class="watchlist-priority-pill ${watchlistPriorityClass(radar.priority_label)}">Prioridad ${escapeHtml(radar.priority_label || '—')}</span>
+        <span class="watchlist-priority-pill ${watchlistProximityClass(radar.proximity_label)}">Proximidad ${escapeHtml(radar.proximity_label || '—')}</span>
+        <span class="watchlist-priority-pill ${radarAlignmentClass(radar.alignment_label)}">${escapeHtml(radar.alignment_label || 'Selectivo')}</span>
+        <span class="watchlist-priority-pill ${radarRiskClass(radar.risk_label)}">Riesgo ${escapeHtml(radar.risk_label || '—')}</span>
+      </div>
+
+      <div class="detail-stat-grid">
+        ${detailStatCard('Ranking', formatNumber(radar.ranking_score, 1))}
+        ${detailStatCard('Precio', formatNumber(radar.last_price, 4), sideClassByValue(radar.change_pct || 0))}
+        ${detailStatCard('Cambio 24h', formatPercentSigned(radar.change_pct, 2), sideClassByValue(radar.change_pct || 0))}
+        ${detailStatCard('Funding', formatPercentSigned(radar.funding_rate_pct, 3), sideClassByValue(radar.funding_rate_pct || 0))}
+        ${detailStatCard('Open interest', formatCompactAmount(radar.open_interest))}
+        ${detailStatCard('Volumen', formatCompactAmount(radar.quote_volume))}
+        ${detailStatCard('Posición rango', watchlistRangePosition(radar.range_position_pct))}
+        ${detailStatCard('Ventana', radar.window_label || '—')}
+        ${detailStatCard('Convicción', radar.conviction_label || '—')}
+        ${detailStatCard('Contexto señal', radar.signal_context_label || '—')}
+      </div>
+
+      <div class="card signal-intel-section signal-intel-section-full">
+        <h3>Plan táctico</h3>
+        <div class="radar-plan-list">
+          ${(radar.trade_plan || []).map(step => `<div class="radar-plan-item">${escapeHtml(step)}</div>`).join('')}
+        </div>
+        ${tacticalChecks.length ? `<div class="feature-list radar-check-list">${tacticalChecks.map(item => `<div class="feature-item">• ${escapeHtml(item)}</div>`).join('')}</div>` : ''}
+      </div>
+
+      <div class="card signal-intel-section signal-intel-section-full">
+        <h3>Scanner / setup</h3>
+        <div class="pill-row compact-pill-row">
+          <span class="pill">Estado: ${escapeHtml(scanner.label || '—')}</span>
+          ${scanner.direction ? `<span class="pill">Dirección: ${escapeHtml(scanner.direction)}</span>` : ''}
+          ${scanner.setup_group ? `<span class="pill">Setup: ${escapeHtml(String(scanner.setup_group).toUpperCase())}</span>` : ''}
+          ${scanner.score !== undefined && scanner.score !== null ? `<span class="pill">Score: ${escapeHtml(formatNumber(scanner.score, 1))}</span>` : ''}
+          ${scanner.atr_pct !== undefined && scanner.atr_pct !== null ? `<span class="pill">ATR: ${escapeHtml(formatFractionPercent(scanner.atr_pct))}</span>` : ''}
+          ${scanner.direction_alignment === true ? `<span class="pill watchlist-pill-active">Alineado con radar</span>` : ''}
+          ${scanner.direction_alignment === false ? `<span class="pill watchlist-pill-soft">Dirección distinta al radar</span>` : ''}
+        </div>
+        <p class="detail-status-copy">${escapeHtml(scanner.summary || 'Sin lectura del scanner por ahora.')}</p>
+        <div class="inline-meta">
+          ${scanner.score_profile ? `<span>Perfil score: ${escapeHtml(String(scanner.score_profile).toUpperCase())}</span>` : ''}
+          ${scanner.score_calibration ? `<span>Calibración: ${escapeHtml(String(scanner.score_calibration))}</span>` : ''}
+          ${scanner.timeframes?.length ? `<span>TF: ${escapeHtml(scanner.timeframes.join(' / '))}</span>` : ''}
+          ${scanner.strongest_component ? `<span>Más fuerte: ${escapeHtml(scanner.strongest_component.label)} (${escapeHtml(formatNumber(scanner.strongest_component.score, 2))})</span>` : ''}
+          ${scanner.weakest_component ? `<span>Más débil: ${escapeHtml(scanner.weakest_component.label)} (${escapeHtml(formatNumber(scanner.weakest_component.score, 2))})</span>` : ''}
+        </div>
+        ${profiles.length ? `
+          <div class="detail-stat-grid radar-profile-grid">
+            ${profiles.map(profile => detailStatCard(
+              `${profile.label} · SL ${formatNumber(profile.stop_loss, 4)}`,
+              `TP1 ${formatNumber(profile.tp1, 4)} · TP2 ${formatNumber(profile.tp2, 4)}`,
+              '')) .join('')}
+          </div>
+        ` : ''}
+        ${components.length ? renderScoreBreakdown(components) : '<div class="empty-state">Sin desglose de setup en este momento.</div>'}
+      </div>
+
+      <div class="card signal-intel-section signal-intel-section-full">
+        <h3>Conexión con señales</h3>
+        <div class="pill-row compact-pill-row">
+          <span class="pill">Contexto: ${escapeHtml(signalContext.label || radar.signal_context_label || 'Sin señal')}</span>
+          ${signalContext.signal?.visibility_name || signalContext.signal?.visibility ? `<span class="pill">Tier: ${escapeHtml(String(signalContext.signal?.visibility_name || signalContext.signal?.visibility).toUpperCase())}</span>` : ''}
+          ${signalContext.signal?.score !== undefined && signalContext.signal?.score !== null ? `<span class="pill">Score señal: ${escapeHtml(formatNumber(signalContext.signal.score, 1))}</span>` : ''}
+        </div>
+        <p class="detail-status-copy">${escapeHtml(signalContext.signal ? watchlistSignalSummary(signalContext.signal) : 'Todavía no tienes una señal reciente enlazada a este activo.')}</p>
+        <div class="action-row compact radar-card-actions">
+          ${signalContext.signal_detail_available ? `<button class="button button-secondary" data-radar-open-signal="${escapeHtml(signalContext.signal_id || '')}">Ver inteligencia de la señal</button>` : ''}
+          ${radar.symbol ? `<button class="button button-primary" data-radar-follow="${escapeHtml(radar.symbol)}">Seguir símbolo</button>` : ''}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function openRadarDetail(symbol) {
+  if (!symbol) return;
+  els.signalDetailModal.classList.remove('hidden');
+  els.signalDetailModal.setAttribute('aria-hidden', 'false');
+  els.signalDetailTitle.textContent = 'Radar táctico';
+  els.signalDetailBody.innerHTML = '<div class="loading-inline">Cargando drill-down táctico del radar...</div>';
+  try {
+    const payload = await api(`/api/miniapp/radar/${encodeURIComponent(symbol)}`);
+    state.radarDetail = payload;
+    renderRadarDetailModal(payload);
+    bindViewButtons();
+  } catch (error) {
+    els.signalDetailBody.innerHTML = `<div class="error-banner">${escapeHtml(error.message || 'No se pudo cargar el radar táctico.')}</div>`;
+  }
+}
+
 function closeSignalDetailModal() {
   if (!els.signalDetailModal) return;
   els.signalDetailModal.classList.add('hidden');
@@ -1405,6 +1532,12 @@ function bindViewButtons() {
   });
   document.querySelectorAll('[data-signal-detail]').forEach(button => {
     button.onclick = () => openSignalDetail(button.dataset.signalDetail, 'moderado');
+  });
+  document.querySelectorAll('[data-radar-detail]').forEach(button => {
+    button.onclick = () => openRadarDetail(button.dataset.radarDetail);
+  });
+  document.querySelectorAll('[data-radar-open-signal]').forEach(button => {
+    button.onclick = () => openSignalDetail(button.dataset.radarOpenSignal, 'moderado');
   });
   document.querySelectorAll('[data-signal-profile]').forEach(button => {
     button.onclick = () => openSignalDetail(button.dataset.signalId, button.dataset.signalProfile);
