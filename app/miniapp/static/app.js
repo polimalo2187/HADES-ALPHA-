@@ -23,6 +23,13 @@ const state = {
   radarDetail: null,
   radarView: { ...DEFAULT_RADAR_VIEW },
   accountNotice: null,
+  adminPanel: {
+    overview: null,
+    loading: false,
+    notice: null,
+    confirmReset: false,
+    lastResetSummary: null,
+  },
 };
 
 const els = {
@@ -37,6 +44,7 @@ const els = {
   market: document.getElementById('view-market'),
   history: document.getElementById('view-history'),
   account: document.getElementById('view-account'),
+  admin: document.getElementById('view-admin'),
   signalDetailModal: document.getElementById('signalDetailModal'),
   signalDetailTitle: document.getElementById('signalDetailTitle'),
   signalDetailBody: document.getElementById('signalDetailBody'),
@@ -49,6 +57,7 @@ const labels = {
   market: 'Mercado',
   history: 'Historial',
   account: 'Cuenta',
+  admin: 'Panel admin',
 };
 
 function escapeHtml(value) {
@@ -541,6 +550,175 @@ function setTopSummary() {
   const me = state.payload?.me || {};
   els.planBadge.textContent = String(me.plan_name || 'FREE').toUpperCase();
   els.daysBadge.textContent = `${Number(me.days_left || 0)} días`;
+}
+
+function setAdminNotice(message, tone = 'warning') {
+  const normalized = String(message || '').trim();
+  state.adminPanel.notice = normalized ? { message: normalized, tone: String(tone || 'warning') } : null;
+}
+
+function adminNoticeCard(notice) {
+  if (!notice?.message) return '';
+  const toneClass = billingToneClass(notice.tone);
+  return `
+    <div class="card payment-focus-panel card-span-12 ${toneClass}">
+      <div class="payment-focus-card ${toneClass}">
+        <div class="payment-focus-copy">
+          <div class="payment-focus-kicker">Admin</div>
+          <div class="payment-focus-title">Estado operativo</div>
+          <div class="payment-focus-message">${escapeHtml(notice.message)}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function adminOverviewMetricCard(label, value, subtitle = '', toneClass = '') {
+  return metricCard(label, value, subtitle, '', toneClass);
+}
+
+function adminSummaryLine(label, value) {
+  return `
+    <div class="feature-item">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(String(value ?? '—'))}</strong>
+    </div>
+  `;
+}
+
+function adminResetSummaryCard(summary) {
+  if (!summary) return '';
+  return `
+    <div class="card card-span-12">
+      <h2>Último reset ejecutado</h2>
+      <div class="feature-list">
+        ${adminSummaryLine('Modo', summary.mode || 'full_reset')}
+        ${adminSummaryLine('Señales base borradas', summary.deleted_base_signals ?? 0)}
+        ${adminSummaryLine('Señales usuario borradas', summary.deleted_user_signals ?? 0)}
+        ${adminSummaryLine('Resultados borrados', summary.deleted_results ?? 0)}
+        ${adminSummaryLine('Histórico borrado', summary.deleted_history ?? 0)}
+        ${adminSummaryLine('Snapshots borrados', summary.deleted_snapshots ?? 0)}
+      </div>
+    </div>
+  `;
+}
+
+async function refreshAdminOverview(force = false) {
+  if (!state.payload?.me?.is_admin) return null;
+  if (state.adminPanel.loading) return state.adminPanel.overview;
+  if (!force && state.adminPanel.overview) return state.adminPanel.overview;
+  state.adminPanel.loading = true;
+  renderAdmin();
+  try {
+    const overview = await api('/api/miniapp/admin/overview');
+    state.adminPanel.overview = overview;
+    if (!state.adminPanel.notice) {
+      setAdminNotice('Panel admin listo. Desde aquí vivirán las herramientas operativas sensibles de la MiniApp.', 'accent');
+    }
+    return overview;
+  } catch (error) {
+    setAdminNotice(`No se pudo cargar el panel admin: ${error.message || 'error'}`, 'warning');
+    throw error;
+  } finally {
+    state.adminPanel.loading = false;
+    renderAdmin();
+    bindViewButtons();
+  }
+}
+
+async function openAdminPanel(force = false) {
+  if (!state.payload?.me?.is_admin) {
+    tg?.showAlert('Solo los administradores pueden abrir este panel.');
+    return;
+  }
+  setView('admin');
+  renderAdmin();
+  bindViewButtons();
+  try {
+    await refreshAdminOverview(force);
+  } catch (_) {}
+}
+
+function renderAdmin() {
+  const me = state.payload?.me || {};
+  if (!els.admin) return;
+  if (!me.is_admin) {
+    els.admin.innerHTML = `
+      <div class="section-grid">
+        <div class="card card-span-12">
+          <h2>Acceso restringido</h2>
+          <div class="empty-state">Este panel solo está disponible para administradores autorizados.</div>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  const overview = state.adminPanel.overview || {};
+  const runtime = overview.runtime || {};
+  const users = overview.users || {};
+  const signals = overview.signals || {};
+  const payments = overview.payments || {};
+  const audit = overview.audit || {};
+  const loadingBanner = state.adminPanel.loading
+    ? '<div class="card card-span-12"><div class="loading-inline">Actualizando panel admin...</div></div>'
+    : '';
+  const confirmBlock = state.adminPanel.confirmReset
+    ? `
+      <div class="notice-list" style="margin-top:12px;">
+        <div class="notice-item">Esta acción borrará señales base, señales de usuario, resultados, histórico y snapshots activos.</div>
+        <div class="notice-item">Úsalo solo cuando cambies la estrategia y quieras reiniciar la credibilidad estadística desde cero.</div>
+      </div>
+      <div class="action-row" style="margin-top:12px;">
+        <button class="button button-danger" data-admin-reset-confirm="true">Confirmar reset</button>
+        <button class="button button-secondary" data-admin-reset-cancel="true">Cancelar</button>
+      </div>
+    `
+    : '<div class="action-row" style="margin-top:12px;"><button class="button button-danger" data-admin-reset-request="true">Resetear resultados</button></div>';
+
+  els.admin.innerHTML = `
+    <div class="section-grid">
+      ${adminNoticeCard(state.adminPanel.notice)}
+      ${loadingBanner}
+      <div class="card card-span-12">
+        <div class="item-header">
+          <div>
+            <h2 style="margin:0;">Panel admin</h2>
+            <div class="item-subtitle">Base operativa exclusiva para administradores. Aquí crecerá el control interno de la plataforma.</div>
+          </div>
+          <span class="plan-tag">ADMIN</span>
+        </div>
+        <div class="action-row compact">
+          <button class="button button-secondary" data-goto="account">Volver a cuenta</button>
+          <button class="button button-secondary" data-admin-refresh="true">Refrescar panel</button>
+        </div>
+      </div>
+
+      ${adminOverviewMetricCard('Runtime', runtime.overall_status || '—', runtime.ok ? 'Estado general' : 'Revisar salud', runtime.ok ? 'is-positive' : 'is-warning')}
+      ${adminOverviewMetricCard('Usuarios', formatInteger(users.total || 0), `${formatInteger(users.active_paid || 0)} pagos · ${formatInteger(users.banned || 0)} bloqueados`)}
+      ${adminOverviewMetricCard('Señales 24h', formatInteger(signals.created_last_24h || 0), `${formatInteger(signals.pending_evaluation || 0)} pendientes`)}
+      ${adminOverviewMetricCard('Pagos', payments.configuration_ready ? 'Configurado' : 'Incompleto', `${formatInteger(payments.pending_orders || 0)} pendientes · ${formatInteger(payments.awaiting_confirmation || 0)} por confirmar`, payments.configuration_ready ? 'is-positive' : 'is-warning')}
+
+      <div class="card card-span-12">
+        <h2>Reset de resultados</h2>
+        <p>Herramienta administrativa para reiniciar estadísticas, histórico y señales acumuladas cuando cambie la estrategia y necesites comenzar desde cero.</p>
+        ${confirmBlock}
+      </div>
+
+      ${adminResetSummaryCard(state.adminPanel.lastResetSummary)}
+
+      <div class="card card-span-12">
+        <h2>Resumen operativo</h2>
+        <div class="feature-list">
+          ${adminSummaryLine('Errores 24h', audit.errors_last_24h ?? 0)}
+          ${adminSummaryLine('Warnings 24h', audit.warnings_last_24h ?? 0)}
+          ${adminSummaryLine('Órdenes pendientes', payments.pending_orders ?? 0)}
+          ${adminSummaryLine('Órdenes esperando confirmación', payments.awaiting_confirmation ?? 0)}
+          ${adminSummaryLine('Pagos últimas 24h', payments.paid_last_24h ?? 0)}
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function metricCard(label, value, subtitle = '', extraClass = '', toneClass = '') {
@@ -1844,6 +2022,20 @@ function renderAccount() {
         ${rewardRules.length ? `<div class="feature-list" style="margin-top:12px;">${rewardRules.map(rule => `<div class="feature-item">• ${escapeHtml(rule)}</div>`).join('')}</div>` : '<div class="empty-state">Sin reglas de recompensa disponibles.</div>'}
       </div>
 
+      ${me.is_admin ? `
+      <div class="card card-span-12">
+        <div class="item-header">
+          <div>
+            <h2 style="margin:0;">Administración</h2>
+            <div class="item-subtitle">Acceso exclusivo para admins. Aquí vive el panel operativo y el reset con confirmación.</div>
+          </div>
+          <span class="plan-tag">ADMIN</span>
+        </div>
+        <div class="action-row">
+          <button class="button button-secondary" data-open-admin-panel="true">Abrir panel admin</button>
+        </div>
+      </div>` : ''}
+
       ${billingFocusCard(billingFocus, billing)}
       ${paymentConfigDiagnosticsCard(billing)}
 
@@ -1901,6 +2093,7 @@ function renderAll() {
   renderMarket();
   renderHistory();
   renderAccount();
+  renderAdmin();
   bindViewButtons();
   els.loading.classList.add('hidden');
   els.content.classList.remove('hidden');
@@ -1984,6 +2177,70 @@ function bindViewButtons() {
           setAccountNotice(paymentReasonMessage(error.message, error.message || 'No se pudo refrescar la cuenta.'), 'warning');
           renderAccount();
           bindViewButtons();
+        }
+      }
+    };
+  });
+  document.querySelectorAll('[data-open-admin-panel]').forEach(button => {
+    button.onclick = () => openAdminPanel(false);
+  });
+  document.querySelectorAll('[data-admin-refresh]').forEach(button => {
+    button.onclick = async () => {
+      setAdminNotice('Actualizando panel admin...', 'accent');
+      renderAdmin();
+      bindViewButtons();
+      try {
+        await refreshAdminOverview(true);
+        setAdminNotice('Panel admin actualizado correctamente.', 'positive');
+      } catch (_) {}
+    };
+  });
+  document.querySelectorAll('[data-admin-reset-request]').forEach(button => {
+    button.onclick = () => {
+      state.adminPanel.confirmReset = true;
+      setAdminNotice('Confirma el reset antes de ejecutar la limpieza total de resultados.', 'warning');
+      renderAdmin();
+      bindViewButtons();
+    };
+  });
+  document.querySelectorAll('[data-admin-reset-cancel]').forEach(button => {
+    button.onclick = () => {
+      state.adminPanel.confirmReset = false;
+      setAdminNotice('Reset cancelado. No se tocó ningún dato.', 'neutral');
+      renderAdmin();
+      bindViewButtons();
+    };
+  });
+  document.querySelectorAll('[data-admin-reset-confirm]').forEach(button => {
+    button.onclick = async () => {
+      if (button.disabled) return;
+      const original = button.textContent;
+      button.disabled = true;
+      button.textContent = 'Reseteando...';
+      try {
+        setAdminNotice('Ejecutando reset total de resultados...', 'accent');
+        renderAdmin();
+        bindViewButtons();
+        const result = await api('/api/miniapp/admin/reset-results', {
+          method: 'POST',
+          body: JSON.stringify({ confirm: true }),
+        });
+        state.adminPanel.confirmReset = false;
+        state.adminPanel.lastResetSummary = result.summary || null;
+        state.adminPanel.overview = null;
+        setAdminNotice('Reset ejecutado correctamente. El histórico y las estadísticas activas arrancan desde cero.', 'positive');
+        await Promise.allSettled([refreshAccountState(), refreshAdminOverview(true)]);
+        renderAll();
+        setView('admin');
+      } catch (error) {
+        setAdminNotice(`No se pudo ejecutar el reset: ${error.message || 'error'}`, 'warning');
+        renderAdmin();
+        bindViewButtons();
+        tg?.showAlert(`No se pudo ejecutar el reset: ${error.message || 'error'}`);
+      } finally {
+        if (button.isConnected) {
+          button.disabled = false;
+          button.textContent = original;
         }
       }
     };
