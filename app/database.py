@@ -221,7 +221,12 @@ COLLECTION_INDEX_MODELS = {
         IndexModel([("order_id", ASCENDING)], name="order_id_unique", unique=True),
         IndexModel([("user_id", ASCENDING), ("status", ASCENDING), ("created_at", DESCENDING)], name="user_status_created_idx"),
         IndexModel([("status", ASCENDING), ("expires_at", ASCENDING)], name="status_expires_idx"),
-        IndexModel([("matched_tx_hash", ASCENDING)], name="matched_tx_hash_unique", unique=True, sparse=True),
+        IndexModel(
+            [("matched_tx_hash", ASCENDING)],
+            name="matched_tx_hash_unique",
+            unique=True,
+            partialFilterExpression={"matched_tx_hash": {"$type": "string"}},
+        ),
         IndexModel([("schema_version", ASCENDING)], name="schema_version_idx"),
     ],
     "payment_verification_logs": [
@@ -287,6 +292,51 @@ def _find_duplicate_groups(collection_name: str, fields: Sequence[str], limit: i
 
 
 
+
+
+def _reconcile_payment_orders_tx_hash_index() -> None:
+    """Corrige el índice único de tx_hash para no bloquear órdenes sin pago asociado."""
+    collection = payment_orders_collection()
+    index_name = "matched_tx_hash_unique"
+    desired_partial = {"matched_tx_hash": {"$type": "string"}}
+
+    try:
+        existing_indexes = {item.get("name"): item for item in collection.list_indexes()}
+    except PyMongoError as exc:
+        logger.error("❌ No se pudieron leer índices de payment_orders: %s", exc, exc_info=True)
+        return
+
+    existing = existing_indexes.get(index_name)
+    if not existing:
+        return
+
+    current_partial = existing.get("partialFilterExpression")
+    current_sparse = bool(existing.get("sparse"))
+    current_unique = bool(existing.get("unique"))
+    if current_unique and current_partial == desired_partial and not current_sparse:
+        return
+
+    try:
+        cleanup_result = collection.update_many({"matched_tx_hash": None}, {"$unset": {"matched_tx_hash": ""}})
+        if int(cleanup_result.modified_count or 0):
+            logger.warning(
+                "⚠️ payment_orders: se limpiaron %s órdenes con matched_tx_hash=None antes de recrear índice",
+                cleanup_result.modified_count,
+            )
+    except PyMongoError as exc:
+        logger.error("❌ No se pudo limpiar matched_tx_hash nulo en payment_orders: %s", exc, exc_info=True)
+        return
+
+    try:
+        collection.drop_index(index_name)
+        logger.warning("⚠️ Índice legacy %s eliminado en payment_orders para recreación segura", index_name)
+    except OperationFailure as exc:
+        logger.error("❌ No se pudo eliminar índice legacy %s: %s", index_name, exc, exc_info=True)
+        return
+    except PyMongoError as exc:
+        logger.error("❌ Error Mongo eliminando índice legacy %s: %s", index_name, exc, exc_info=True)
+        return
+
 def _safe_create_indexes(collection_name: str, models: Iterable[IndexModel]) -> None:
     collection = COLLECTION_GETTERS[collection_name]()
     for model in models:
@@ -338,6 +388,8 @@ def initialize_database() -> None:
     global _indexes_initialized
     if _indexes_initialized:
         return
+
+    _reconcile_payment_orders_tx_hash_index()
 
     for collection_name, index_models in COLLECTION_INDEX_MODELS.items():
         _safe_create_indexes(collection_name, index_models)
