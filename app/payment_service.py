@@ -10,6 +10,7 @@ from pymongo import ReturnDocument
 
 from app.bep20_verifier import VerificationConfigError, verify_payment
 from app.config import (
+    get_payment_configuration_status,
     get_payment_network,
     get_payment_order_ttl_minutes,
     get_payment_receiver_address,
@@ -175,6 +176,12 @@ def create_payment_order(user_id: int, plan: str, days: int) -> Dict[str, Any]:
     user_id = int(user_id)
     if user_id <= 0:
         raise ValueError("user_id inválido")
+
+    payment_config = get_payment_configuration_status()
+    if not payment_config.get("ready"):
+        missing = ", ".join(str(item) for item in (payment_config.get("missing_keys") or []) if item)
+        raise RuntimeError(f"Configuración de pagos incompleta: {missing or 'payment_config_missing'}")
+
     plan, days = validate_plan_duration(plan, days)
     base_price = get_plan_price(plan, days)
     if base_price <= 0:
