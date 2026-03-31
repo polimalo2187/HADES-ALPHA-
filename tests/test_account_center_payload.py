@@ -86,7 +86,7 @@ class AccountCenterPayloadTests(unittest.TestCase):
              patch('app.miniapp.service.get_referral_link', return_value='https://t.me/HADES_ALPHA_bot?start=ref_42'), \
              patch('app.miniapp.service._load_recent_referral_rewards', return_value=referral_rewards), \
              patch('app.miniapp.service._load_recent_subscription_events', return_value=timeline), \
-             patch('app.miniapp.service.is_payment_configuration_ready', return_value=True), \
+             patch('app.miniapp.service.get_payment_configuration_status', return_value={'ready': True, 'checks': [{'key': 'BSC_RPC_HTTP_URL', 'label': 'RPC BSC', 'value_present': True}, {'key': 'PAYMENT_TOKEN_CONTRACT', 'label': 'Contrato del token', 'value_present': True}, {'key': 'PAYMENT_RECEIVER_ADDRESS', 'label': 'Wallet receptora', 'value_present': True}], 'missing_keys': []}), \
              patch('app.miniapp.service.plan_status', return_value={'plan': 'premium', 'status': 'active', 'expires': None, 'days_left': 12}):
             payload = build_account_center_payload(user)
 
@@ -104,6 +104,8 @@ class AccountCenterPayloadTests(unittest.TestCase):
         self.assertEqual(payload['timeline'][0]['event_label'], 'Compra aplicada')
         self.assertIn('Únete a HADES Alpha', payload['referrals']['share_text'])
         self.assertIn('premium', payload['plans'])
+        self.assertEqual(payload['billing']['payment_config_status']['missing_keys'], [])
+        self.assertIn('30 días comprados → 15 días de recompensa', payload['referrals']['reward_rules'])
 
     def test_bootstrap_payload_embeds_account_center(self):
         user = {'user_id': 7, 'plan': 'free', 'subscription_status': 'trial', 'username': 'dev', 'language': 'es'}
@@ -131,13 +133,16 @@ class AccountCenterPayloadTests(unittest.TestCase):
             'subscription_status': 'free',
             'ref_code': 'ref_77',
         }
-        with patch('app.miniapp.service.build_watchlist_context', return_value={'meta': {'symbols': [], 'symbols_count': 0, 'max_symbols': 2, 'slots_left': 2, 'plan': 'free', 'plan_name': 'FREE', 'can_add_more': True}}),              patch('app.miniapp.service.get_active_payment_order_for_user', return_value=None),              patch('app.miniapp.service._load_recent_payment_orders', return_value=[]),              patch('app.miniapp.service._load_payment_order_summary', return_value={'open': 0, 'completed': 0, 'expired': 0, 'cancelled': 0, 'total': 0}),              patch('app.miniapp.service.get_user_referral_stats', return_value={}),              patch('app.miniapp.service.get_referral_link', return_value='https://t.me/HADES_ALPHA_bot?start=ref_77'),              patch('app.miniapp.service._load_recent_referral_rewards', return_value=[]),              patch('app.miniapp.service._load_recent_subscription_events', return_value=[]),              patch('app.miniapp.service.is_payment_configuration_ready', return_value=False),              patch('app.miniapp.service.plan_status', return_value={'plan': 'free', 'status': 'free', 'expires': None, 'days_left': 0}):
+        with patch('app.miniapp.service.build_watchlist_context', return_value={'meta': {'symbols': [], 'symbols_count': 0, 'max_symbols': 2, 'slots_left': 2, 'plan': 'free', 'plan_name': 'FREE', 'can_add_more': True}}),              patch('app.miniapp.service.get_active_payment_order_for_user', return_value=None),              patch('app.miniapp.service._load_recent_payment_orders', return_value=[]),              patch('app.miniapp.service._load_payment_order_summary', return_value={'open': 0, 'completed': 0, 'expired': 0, 'cancelled': 0, 'total': 0}),              patch('app.miniapp.service.get_user_referral_stats', return_value={}),              patch('app.miniapp.service.get_referral_link', return_value='https://t.me/HADES_ALPHA_bot?start=ref_77'),              patch('app.miniapp.service._load_recent_referral_rewards', return_value=[]),              patch('app.miniapp.service._load_recent_subscription_events', return_value=[]),              patch('app.miniapp.service.get_payment_configuration_status', return_value={'ready': False, 'checks': [{'key': 'BSC_RPC_HTTP_URL', 'label': 'RPC BSC', 'value_present': False}], 'missing_keys': ['BSC_RPC_HTTP_URL']}),              patch('app.miniapp.service.plan_status', return_value={'plan': 'free', 'status': 'free', 'expires': None, 'days_left': 0}):
             payload = build_account_center_payload(user)
 
         self.assertFalse(payload['billing']['payment_config_ready'])
         self.assertEqual(payload['billing']['focus']['state'], 'config_missing')
         self.assertFalse(payload['billing']['focus']['can_create_order'])
         self.assertEqual(payload['billing']['focus']['primary_cta'], 'Soporte')
+        self.assertEqual(payload['billing']['payment_config_status']['missing_keys'], ['BSC_RPC_HTTP_URL'])
+        self.assertEqual(payload['billing']['focus']['missing_keys'], ['BSC_RPC_HTTP_URL'])
+        self.assertTrue(payload['referrals']['reward_rules'])
 
     def test_bootstrap_account_fallback_reuses_me_watchlist_and_plans(self):
         user = {
@@ -180,6 +185,8 @@ class AccountCenterPayloadTests(unittest.TestCase):
         self.assertIsNone(payload['account']['overview']['watchlist_limit'])
         self.assertEqual(payload['account']['subscription']['watchlist']['plan'], 'premium')
         self.assertEqual(len(payload['account']['plans']['premium']), 1)
+        self.assertTrue(payload['account']['referrals']['reward_rules'])
+        self.assertIn('PAYMENT_RECEIVER_ADDRESS', payload['account']['billing']['payment_config_status']['missing_keys'])
 
 
 if __name__ == '__main__':
