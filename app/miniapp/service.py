@@ -7,12 +7,12 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from app.binance_api import get_futures_24h_tickers, get_open_interest, get_premium_index, get_radar_opportunities
 from app.services.market_data_service import get_funding_rate_pct_map, get_open_interest_map
-from app.config import get_payment_min_confirmations, is_payment_configuration_ready
+from app.config import get_payment_configuration_status, get_payment_min_confirmations
 from app.database import payment_orders_collection, subscription_events_collection, users_collection, user_signals_collection, watchlists_collection
 from app.history_service import get_history_entries_for_user
 from app.market import get_market_state_snapshot
 from app.payment_service import get_active_payment_order_for_user
-from app.referrals import get_referral_link, get_user_referral_stats
+from app.referrals import get_referral_link, get_referral_reward_rules, get_user_referral_stats
 from app.plans import get_plan_catalog, get_plan_name, normalize_plan, plan_status
 from app.statistics import get_performance_snapshot
 from app.user_service import get_or_create_user
@@ -120,7 +120,7 @@ def _billing_steps_for_order(order: Optional[Dict[str, Any]]) -> List[Dict[str, 
     return steps
 
 
-def _build_billing_focus(*, payment_config_ready: bool, active_order: Optional[Dict[str, Any]], billing_summary: Dict[str, Any], subscription: Dict[str, Any]) -> Dict[str, Any]:
+def _build_billing_focus(*, payment_config_ready: bool, active_order: Optional[Dict[str, Any]], billing_summary: Dict[str, Any], subscription: Dict[str, Any], payment_config_status: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     required_confirmations = int(get_payment_min_confirmations() or 3)
     base = {
         "state": "idle",
@@ -135,6 +135,14 @@ def _build_billing_focus(*, payment_config_ready: bool, active_order: Optional[D
         "hint": None,
     }
     if not payment_config_ready:
+        status = payment_config_status or get_payment_configuration_status()
+        checks = list(status.get("checks") or [])
+        missing_keys = [str(item) for item in (status.get("missing_keys") or []) if item]
+        missing_labels = [
+            str(item.get("label") or item.get("key") or "").strip()
+            for item in checks
+            if not item.get("value_present")
+        ]
         base.update({
             "state": "config_missing",
             "tone": "warning",
@@ -144,6 +152,9 @@ def _build_billing_focus(*, payment_config_ready: bool, active_order: Optional[D
             "can_create_order": False,
             "primary_cta": "Soporte",
             "hint": "Revisa wallet, contrato y RPC antes de cobrar.",
+            "config_checks": checks,
+            "missing_keys": missing_keys,
+            "missing_labels": missing_labels,
         })
         return base
 
@@ -1787,10 +1798,12 @@ def build_account_center_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         "can_upgrade_premium": display_plan in {"free", "plus"},
         "watchlist": watchlist_meta,
     }
-    payment_config_ready = bool(is_payment_configuration_ready())
+    payment_config_status = get_payment_configuration_status()
+    payment_config_ready = bool(payment_config_status.get("ready"))
     active_order_public = serialize_order_public(active_order)
     billing_payload = {
         "payment_config_ready": payment_config_ready,
+        "payment_config_status": payment_config_status,
         "active_order": active_order_public,
         "recent_orders": recent_orders,
         "summary": billing_summary,
@@ -1801,6 +1814,7 @@ def build_account_center_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         active_order=active_order_public,
         billing_summary=billing_summary,
         subscription=subscription_payload,
+        payment_config_status=payment_config_status,
     )
 
     return {
@@ -1823,7 +1837,7 @@ def build_account_center_payload(user: Dict[str, Any]) -> Dict[str, Any]:
             "current_premium": int(referral_stats.get("current_premium") or 0),
             "valid_referrals_total": int(referral_stats.get("valid_referrals_total") or 0),
             "reward_days_total": int(referral_stats.get("reward_days_total") or 0),
-            "reward_rules": list(referral_stats.get("pending_rewards") or []),
+            "reward_rules": list(referral_stats.get("pending_rewards") or get_referral_reward_rules()),
             "recent_rewards": referral_rewards,
         },
         "plans": _safe_call(lambda: build_plans_payload(display_plan), {"plus": [], "premium": []}),
@@ -2046,6 +2060,15 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         },
         "billing": {
             "payment_config_ready": False,
+            "payment_config_status": {
+                "ready": False,
+                "checks": [
+                    {"key": "BSC_RPC_HTTP_URL", "label": "RPC BSC", "value_present": False},
+                    {"key": "PAYMENT_TOKEN_CONTRACT", "label": "Contrato del token", "value_present": False},
+                    {"key": "PAYMENT_RECEIVER_ADDRESS", "label": "Wallet receptora", "value_present": False},
+                ],
+                "missing_keys": ["BSC_RPC_HTTP_URL", "PAYMENT_TOKEN_CONTRACT", "PAYMENT_RECEIVER_ADDRESS"],
+            },
             "active_order": dashboard_payload.get("active_payment_order"),
             "recent_orders": [],
             "summary": {"open": 0, "completed": 0, "expired": 0, "cancelled": 0, "total": 0},
@@ -2060,6 +2083,15 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
                     "status": me_payload.get("subscription_status"),
                     "status_label": me_payload.get("subscription_status_label"),
                 },
+                payment_config_status={
+                    "ready": False,
+                    "checks": [
+                        {"key": "BSC_RPC_HTTP_URL", "label": "RPC BSC", "value_present": False},
+                        {"key": "PAYMENT_TOKEN_CONTRACT", "label": "Contrato del token", "value_present": False},
+                        {"key": "PAYMENT_RECEIVER_ADDRESS", "label": "Wallet receptora", "value_present": False},
+                    ],
+                    "missing_keys": ["BSC_RPC_HTTP_URL", "PAYMENT_TOKEN_CONTRACT", "PAYMENT_RECEIVER_ADDRESS"],
+                },
             ),
         },
         "referrals": {
@@ -2073,7 +2105,7 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
             "current_premium": 0,
             "valid_referrals_total": int(me_payload.get("valid_referrals_total") or 0),
             "reward_days_total": int(me_payload.get("reward_days_total") or 0),
-            "reward_rules": [],
+            "reward_rules": get_referral_reward_rules(),
             "recent_rewards": [],
         },
         "plans": plans_payload,
