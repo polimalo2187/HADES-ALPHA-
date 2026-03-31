@@ -1732,10 +1732,20 @@ def build_account_center_payload(user: Dict[str, Any]) -> Dict[str, Any]:
     me = build_me_payload(user)
     status = plan_status(user)
     display_plan = normalize_plan(me.get("plan"))
+    watchlist_default_limit = get_watchlist_limit_for_plan(display_plan)
+    watchlist_default_slots = watchlist_default_limit
 
     watchlist_meta = _safe_call(
         lambda: build_watchlist_context(user)["meta"],
-        {"symbols": [], "symbols_count": 0, "max_symbols": 2, "slots_left": 2, "plan": display_plan, "plan_name": get_plan_name(display_plan), "can_add_more": True},
+        {
+            "symbols": [],
+            "symbols_count": 0,
+            "max_symbols": watchlist_default_limit,
+            "slots_left": watchlist_default_slots,
+            "plan": display_plan,
+            "plan_name": get_plan_name(display_plan),
+            "can_add_more": True,
+        },
     )
     active_order = _safe_call(lambda: get_active_payment_order_for_user(user_id), None)
     recent_orders_raw = _safe_call(lambda: _load_recent_payment_orders(user_id), []) or []
@@ -1816,7 +1826,7 @@ def build_account_center_payload(user: Dict[str, Any]) -> Dict[str, Any]:
             "reward_rules": list(referral_stats.get("pending_rewards") or []),
             "recent_rewards": referral_rewards,
         },
-        "plans": build_plans_payload(display_plan),
+        "plans": _safe_call(lambda: build_plans_payload(display_plan), {"plus": [], "premium": []}),
         "timeline": subscription_events,
         "support": {
             "url": "https://chat.whatsapp.com/JXxSGjaKtqRH9c0jTlGv2l?mode=gi_t",
@@ -1955,82 +1965,132 @@ def build_plans_payload(current_plan: Optional[str] = None) -> Dict[str, Any]:
 
 
 def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "me": _safe_call(lambda: build_me_payload(user), {
-            "user_id": int(user.get("user_id") or 0),
-            "username": user.get("username"),
-            "language": user.get("language") or "es",
-            "plan": normalize_plan(user.get("plan")),
-            "plan_name": get_plan_name(user.get("plan")),
-            "subscription_status": str(user.get("subscription_status") or "free").lower(),
-            "subscription_status_label": _label_subscription_status(user.get("subscription_status") or "free"),
-            "days_left": 0,
-            "expires_at": None,
-            "banned": bool(user.get("banned")),
-            "ref_code": user.get("ref_code"),
-            "valid_referrals_total": int(user.get("valid_referrals_total") or 0),
-            "reward_days_total": int(user.get("reward_days_total") or 0),
-        }),
-        "dashboard": _safe_call(lambda: build_dashboard_payload(user), {
-            "summary_7d": _empty_summary(),
-            "summary_30d": _empty_summary(),
-            "active_signals_count": 0,
-            "recent_signals": [],
-            "recent_history": [],
-            "active_payment_order": None,
-            "watchlist_count": 0,
-            "signal_mix": {"free": 0, "plus": 0, "premium": 0},
-            "active_mix": {"free": 0, "plus": 0, "premium": 0},
-        }),
-        "signals": _safe_call(lambda: build_signals_payload(user, limit=12), []),
-        "history": _safe_call(lambda: build_history_payload(user, limit=10), []),
-        "market": _safe_call(lambda: build_market_payload(user), {
-            "bias": "—",
-            "regime": "—",
-            "volatility": "—",
+    me_payload = _safe_call(lambda: build_me_payload(user), {
+        "user_id": int(user.get("user_id") or 0),
+        "username": user.get("username"),
+        "language": user.get("language") or "es",
+        "plan": normalize_plan(user.get("plan")),
+        "plan_name": get_plan_name(user.get("plan")),
+        "subscription_status": str(user.get("subscription_status") or "free").lower(),
+        "subscription_status_label": _label_subscription_status(user.get("subscription_status") or "free"),
+        "days_left": 0,
+        "expires_at": None,
+        "banned": bool(user.get("banned")),
+        "ref_code": user.get("ref_code"),
+        "valid_referrals_total": int(user.get("valid_referrals_total") or 0),
+        "reward_days_total": int(user.get("reward_days_total") or 0),
+    })
+    dashboard_payload = _safe_call(lambda: build_dashboard_payload(user), {
+        "summary_7d": _empty_summary(),
+        "summary_30d": _empty_summary(),
+        "active_signals": [],
+        "latest_signals": [],
+        "active_payment_order": None,
+        "watchlist_symbols": 0,
+        "watchlist_limit": 2,
+        "signal_mix": {"free": 0, "plus": 0, "premium": 0},
+        "active_mix": {"free": 0, "plus": 0, "premium": 0},
+        "history_preview": [],
+    })
+    signals_payload = _safe_call(lambda: build_signals_payload(user), [])
+    history_payload = _safe_call(lambda: build_history_payload(user), [])
+    market_payload = _safe_call(lambda: build_market_payload(user), {
+        "fear_greed": 0,
+        "btc_dominance": 0,
+        "top_gainers": [],
+        "top_losers": [],
+        "top_volume": [],
+        "radar": [],
+        "radar_summary": {"total": 0},
+        "radar_context": {
+            "bias": "neutral",
+            "regime": "neutral",
             "environment": "—",
             "recommendation": "Sin datos de mercado por ahora.",
-            "top_gainers": [],
-            "top_losers": [],
-            "top_volume": [],
-            "top_open_interest": [],
-            "radar": [],
-            "radar_summary": {"total": 0, "longs": 0, "shorts": 0, "hot": 0, "immediate": 0, "active_signals": 0},
-            "btc": {},
-            "eth": {},
-            "preferred_side": "—",
-            "participation": "—",
-            "adv_ratio_pct": 0.0,
-        }),
-        "watchlist": _safe_call(lambda: build_watchlist_payload(user), []),
-        "watchlist_meta": _safe_call(lambda: build_watchlist_context(user)["meta"], {"symbols": [], "symbols_count": 0, "max_symbols": 2, "slots_left": 2, "plan": "free", "plan_name": "FREE", "can_add_more": True}),
-        "plans": _safe_call(lambda: build_plans_payload(user.get("plan")), {"plus": [], "premium": []}),
-        "account": _safe_call(lambda: build_account_center_payload(user), {
-            "overview": {
-                "user_id": int(user.get("user_id") or 0),
-                "username": user.get("username"),
-                "language": user.get("language") or "es",
-                "plan": normalize_plan(user.get("plan")),
-                "plan_name": get_plan_name(user.get("plan")),
-                "subscription_status": str(user.get("subscription_status") or "free").lower(),
-                "subscription_status_label": _label_subscription_status(user.get("subscription_status") or "free"),
-                "days_left": 0,
-                "expires_at": None,
-                "banned": bool(user.get("banned")),
-                "ref_code": user.get("ref_code"),
-                "valid_referrals_total": int(user.get("valid_referrals_total") or 0),
-                "reward_days_total": int(user.get("reward_days_total") or 0),
-                "watchlist_symbols": 0,
-                "watchlist_limit": 2,
-                "watchlist_slots_left": 2,
-            },
-            "subscription": {"plan": normalize_plan(user.get("plan")), "plan_name": get_plan_name(user.get("plan")), "status": str(user.get("subscription_status") or "free").lower(), "status_label": _label_subscription_status(user.get("subscription_status") or "free"), "days_left": 0, "expires_at": None, "features": _plan_features(user.get("plan")), "watchlist": {"symbols": [], "symbols_count": 0, "max_symbols": 2, "slots_left": 2, "plan": normalize_plan(user.get("plan")), "plan_name": get_plan_name(user.get("plan")), "can_add_more": True}},
-            "billing": {"payment_config_ready": False, "active_order": None, "recent_orders": [], "summary": {"open": 0, "completed": 0, "expired": 0, "cancelled": 0, "total": 0}, "latest_completed_at": None},
-            "referrals": {"ref_code": user.get("ref_code"), "referral_link": None, "share_text": None, "total_referred": 0, "plus_referred": 0, "premium_referred": 0, "current_plus": 0, "current_premium": 0, "valid_referrals_total": int(user.get("valid_referrals_total") or 0), "reward_days_total": int(user.get("reward_days_total") or 0), "reward_rules": [], "recent_rewards": []},
-            "plans": {"plus": [], "premium": []},
-            "timeline": [],
-            "support": {"url": "https://chat.whatsapp.com/JXxSGjaKtqRH9c0jTlGv2l?mode=gi_t", "label": "Soporte HADES"},
-        }),
+        },
+    })
+    watchlist_payload = _safe_call(lambda: build_watchlist_payload(user), [])
+    me_plan = normalize_plan(me_payload.get("plan"))
+    watchlist_limit_default = get_watchlist_limit_for_plan(me_plan)
+    watchlist_slots_default = watchlist_limit_default
+    watchlist_meta_payload = _safe_call(
+        lambda: build_watchlist_context(user)["meta"],
+        {
+            "symbols": [],
+            "symbols_count": 0,
+            "max_symbols": watchlist_limit_default,
+            "slots_left": watchlist_slots_default,
+            "plan": me_plan,
+            "plan_name": get_plan_name(me_plan),
+            "can_add_more": True,
+        },
+    )
+    plans_payload = _safe_call(lambda: build_plans_payload(me_plan), {"plus": [], "premium": []})
+
+    account_payload = _safe_call(lambda: build_account_center_payload(user), {
+        "overview": {
+            **me_payload,
+            "watchlist_symbols": int(watchlist_meta_payload.get("symbols_count") or 0),
+            "watchlist_limit": watchlist_meta_payload.get("max_symbols"),
+            "watchlist_slots_left": watchlist_meta_payload.get("slots_left"),
+        },
+        "subscription": {
+            "plan": me_plan,
+            "plan_name": get_plan_name(me_plan),
+            "status": me_payload.get("subscription_status"),
+            "status_label": me_payload.get("subscription_status_label"),
+            "days_left": int(me_payload.get("days_left") or 0),
+            "expires_at": me_payload.get("expires_at"),
+            "features": _plan_features(me_plan),
+            "watchlist": watchlist_meta_payload,
+        },
+        "billing": {
+            "payment_config_ready": False,
+            "active_order": dashboard_payload.get("active_payment_order"),
+            "recent_orders": [],
+            "summary": {"open": 0, "completed": 0, "expired": 0, "cancelled": 0, "total": 0},
+            "latest_completed_at": None,
+            "focus": _build_billing_focus(
+                payment_config_ready=False,
+                active_order=dashboard_payload.get("active_payment_order"),
+                billing_summary={"open": 0, "completed": 0, "expired": 0, "cancelled": 0, "total": 0},
+                subscription={
+                    "plan": me_plan,
+                    "plan_name": get_plan_name(me_plan),
+                    "status": me_payload.get("subscription_status"),
+                    "status_label": me_payload.get("subscription_status_label"),
+                },
+            ),
+        },
+        "referrals": {
+            "ref_code": me_payload.get("ref_code"),
+            "referral_link": None,
+            "share_text": None,
+            "total_referred": 0,
+            "plus_referred": 0,
+            "premium_referred": 0,
+            "current_plus": 0,
+            "current_premium": 0,
+            "valid_referrals_total": int(me_payload.get("valid_referrals_total") or 0),
+            "reward_days_total": int(me_payload.get("reward_days_total") or 0),
+            "reward_rules": [],
+            "recent_rewards": [],
+        },
+        "plans": plans_payload,
+        "timeline": [],
+        "support": {"url": "https://chat.whatsapp.com/JXxSGjaKtqRH9c0jTlGv2l?mode=gi_t", "label": "Soporte HADES"},
+    })
+
+    return {
+        "me": me_payload,
+        "dashboard": dashboard_payload,
+        "signals": signals_payload,
+        "history": history_payload,
+        "market": market_payload,
+        "watchlist": watchlist_payload,
+        "watchlist_meta": watchlist_meta_payload,
+        "plans": plans_payload,
+        "account": account_payload,
         "support_url": "https://chat.whatsapp.com/JXxSGjaKtqRH9c0jTlGv2l?mode=gi_t",
         "generated_at": datetime.utcnow().isoformat(),
     }
