@@ -1173,12 +1173,14 @@ function renderHistory() {
   `;
 }
 
-function planBlock(planKey, items, currentPlan, billing = {}) {
+function planBlock(planKey, items, currentPlan, billing = {}, options = {}) {
   const current = String(currentPlan || '').toLowerCase();
   const featureRows = items[0]?.features || [];
   const isCurrentPlan = items[0]?.is_current_plan || current === planKey;
   const activeOrder = billing.active_order || null;
   const paymentReady = billing.payment_config_ready !== false;
+  const hidden = Boolean(options.hidden);
+  if (hidden) return '';
   return `
     <div class="card card-span-6">
       <div class="item-header" style="margin-bottom: 14px;">
@@ -1223,461 +1225,8 @@ function planBlock(planKey, items, currentPlan, billing = {}) {
   `;
 }
 
-function detailMetric(label, value, valueClass = '') {
-  return `
-    <div class="watchlist-metric-box detail-metric-box">
-      <span class="watchlist-metric-label">${escapeHtml(label)}</span>
-      <span class="watchlist-metric-value ${valueClass}">${escapeHtml(value)}</span>
-    </div>
-  `;
-}
-
-function detailSummaryCard(label, value) {
-  return `
-    <div class="detail-summary-card">
-      <span class="detail-summary-label">${escapeHtml(label)}</span>
-      <span class="detail-summary-value">${escapeHtml(value)}</span>
-    </div>
-  `;
-}
-
-function detailInfoChip(label, value, extraClass = '') {
-  return `
-    <div class="detail-info-chip ${extraClass}">
-      <span class="detail-info-chip-label">${escapeHtml(label)}</span>
-      <span class="detail-info-chip-value">${escapeHtml(value)}</span>
-    </div>
-  `;
-}
-
-function detailStatCard(label, value, valueClass = '') {
-  return `
-    <div class="detail-stat-card">
-      <span class="detail-stat-label">${escapeHtml(label)}</span>
-      <span class="detail-stat-value ${valueClass}">${escapeHtml(value)}</span>
-    </div>
-  `;
-}
-
-function scoreListsEqual(a, b) {
-  if (!Array.isArray(a) || !Array.isArray(b)) return false;
-  if (a.length !== b.length) return false;
-  return a.every((item, index) => {
-    const other = b[index] || {};
-    return String(item?.label || '') === String(other?.label || '') && Number(item?.score || 0) === Number(other?.score || 0);
-  });
-}
-
-function renderScoreBreakdown(items) {
-  if (!items || !items.length) return '<div class="empty-state">Sin desglose disponible.</div>';
-  return `<div class="component-list">${items.map(item => `
-    <div class="component-row">
-      <span>${escapeHtml(item.label)}</span>
-      <span class="${Number(item.score || 0) >= 0 ? 'positive-text' : 'negative-text'}">${escapeHtml(formatNumber(item.score, 2))}</span>
-    </div>
-  `).join('')}</div>`;
-}
-
-function renderRadarDetailModal(payload) {
-  const radar = payload?.radar || {};
-  const scanner = payload?.scanner || {};
-  const signalContext = payload?.signal_context || {};
-  const marketContext = payload?.market_context || {};
-  const tacticalChecks = payload?.tactical_checks || [];
-  const profiles = scanner.profiles || [];
-  const components = scanner.components || [];
-
-  els.signalDetailTitle.textContent = `${radar.symbol || payload?.symbol || 'Radar'} · táctica`;
-  els.signalDetailBody.innerHTML = `
-    <div class="signal-intel-layout">
-      <div class="card detail-status-card">
-        <div class="detail-status-top">
-          <div class="detail-status-copy-block">
-            <span class="detail-kicker">Radar táctico</span>
-            <div class="item-title">${escapeHtml(radar.execution_state_label || 'Observación')} · ${escapeHtml(radar.direction || '—')}</div>
-            <div class="item-subtitle">${escapeHtml(radar.operator_note || radar.action_label || 'Sin lectura táctica disponible')}</div>
-          </div>
-          <span class="radar-score-chip">Radar ${escapeHtml(formatNumber(radar.final_score, 0))}</span>
-        </div>
-        <p class="detail-status-copy">${escapeHtml(marketContext.recommendation || 'Sin recomendación general de mercado.')}</p>
-      </div>
-
-      <div class="detail-info-grid">
-        ${detailInfoChip('Sesgo', marketContext.bias || '—')}
-        ${detailInfoChip('Lado', marketContext.preferred_side || '—')}
-        ${detailInfoChip('Régimen', marketContext.regime || '—')}
-        ${detailInfoChip('Setup', radar.setup_mode_label || '—')}
-        ${detailInfoChip('Alineación', radar.alignment_label || '—')}
-        ${detailInfoChip('Riesgo', radar.risk_label || '—')}
-      </div>
-
-      <div class="pill-row compact-pill-row">
-        <span class="watchlist-priority-pill ${radarExecutionClass(radar.execution_state_label)}">${escapeHtml(radar.execution_state_label || 'Observación')}</span>
-        <span class="watchlist-priority-pill ${watchlistPriorityClass(radar.priority_label)}">Prioridad ${escapeHtml(radar.priority_label || '—')}</span>
-        <span class="watchlist-priority-pill ${watchlistProximityClass(radar.proximity_label)}">Proximidad ${escapeHtml(radar.proximity_label || '—')}</span>
-        <span class="watchlist-priority-pill ${radarAlignmentClass(radar.alignment_label)}">${escapeHtml(radar.alignment_label || 'Selectivo')}</span>
-        <span class="watchlist-priority-pill ${radarRiskClass(radar.risk_label)}">Riesgo ${escapeHtml(radar.risk_label || '—')}</span>
-      </div>
-
-      <div class="detail-stat-grid">
-        ${detailStatCard('Ranking', formatNumber(radar.ranking_score, 1))}
-        ${detailStatCard('Precio', formatNumber(radar.last_price, 4), sideClassByValue(radar.change_pct || 0))}
-        ${detailStatCard('Cambio 24h', formatPercentSigned(radar.change_pct, 2), sideClassByValue(radar.change_pct || 0))}
-        ${detailStatCard('Funding', formatPercentSigned(radar.funding_rate_pct, 3), sideClassByValue(radar.funding_rate_pct || 0))}
-        ${detailStatCard('Open interest', formatCompactAmount(radar.open_interest))}
-        ${detailStatCard('Volumen', formatCompactAmount(radar.quote_volume))}
-        ${detailStatCard('Posición rango', watchlistRangePosition(radar.range_position_pct))}
-        ${detailStatCard('Ventana', radar.window_label || '—')}
-        ${detailStatCard('Convicción', radar.conviction_label || '—')}
-        ${detailStatCard('Contexto señal', radar.signal_context_label || '—')}
-      </div>
-
-      <div class="card signal-intel-section signal-intel-section-full">
-        <h3>Plan táctico</h3>
-        <div class="radar-plan-list">
-          ${(radar.trade_plan || []).map(step => `<div class="radar-plan-item">${escapeHtml(step)}</div>`).join('')}
-        </div>
-        ${tacticalChecks.length ? `<div class="feature-list radar-check-list">${tacticalChecks.map(item => `<div class="feature-item">• ${escapeHtml(item)}</div>`).join('')}</div>` : ''}
-      </div>
-
-      <div class="card signal-intel-section signal-intel-section-full">
-        <h3>Scanner / setup</h3>
-        <div class="pill-row compact-pill-row">
-          <span class="pill">Estado: ${escapeHtml(scanner.label || '—')}</span>
-          ${scanner.direction ? `<span class="pill">Dirección: ${escapeHtml(scanner.direction)}</span>` : ''}
-          ${scanner.setup_group ? `<span class="pill">Setup: ${escapeHtml(String(scanner.setup_group).toUpperCase())}</span>` : ''}
-          ${scanner.score !== undefined && scanner.score !== null ? `<span class="pill">Score: ${escapeHtml(formatNumber(scanner.score, 1))}</span>` : ''}
-          ${scanner.atr_pct !== undefined && scanner.atr_pct !== null ? `<span class="pill">ATR: ${escapeHtml(formatFractionPercent(scanner.atr_pct))}</span>` : ''}
-          ${scanner.direction_alignment === true ? `<span class="pill watchlist-pill-active">Alineado con radar</span>` : ''}
-          ${scanner.direction_alignment === false ? `<span class="pill watchlist-pill-soft">Dirección distinta al radar</span>` : ''}
-        </div>
-        <p class="detail-status-copy">${escapeHtml(scanner.summary || 'Sin lectura del scanner por ahora.')}</p>
-        <div class="inline-meta">
-          ${scanner.score_profile ? `<span>Perfil score: ${escapeHtml(String(scanner.score_profile).toUpperCase())}</span>` : ''}
-          ${scanner.score_calibration ? `<span>Calibración: ${escapeHtml(String(scanner.score_calibration))}</span>` : ''}
-          ${scanner.timeframes?.length ? `<span>TF: ${escapeHtml(scanner.timeframes.join(' / '))}</span>` : ''}
-          ${scanner.strongest_component ? `<span>Más fuerte: ${escapeHtml(scanner.strongest_component.label)} (${escapeHtml(formatNumber(scanner.strongest_component.score, 2))})</span>` : ''}
-          ${scanner.weakest_component ? `<span>Más débil: ${escapeHtml(scanner.weakest_component.label)} (${escapeHtml(formatNumber(scanner.weakest_component.score, 2))})</span>` : ''}
-        </div>
-        ${profiles.length ? `
-          <div class="detail-stat-grid radar-profile-grid">
-            ${profiles.map(profile => detailStatCard(
-              `${profile.label} · SL ${formatNumber(profile.stop_loss, 4)}`,
-              `TP1 ${formatNumber(profile.tp1, 4)} · TP2 ${formatNumber(profile.tp2, 4)}`,
-              '')) .join('')}
-          </div>
-        ` : ''}
-        ${components.length ? renderScoreBreakdown(components) : '<div class="empty-state">Sin desglose de setup en este momento.</div>'}
-      </div>
-
-      <div class="card signal-intel-section signal-intel-section-full">
-        <h3>Conexión con señales</h3>
-        <div class="pill-row compact-pill-row">
-          <span class="pill">Contexto: ${escapeHtml(signalContext.label || radar.signal_context_label || 'Sin señal')}</span>
-          ${signalContext.signal?.visibility_name || signalContext.signal?.visibility ? `<span class="pill">Tier: ${escapeHtml(String(signalContext.signal?.visibility_name || signalContext.signal?.visibility).toUpperCase())}</span>` : ''}
-          ${signalContext.signal?.score !== undefined && signalContext.signal?.score !== null ? `<span class="pill">Score señal: ${escapeHtml(formatNumber(signalContext.signal.score, 1))}</span>` : ''}
-        </div>
-        <p class="detail-status-copy">${escapeHtml(signalContext.signal ? watchlistSignalSummary(signalContext.signal) : 'Todavía no tienes una señal reciente enlazada a este activo.')}</p>
-        <div class="action-row compact radar-card-actions">
-          ${signalContext.signal_detail_available ? `<button class="button button-secondary" data-radar-open-signal="${escapeHtml(signalContext.signal_id || '')}">Ver inteligencia de la señal</button>` : ''}
-          ${radar.symbol ? `<button class="button button-primary" data-radar-follow="${escapeHtml(radar.symbol)}">Seguir símbolo</button>` : ''}
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-async function openRadarDetail(symbol) {
-  if (!symbol) return;
-  els.signalDetailModal.classList.remove('hidden');
-  els.signalDetailModal.setAttribute('aria-hidden', 'false');
-  els.signalDetailTitle.textContent = 'Radar táctico';
-  els.signalDetailBody.innerHTML = '<div class="loading-inline">Cargando drill-down táctico del radar...</div>';
-  try {
-    const payload = await api(`/api/miniapp/radar/${encodeURIComponent(symbol)}`);
-    state.radarDetail = payload;
-    renderRadarDetailModal(payload);
-    bindViewButtons();
-  } catch (error) {
-    els.signalDetailBody.innerHTML = `<div class="error-banner">${escapeHtml(error.message || 'No se pudo cargar el radar táctico.')}</div>`;
-  }
-}
-
-function closeSignalDetailModal() {
-  if (!els.signalDetailModal) return;
-  els.signalDetailModal.classList.add('hidden');
-  els.signalDetailModal.setAttribute('aria-hidden', 'true');
-}
-
-function renderSignalDetailModal(payload) {
-  const signal = payload?.signal || {};
-  const tracking = payload?.tracking || {};
-  const analysis = payload?.analysis || {};
-  const selectedProfile = payload?.selected_profile || 'moderado';
-  const profileOptions = payload?.profile_options || ['moderado'];
-  const tier = payload?.tracking_tier || 'basic';
-  const warnings = [...(tracking.warnings || []), ...(analysis.warnings || [])];
-  const mainComponents = analysis.components?.length ? analysis.components : (analysis.normalized_components?.length ? analysis.normalized_components : (analysis.raw_components || []));
-  const showRaw = analysis.raw_components?.length && !scoreListsEqual(analysis.raw_components, mainComponents);
-  const showNormalized = analysis.normalized_components?.length && !scoreListsEqual(analysis.normalized_components, mainComponents) && !scoreListsEqual(analysis.normalized_components, analysis.raw_components || []);
-  const statusBadge = signal.result
-    ? `<span class="${badgeClassByResult(signal)}">${escapeHtml(resultLabel(signal))}</span>`
-    : `<span class="plan-tag">${escapeHtml(tracking.result_label || formatStatusLabel(signal.status || 'active'))}</span>`;
-
-  els.signalDetailTitle.textContent = `${signal.symbol || 'Señal'} · ${signal.direction || ''}`.trim();
-  els.signalDetailBody.innerHTML = `
-    <div class="signal-intel-layout">
-      <div class="card detail-status-card">
-        <div class="detail-status-top">
-          <div class="detail-status-copy-block">
-            <span class="detail-kicker">Resumen operativo</span>
-            <div class="item-title">${escapeHtml(tracking.state_label || 'Sin estado')}</div>
-            <div class="item-subtitle">${escapeHtml(tracking.entry_state_label || 'Sin lectura operativa')}</div>
-          </div>
-          ${statusBadge}
-        </div>
-        <p class="detail-status-copy">${escapeHtml(tracking.recommendation || 'Sin recomendación operativa disponible.')}</p>
-      </div>
-
-      <div class="detail-info-grid">
-        ${detailInfoChip('Plan', String(payload.viewer_plan || 'free').toUpperCase())}
-        ${detailInfoChip('Tier', String(signal.visibility || 'free').toUpperCase())}
-        ${detailInfoChip('Perfil', profileLabel(selectedProfile))}
-        ${detailInfoChip('Tracking', String(tier).toUpperCase())}
-        ${detailInfoChip('Setup', String(analysis.setup_group || signal.setup_group || 'legacy').toUpperCase())}
-        ${detailInfoChip('Score', formatNumber(analysis.normalized_score ?? analysis.score ?? signal.score, 1))}
-      </div>
-
-      <div class="detail-profile-selector" role="tablist" aria-label="Perfil de lectura">
-        ${profileOptions.map(option => `<button class="detail-profile-button ${option === selectedProfile ? 'is-active' : ''}" data-signal-profile="${escapeHtml(option)}" data-signal-id="${escapeHtml(signal.signal_id || '')}" aria-pressed="${option === selectedProfile ? 'true' : 'false'}">${escapeHtml(profileLabel(option))}</button>`).join('')}
-      </div>
-
-      <div class="detail-stat-grid">
-        ${detailStatCard('Precio actual', formatNumber(tracking.current_price, 4), sideClassByValue(tracking.current_move_pct || 0))}
-        ${detailStatCard('Entrada', formatNumber(tracking.entry_price, 4))}
-        ${detailStatCard('SL', formatNumber(tracking.stop_loss, 4), 'negative-text')}
-        ${detailStatCard('TP1', formatNumber((tracking.take_profits || [])[0], 4), 'positive-text')}
-        ${detailStatCard('TP2', formatNumber((tracking.take_profits || [])[1], 4), 'positive-text')}
-        ${detailStatCard('Dist. entrada', formatFractionPercent(tracking.distance_to_entry_pct))}
-        ${detailStatCard('Dist. SL', formatFractionPercent(tracking.stop_distance_pct))}
-        ${detailStatCard('Dist. TP1', formatFractionPercent(tracking.tp1_distance_pct))}
-        ${detailStatCard('Dist. TP2', formatFractionPercent(tracking.tp2_distance_pct))}
-        ${detailStatCard('Progreso TP1', tracking.progress_to_tp1_pct === null || tracking.progress_to_tp1_pct === undefined ? '—' : formatPercentSigned(tracking.progress_to_tp1_pct, 1))}
-      </div>
-
-      <div class="card signal-intel-section signal-intel-section-full">
-        <h3>Lectura operativa</h3>
-        <div class="pill-row compact-pill-row">
-          <span class="pill">En entrada: ${tracking.in_entry_zone ? 'Sí' : 'No'}</span>
-          <span class="pill">Operable ahora: ${tracking.is_operable_now ? 'Sí' : 'No'}</span>
-          <span class="pill">TP1 tocado: ${tracking.tp1_hit_now ? 'Sí' : 'No'}</span>
-          <span class="pill">TP2 tocado: ${tracking.tp2_hit_now ? 'Sí' : 'No'}</span>
-          <span class="pill">SL roto: ${tracking.stop_hit_now ? 'Sí' : 'No'}</span>
-        </div>
-        <div class="inline-meta">
-          <span>Creada: ${escapeHtml(formatDate(tracking.created_at || signal.created_at))}</span>
-          <span>Visible hasta: ${escapeHtml(formatDate(tracking.telegram_valid_until || signal.telegram_valid_until))}</span>
-          <span>Evaluación hasta: ${escapeHtml(formatDate(tracking.evaluation_valid_until))}</span>
-        </div>
-      </div>
-
-      <div class="card signal-intel-section signal-intel-section-full">
-        <h3>Desglose de calidad</h3>
-        <div class="pill-row compact-pill-row">
-          <span class="pill">ATR: ${escapeHtml(formatFractionPercent(analysis.atr_pct))}</span>
-          <span class="pill">TF: ${escapeHtml((analysis.timeframes || []).join(' / ') || '—')}</span>
-          ${analysis.leverage ? `<span class="pill">Leverage: ${escapeHtml(String(analysis.leverage))}</span>` : ''}
-          ${analysis.market_validity_minutes ? `<span class="pill">Mercado: ${escapeHtml(String(analysis.market_validity_minutes))} min</span>` : ''}
-        </div>
-        <div class="inline-meta">
-          ${analysis.strongest_component ? `<span>Más fuerte: ${escapeHtml(analysis.strongest_component.label)} (${escapeHtml(formatNumber(analysis.strongest_component.score, 2))})</span>` : ''}
-          ${analysis.weakest_component ? `<span>Más débil: ${escapeHtml(analysis.weakest_component.label)} (${escapeHtml(formatNumber(analysis.weakest_component.score, 2))})</span>` : ''}
-          ${analysis.score_profile ? `<span>Perfil score: ${escapeHtml(String(analysis.score_profile).toUpperCase())}</span>` : ''}
-          ${analysis.score_calibration ? `<span>Calibración: ${escapeHtml(String(analysis.score_calibration))}</span>` : ''}
-        </div>
-        ${renderScoreBreakdown(mainComponents)}
-        ${showRaw ? `<h3 class="detail-subheading">Componentes raw</h3>${renderScoreBreakdown(analysis.raw_components)}` : ''}
-        ${showNormalized ? `<h3 class="detail-subheading">Componentes normalizados</h3>${renderScoreBreakdown(analysis.normalized_components)}` : ''}
-        ${analysis.raw_components?.length && analysis.normalized_components?.length && !showRaw && !showNormalized ? `<div class="detail-note">En esta señal, los valores raw y normalizados coinciden, por eso no se repiten abajo.</div>` : ''}
-      </div>
-
-      ${warnings.length ? `<div class="card signal-intel-section signal-intel-section-full"><h3>Notas</h3><div class="feature-list">${warnings.map(item => `<div class="feature-item">• ${escapeHtml(item)}</div>`).join('')}</div></div>` : ''}
-      ${payload.upgrade_hint ? `<div class="card signal-intel-section signal-intel-section-full upgrade-note-card"><h3>Lectura premium</h3><p>${escapeHtml(payload.upgrade_hint)}</p></div>` : ''}
-    </div>
-  `;
-}
-
-async function openSignalDetail(signalId, profile = 'moderado') {
-  if (!signalId) return;
-  els.signalDetailModal.classList.remove('hidden');
-  els.signalDetailModal.setAttribute('aria-hidden', 'false');
-  els.signalDetailTitle.textContent = 'Detalle de señal';
-  els.signalDetailBody.innerHTML = '<div class="loading-inline">Cargando inteligencia de la señal...</div>';
-  try {
-    const payload = await api(`/api/miniapp/signals/${encodeURIComponent(signalId)}?profile=${encodeURIComponent(profile)}`);
-    state.signalDetail = payload;
-    renderSignalDetailModal(payload);
-    bindViewButtons();
-  } catch (error) {
-    els.signalDetailBody.innerHTML = `<div class="error-banner">${escapeHtml(error.message || 'No se pudo cargar el detalle.')}</div>`;
-  }
-}
-
-function paymentConfigStatusWithFallback(billing = {}) {
-  const topLevelStatus = state.payload.payment_config_status || {};
-  const status = billing.payment_config_status || topLevelStatus || {};
-  const checks = Array.isArray(status.checks) ? status.checks.filter(Boolean) : [];
-  const missingKeys = Array.isArray(status.missing_keys) ? status.missing_keys.filter(Boolean) : [];
-  if (checks.length || missingKeys.length || typeof status.ready === 'boolean') {
-    return {
-      ready: typeof status.ready === 'boolean' ? status.ready : !missingKeys.length,
-      checks,
-      missing_keys: missingKeys,
-    };
-  }
-  if (billing.payment_config_ready === false || state.payload.payment_config_ready === false) {
-    const fallbackChecks = [
-      { key: 'BSC_RPC_HTTP_URL', label: 'RPC BSC', value_present: false },
-      { key: 'PAYMENT_TOKEN_CONTRACT', label: 'Contrato del token', value_present: false },
-      { key: 'PAYMENT_RECEIVER_ADDRESS', label: 'Wallet receptora', value_present: false },
-    ];
-    return {
-      ready: false,
-      checks: fallbackChecks,
-      missing_keys: fallbackChecks.map(item => item.key),
-      derived: true,
-    };
-  }
-  return { ready: true, checks: [], missing_keys: [] };
-}
-
-function billingFocusCard(focus = {}, billing = {}) {
-  const toneClass = billingToneClass(focus.tone);
-  const steps = Array.isArray(focus.steps) ? focus.steps : [];
-  const status = paymentConfigStatusWithFallback(billing);
-  const missingKeys = Array.isArray(status.missing_keys) ? status.missing_keys.filter(Boolean) : [];
-  const diagnostics = !status.ready && missingKeys.length
-    ? `
-      <div class="payment-focus-diagnostics">
-        <div class="payment-focus-diagnostics-title">Faltan variables en el proceso web</div>
-        <div class="payment-focus-diagnostics-list">${missingKeys.map(key => `<span class="pill pill-warning">${escapeHtml(key)}</span>`).join('')}</div>
-      </div>
-    `
-    : '';
-  return `
-    <div class="card card-span-12 payment-focus-panel ${toneClass}">
-      <div class="payment-focus-card ${toneClass}">
-        <div class="payment-focus-copy">
-          <div class="payment-focus-kicker">Billing overview</div>
-          <div class="payment-focus-title">${escapeHtml(focus.title || 'Centro de billing')}</div>
-          <div class="payment-focus-headline">${escapeHtml(focus.headline || 'Sin orden abierta')}</div>
-          <div class="payment-focus-message">${escapeHtml(focus.message || 'Sin novedades de cobro por ahora.')}</div>
-          ${focus.hint ? `<div class="payment-focus-hint">${escapeHtml(focus.hint)}</div>` : ''}
-        </div>
-        <div class="payment-focus-side">
-          <span class="plan-tag">${escapeHtml(focus.primary_cta || 'Listo')}</span>
-          ${focus.time_left_label ? `<div class="payment-timer">${escapeHtml(focus.time_left_label)}</div><div class="payment-timer-label">Tiempo</div>` : ''}
-          ${focus.confirmations !== undefined ? `<div class="payment-timer">${escapeHtml(focus.confirmations)}/${escapeHtml(focus.required_confirmations || 0)}</div><div class="payment-timer-label">Confirmaciones</div>` : ''}
-        </div>
-      </div>
-      ${diagnostics}
-      ${steps.length ? `<div class="billing-step-row">${steps.map(step => `<div class="billing-step ${billingStepClass(step.state)}"><span class="billing-step-dot"></span><span>${escapeHtml(step.label)}</span></div>`).join('')}</div>` : ''}
-    </div>
-  `;
-}
-
-function accountMetricCard(label, value, tone = '') {
-  return `
-    <div class="account-metric-card ${tone}">
-      <span class="account-metric-label">${escapeHtml(label)}</span>
-      <span class="account-metric-value">${escapeHtml(value)}</span>
-    </div>
-  `;
-}
-
-function paymentConfigDiagnosticsCard(billing = {}) {
-  const status = paymentConfigStatusWithFallback(billing);
-  const checks = Array.isArray(status.checks) ? status.checks : [];
-  const missingKeys = Array.isArray(status.missing_keys) ? status.missing_keys.filter(Boolean) : [];
-  if (billing.payment_config_ready !== false && !missingKeys.length) {
-    return '';
-  }
-  const items = checks.length
-    ? checks.map(item => {
-        const ok = item && item.value_present;
-        const label = item?.label || item?.key || 'Config';
-        const key = item?.key || '';
-        return `<div class="config-check-item ${ok ? 'is-positive' : 'is-warning'}"><span>${escapeHtml(label)}</span><span>${ok ? 'OK' : 'Falta'}</span><code>${escapeHtml(key)}</code></div>`;
-      }).join('')
-    : missingKeys.map(key => `<div class="config-check-item is-warning"><span>${escapeHtml(key)}</span><span>Falta</span><code>${escapeHtml(key)}</code></div>`).join('');
-  const missing = missingKeys.length ? `<div class="detail-note">Variables faltantes en el proceso web: ${escapeHtml(missingKeys.join(', '))}</div>` : '';
-  return `
-    <div class="card card-span-12 config-diagnostics-card">
-      <h2>Diagnóstico de pagos</h2>
-      <p class="item-subtitle">La MiniApp usa la configuración del proceso web. Si aquí sale incompleta, el web no está leyendo una o más variables aunque existan en otro proceso.</p>
-      <div class="config-check-grid">${items}</div>
-      ${missing}
-    </div>
-  `;
-}
-
-function recentOrderItem(order) {
-  const subtitle = `${order.plan_name || String(order.plan || '').toUpperCase()} · ${order.days} días · ${formatMoney(order.amount_usdt)}`;
-  const stamp = order.confirmed_at || order.updated_at || order.created_at;
-  return `
-    <div class="item">
-      <div class="item-header">
-        <div>
-          <div class="item-title">${escapeHtml(order.status_label || formatStatusLabel(order.status || 'awaiting_payment'))}</div>
-          <div class="item-subtitle">${escapeHtml(subtitle)}</div>
-        </div>
-        <span class="plan-tag">${escapeHtml((order.network || 'bep20').toUpperCase())}</span>
-      </div>
-      <div class="inline-meta">
-        <span>Creada/actualizada: ${escapeHtml(formatDate(stamp))}</span>
-        <span>Confirmaciones: ${escapeHtml(order.confirmations ?? 0)}</span>
-      </div>
-    </div>
-  `;
-}
-
-function referralRewardItem(item) {
-  return `
-    <div class="item">
-      <div class="item-header">
-        <div>
-          <div class="item-title">Referido ${escapeHtml(item.referred_id || '—')}</div>
-          <div class="item-subtitle">Compró ${escapeHtml(item.activated_plan_name || '—')} · ${escapeHtml(item.activated_days || 0)} días</div>
-        </div>
-        <span class="plan-tag">+${escapeHtml(item.reward_days || 0)} días ${escapeHtml(item.reward_plan_name || '')}</span>
-      </div>
-      <div class="inline-meta">
-        <span>Aplicada: ${escapeHtml(formatDate(item.created_at))}</span>
-      </div>
-    </div>
-  `;
-}
-
-function accountTimelineItem(item) {
-  return `
-    <div class="item">
-      <div class="item-header">
-        <div>
-          <div class="item-title">${escapeHtml(item.event_label || 'Actualización')}</div>
-          <div class="item-subtitle">${escapeHtml(item.after_plan_name || item.plan_name || 'FREE')} · ${escapeHtml(item.days || 0)} días</div>
-        </div>
-        <span class="plan-tag">${escapeHtml(item.source || 'system')}</span>
-      </div>
-      <div class="inline-meta">
-        <span>Antes: ${escapeHtml(item.before_plan_name || 'FREE')}</span>
-        <span>Después: ${escapeHtml(item.after_plan_name || item.plan_name || 'FREE')}</span>
-        <span>Fecha: ${escapeHtml(formatDate(item.created_at))}</span>
-      </div>
-    </div>
-  `;
-}
-
 function renderAccount() {
+
   const account = state.payload.account || {};
   const overview = account.overview || {};
   const fallbackMe = state.payload.me || {};
@@ -1706,8 +1255,24 @@ function renderAccount() {
   const timeline = account.timeline || [];
   const support = account.support || { url: state.payload.support_url || '#' };
   const activeOrder = billing.active_order || state.payload.dashboard?.active_payment_order || null;
-  const billingFocus = billing.focus || {};
   const expiresText = me.expires_at ? formatDate(me.expires_at) : 'Sin vencimiento';
+  const currentPlanValue = String(me.plan || subscription.plan || '').toLowerCase();
+  const currentStatusValue = String(subscription.status || me.subscription_status || '').toLowerCase();
+  const isPremiumActive = currentPlanValue === 'premium' && currentStatusValue === 'active';
+  let billingFocus = { ...(billing.focus || {}) };
+  const safeDaysLeft = Number.isFinite(Number(me.days_left)) ? Number(me.days_left) : Number(subscription.days_left || 0);
+  if (!activeOrder && billing.payment_config_ready !== false && safeDaysLeft > 3 && String(billingFocus.state || '') === 'renew_soon') {
+    billingFocus = {
+      ...billingFocus,
+      state: 'healthy_subscription',
+      tone: 'neutral',
+      title: 'Billing listo',
+      headline: `Tu acceso vence en ${safeDaysLeft} días`,
+      message: 'Tu suscripción está activa. Puedes renovar más adelante o dejar una renovación preparada cuando se acerque el vencimiento.',
+      primary_cta: 'Listo',
+      hint: 'Cuando falten pocos días, aquí se activará la recomendación de renovación.',
+    };
+  }
   const watchlistMeta = subscription.watchlist || {};
   const billingSummary = billing.summary || {};
   const recentOrders = billing.recent_orders || [];
@@ -1781,7 +1346,7 @@ function renderAccount() {
         </div>
       </div>
 
-      ${planBlock('plus', plans.plus || [], me.plan, billing)}
+      ${planBlock('plus', plans.plus || [], me.plan, billing, { hidden: isPremiumActive })}
       ${planBlock('premium', plans.premium || [], me.plan, billing)}
       ${paymentInstructions(activeOrder, billingFocus) || '<div class="card card-span-12"><h2>Pago actual</h2><div class="empty-state">No tienes una orden de pago pendiente.</div></div>'}
 
