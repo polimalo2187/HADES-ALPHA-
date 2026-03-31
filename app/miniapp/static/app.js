@@ -1556,6 +1556,32 @@ function accountMetricCard(label, value, tone = '') {
   `;
 }
 
+function paymentConfigDiagnosticsCard(billing = {}) {
+  const status = billing.payment_config_status || {};
+  const checks = Array.isArray(status.checks) ? status.checks : [];
+  const missingKeys = Array.isArray(status.missing_keys) ? status.missing_keys.filter(Boolean) : [];
+  if (billing.payment_config_ready !== false && !missingKeys.length) {
+    return '';
+  }
+  const items = checks.length
+    ? checks.map(item => {
+        const ok = item && item.value_present;
+        const label = item?.label || item?.key || 'Config';
+        const key = item?.key || '';
+        return `<div class="config-check-item ${ok ? 'is-positive' : 'is-warning'}"><span>${escapeHtml(label)}</span><span>${ok ? 'OK' : 'Falta'}</span><code>${escapeHtml(key)}</code></div>`;
+      }).join('')
+    : missingKeys.map(key => `<div class="config-check-item is-warning"><span>${escapeHtml(key)}</span><span>Falta</span><code>${escapeHtml(key)}</code></div>`).join('');
+  const missing = missingKeys.length ? `<div class="detail-note">Variables faltantes en el proceso web: ${escapeHtml(missingKeys.join(', '))}</div>` : '';
+  return `
+    <div class="card card-span-12 config-diagnostics-card">
+      <h2>Diagnóstico de pagos</h2>
+      <p class="item-subtitle">La MiniApp usa la configuración del proceso web. Si aquí sale incompleta, el web no está leyendo una o más variables aunque existan en otro proceso.</p>
+      <div class="config-check-grid">${items}</div>
+      ${missing}
+    </div>
+  `;
+}
+
 function recentOrderItem(order) {
   const subtitle = `${order.plan_name || String(order.plan || '').toUpperCase()} · ${order.days} días · ${formatMoney(order.amount_usdt)}`;
   const stamp = order.confirmed_at || order.updated_at || order.created_at;
@@ -1699,6 +1725,7 @@ function renderAccount() {
       </div>
 
       ${billingFocusCard(billingFocus)}
+      ${paymentConfigDiagnosticsCard(billing)}
 
       <div class="card card-span-12">
         <h2>Billing</h2>
