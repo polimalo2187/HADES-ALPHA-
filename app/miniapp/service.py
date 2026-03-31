@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import time
 from math import isfinite, log10
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -15,6 +16,27 @@ from app.user_service import get_or_create_user
 from app.watchlist import get_watchlist, get_watchlist_limit_for_plan
 from app.signals import get_signal_analysis_for_user, get_signal_tracking_for_user
 
+
+
+
+_RADAR_SCAN_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
+_RADAR_SCAN_TTL_SECONDS = 120
+
+
+def _cache_get_radar_scan(symbol: str) -> Optional[Dict[str, Any]]:
+    key = str(symbol or '').upper().strip()
+    item = _RADAR_SCAN_CACHE.get(key)
+    if not item:
+        return None
+    expires_at, payload = item
+    if time.time() >= expires_at:
+        _RADAR_SCAN_CACHE.pop(key, None)
+        return None
+    return dict(payload)
+
+
+def _cache_set_radar_scan(symbol: str, payload: Dict[str, Any]) -> None:
+    _RADAR_SCAN_CACHE[str(symbol or '').upper().strip()] = (time.time() + _RADAR_SCAN_TTL_SECONDS, dict(payload))
 
 def _iso(value: Any) -> Optional[str]:
     if isinstance(value, datetime):
@@ -660,8 +682,9 @@ def _serialize_radar(
     *,
     limit: int = 6,
     market_snapshot: Optional[Dict[str, Any]] = None,
+    fetch_limit: Optional[int] = None,
 ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    radar_rows = _safe_call(get_radar_opportunities, [], limit=max(6, int(limit))) or []
+    radar_rows = _safe_call(get_radar_opportunities, [], limit=max(6, int(fetch_limit or limit))) or []
     if not radar_rows:
         return [], {
             "total": 0,
@@ -1146,6 +1169,162 @@ def _component_extreme(rows: list[Dict[str, Any]], *, pick: str) -> Optional[Dic
         return None
     key_fn = lambda row: float(row.get("score") or 0.0)
     return max(eligible, key=key_fn) if pick == "max" else min(eligible, key=key_fn)
+
+
+def _build_radar_scanner_snapshot(symbol: str, *, expected_direction: Optional[str] = None) -> Dict[str, Any]:
+    symbol_value = str(symbol or '').upper().strip()
+    if not symbol_value:
+        return {
+            "status": "unavailable",
+            "label": "Scanner no disponible",
+            "summary": "No se recibió un símbolo válido para el scanner.",
+            "components": [],
+            "profiles": [],
+            "direction_alignment": None,
+        }
+
+    cached = _cache_get_radar_scan(symbol_value)
+    if cached is not None:
+        if expected_direction:
+            cached["direction_alignment"] = cached.get("direction") == str(expected_direction).upper().strip()
+        return cached
+
+    try:
+        from app.scanner import get_klines
+        from app.strategy import mtf_strategy
+
+        df_1h = get_klines(symbol_value, "1h")
+        df_15m = get_klines(symbol_value, "15m")
+        df_5m = get_klines(symbol_value, "5m")
+        result = mtf_strategy(df_1h=df_1h, df_15m=df_15m, df_5m=df_5m)
+    except Exception:
+        payload = {
+            "status": "unavailable",
+            "label": "Scanner no disponible",
+            "summary": "No pude evaluar ahora mismo la lógica táctica del scanner para este activo.",
+            "components": [],
+            "profiles": [],
+            "direction_alignment": None,
+        }
+        _cache_set_radar_scan(symbol_value, payload)
+        return payload
+
+    if not result:
+        payload = {
+            "status": "no_setup",
+            "label": "Sin setup confirmado",
+            "summary": "El scanner no confirmó un setup limpio en este momento. Mantén el radar como vigilancia, no como ejecución inmediata.",
+            "components": [],
+            "profiles": [],
+            "direction_alignment": None,
+        }
+        _cache_set_radar_scan(symbol_value, payload)
+        return payload
+
+    direction = str(result.get("direction") or "").upper().strip() or None
+    components = _serialize_score_components(result.get("components"), limit=5)
+    strongest = _component_extreme(components, pick="max")
+    weakest = _component_extreme(components, pick="min")
+    profiles = []
+    for profile_key in ("conservador", "moderado", "agresivo"):
+        profile_payload = (result.get("profiles") or {}).get(profile_key) or {}
+        take_profits = list(profile_payload.get("take_profits") or [])
+        profiles.append({
+            "profile": profile_key,
+            "label": profile_key.title(),
+            "entry_price": result.get("entry_price"),
+            "stop_loss": profile_payload.get("stop_loss") or result.get("stop_loss"),
+            "tp1": take_profits[0] if len(take_profits) > 0 else None,
+            "tp2": take_profits[1] if len(take_profits) > 1 else None,
+            "leverage": profile_payload.get("leverage"),
+        })
+
+    setup_group = result.get("setup_group")
+    score = result.get("normalized_score") or result.get("score")
+    summary = f"Scanner confirma {direction or '—'} {str(setup_group or 'setup').upper()} con score {round(float(score or 0.0), 1):.1f}."
+    payload = {
+        "status": "confirmed",
+        "label": "Setup confirmado",
+        "summary": summary,
+        "direction": direction,
+        "direction_alignment": (direction == str(expected_direction).upper().strip()) if expected_direction and direction else None,
+        "setup_group": setup_group,
+        "score": score,
+        "raw_score": result.get("raw_score"),
+        "atr_pct": result.get("atr_pct"),
+        "timeframes": list(result.get("timeframes") or []),
+        "score_profile": result.get("score_profile"),
+        "score_calibration": result.get("score_calibration"),
+        "components": components,
+        "strongest_component": strongest,
+        "weakest_component": weakest,
+        "profiles": profiles,
+    }
+    _cache_set_radar_scan(symbol_value, payload)
+    return payload
+
+
+def build_radar_symbol_payload(user: Dict[str, Any], symbol: str) -> Optional[Dict[str, Any]]:
+    symbol_value = str(symbol or '').upper().strip()
+    if not symbol_value:
+        return None
+
+    status = plan_status(user)
+    effective_plan = normalize_plan(status.get("plan") or user.get("plan"))
+    snapshot = get_market_state_snapshot() or {}
+    radar_items, radar_summary = _serialize_radar(
+        int(user.get("user_id") or 0),
+        limit=24,
+        fetch_limit=80,
+        market_snapshot=snapshot,
+    )
+    radar_item = next((item for item in radar_items if str(item.get("symbol") or '').upper() == symbol_value), None)
+    if not radar_item:
+        return None
+
+    scanner = _build_radar_scanner_snapshot(symbol_value, expected_direction=radar_item.get("direction"))
+    signal_context = radar_item.get("latest_signal") or radar_item.get("active_signal") or {}
+    signal_id = signal_context.get("signal_id")
+    signal_detail_available = bool(signal_id)
+
+    tactical_checks: List[str] = [
+        f"Estado operativo: {radar_item.get('execution_state_label') or 'Observación'}.",
+        f"Alineación: {radar_item.get('alignment_label') or 'Selectivo'}.",
+        f"Riesgo táctico: {radar_item.get('risk_label') or 'Normal'}.",
+    ]
+    if scanner.get("status") == "confirmed":
+        tactical_checks.append(scanner.get("summary") or "Scanner con setup confirmado.")
+        if scanner.get("direction_alignment") is True:
+            tactical_checks.append("Radar y scanner están alineados en dirección.")
+        elif scanner.get("direction_alignment") is False:
+            tactical_checks.append("Scanner y radar no están alineados: requiere validación extra.")
+    elif scanner.get("status") == "no_setup":
+        tactical_checks.append("El scanner aún no confirma gatillo; úsalo como vigilancia, no como ejecución ciega.")
+    else:
+        tactical_checks.append("El scanner no pudo evaluarse ahora mismo; decide con prudencia hasta refrescar.")
+
+    return {
+        "symbol": symbol_value,
+        "viewer_plan": effective_plan,
+        "market_context": {
+            "bias": snapshot.get("bias"),
+            "preferred_side": snapshot.get("preferred_side"),
+            "regime": snapshot.get("regime"),
+            "environment": snapshot.get("environment"),
+            "recommendation": snapshot.get("recommendation"),
+        },
+        "summary": radar_summary,
+        "radar": radar_item,
+        "scanner": scanner,
+        "signal_context": {
+            "has_active_signal": bool(radar_item.get("has_active_signal")),
+            "label": radar_item.get("signal_context_label"),
+            "signal_id": signal_id,
+            "signal_detail_available": signal_detail_available,
+            "signal": signal_context or None,
+        },
+        "tactical_checks": tactical_checks,
+    }
 
 
 def _signal_visibility_rank(plan: Any) -> int:
