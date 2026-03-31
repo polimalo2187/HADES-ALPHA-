@@ -22,7 +22,7 @@ const state = {
   signalDetail: null,
   radarDetail: null,
   radarView: { ...DEFAULT_RADAR_VIEW },
-  accountAction: null,
+  accountNotice: null,
 };
 
 const els = {
@@ -505,69 +505,42 @@ function focusPaymentCard() {
   });
 }
 
-function focusPlanBlocks() {
+function focusPlanBlock() {
   const schedule = typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
     ? window.requestAnimationFrame.bind(window)
     : (callback) => setTimeout(callback, 0);
   schedule(() => {
-    const target = document.querySelector('[data-payment-plan-block]');
+    const target = document.querySelector('[data-plan-block]');
     if (!target || typeof target.scrollIntoView !== 'function') return;
     target.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 }
 
-function focusPaymentDiagnostics() {
-  const schedule = typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
-    ? window.requestAnimationFrame.bind(window)
-    : (callback) => setTimeout(callback, 0);
-  schedule(() => {
-    const target = document.querySelector('.config-diagnostics-card') || document.querySelector('.payment-focus-diagnostics');
-    if (!target || typeof target.scrollIntoView !== 'function') return;
-    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  });
+function setAccountNotice(message, tone = 'warning') {
+  const normalized = String(message || '').trim();
+  state.accountNotice = normalized ? { message: normalized, tone: String(tone || 'warning') } : null;
 }
 
-function safeShowAlert(message) {
-  try {
-    if (message) tg?.showAlert?.(String(message));
-  } catch (error) {
-    console.warn('MiniApp showAlert failed', error);
-  }
-}
-
-function setAccountAction(message, tone = 'info', extra = {}) {
-  state.accountAction = {
-    message: String(message || '').trim(),
-    tone: String(tone || 'info').toLowerCase(),
-    ...extra,
-  };
-  renderAccount();
-  bindViewButtons();
-}
-
-function accountActionBanner() {
-  const action = state.accountAction;
-  if (!action || !String(action.message || '').trim()) return '';
-  const tone = String(action.tone || 'info').toLowerCase();
-  const title = action.title || (
-    tone === 'error' ? 'No se pudo completar la acción' :
-    tone === 'success' ? 'Acción completada' :
-    tone === 'warning' ? 'Revisión requerida' :
-    'Billing'
-  );
-  const badge = tone === 'error' ? 'ERROR' : tone === 'success' ? 'OK' : tone === 'warning' ? 'REVISAR' : 'INFO';
+function accountNoticeCard(notice) {
+  if (!notice?.message) return '';
+  const toneClass = billingToneClass(notice.tone);
   return `
-    <div class="card card-span-12" data-account-action-banner="true">
-      <div class="item-header">
-        <div>
-          <h2 style="margin:0;">${escapeHtml(title)}</h2>
-          <div class="item-subtitle">${escapeHtml(action.message)}</div>
-          ${action.hint ? `<div class="item-subtitle" style="margin-top:8px;">${escapeHtml(action.hint)}</div>` : ''}
+    <div class="card payment-focus-panel card-span-12 ${toneClass}" data-account-notice="true">
+      <div class="payment-focus-card ${toneClass}">
+        <div class="payment-focus-copy">
+          <div class="payment-focus-kicker">Estado</div>
+          <div class="payment-focus-title">Actividad de billing</div>
+          <div class="payment-focus-message">${escapeHtml(notice.message)}</div>
         </div>
-        <span class="plan-tag">${escapeHtml(badge)}</span>
       </div>
     </div>
   `;
+}
+
+function setTopSummary() {
+  const me = state.payload?.me || {};
+  els.planBadge.textContent = String(me.plan_name || 'FREE').toUpperCase();
+  els.daysBadge.textContent = `${Number(me.days_left || 0)} días`;
 }
 
 function metricCard(label, value, subtitle = '', extraClass = '', toneClass = '') {
@@ -1302,17 +1275,17 @@ function billingFocusCard(focus = {}, billing = {}) {
   const steps = Array.isArray(focus.steps) ? focus.steps : [];
   const supportUrl = billing?.support_url || '#';
   const primaryCta = String(focus.primary_cta || '').trim();
-  const normalizedPrimaryCta = primaryCta.toLowerCase();
+  const primaryCtaLower = primaryCta.toLowerCase();
   let primaryAction = '';
   if (primaryCta) {
-    if (normalizedPrimaryCta === 'soporte') {
+    if (primaryCtaLower === 'soporte') {
       primaryAction = `<a class="button button-secondary" target="_blank" rel="noopener" href="${escapeHtml(supportUrl)}">${escapeHtml(primaryCta)}</a>`;
-    } else if (billing?.active_order) {
-      primaryAction = `<button class="button button-secondary" data-billing-primary-action="focus-order">${escapeHtml(primaryCta)}</button>`;
-    } else if (focus?.can_create_order && ['generar orden', 'renovar', 'renovar ahora', 'comprar', 'upgrade'].includes(normalizedPrimaryCta)) {
-      primaryAction = `<button class="button button-secondary" data-billing-primary-action="browse-plans">${escapeHtml(primaryCta)}</button>`;
-    } else if (!billing?.payment_config_ready) {
-      primaryAction = `<button class="button button-secondary" data-billing-primary-action="show-payment-diagnostics">${escapeHtml(primaryCta)}</button>`;
+    } else if (primaryCtaLower === 'generar orden' || primaryCtaLower === 'renovar') {
+      primaryAction = `<button type="button" class="button button-secondary" data-billing-focus-action="open-plans">${escapeHtml(primaryCta)}</button>`;
+    } else if (primaryCtaLower === 'confirmar pago' || primaryCtaLower === 'revisar de nuevo') {
+      primaryAction = `<button type="button" class="button button-secondary" data-billing-focus-action="focus-order">${escapeHtml(primaryCta)}</button>`;
+    } else if (primaryCtaLower === 'refrescar cuenta' || primaryCtaLower === 'esperando verificación') {
+      primaryAction = `<button type="button" class="button button-secondary" data-billing-focus-action="refresh-account">${escapeHtml(primaryCta)}</button>`;
     } else {
       primaryAction = `<span class="button button-secondary" aria-disabled="true">${escapeHtml(primaryCta)}</span>`;
     }
@@ -1439,7 +1412,7 @@ function planBlock(planKey, items, currentPlan, billing = {}, options = {}) {
   const hidden = Boolean(options.hidden);
   if (hidden) return '';
   return `
-    <div class="card card-span-6" data-payment-plan-block="true" data-plan-key="${escapeHtml(planKey)}">
+    <div class="card card-span-6" data-plan-block="${escapeHtml(planKey)}">
       <div class="item-header" style="margin-bottom: 14px;">
         <div>
           <h2 style="margin:0;">${escapeHtml(String(planKey).toUpperCase())}</h2>
@@ -1452,7 +1425,7 @@ function planBlock(planKey, items, currentPlan, billing = {}, options = {}) {
         ${items.map(item => {
           const sameOpenOrder = activeOrder && String(activeOrder.plan || '').toLowerCase() === String(planKey).toLowerCase() && Number(activeOrder.days || 0) === Number(item.days || 0);
           const hasOtherOpenOrder = activeOrder && !sameOpenOrder;
-          const softBlockedReason = !paymentReady ? 'payment_config_missing' : (sameOpenOrder ? 'same_open_order' : '');
+          const disabled = !paymentReady || sameOpenOrder;
           let cta = isCurrentPlan ? 'Renovar' : 'Comprar';
           let tone = isCurrentPlan ? 'button-secondary' : 'button-primary';
           if (!paymentReady) {
@@ -1472,7 +1445,7 @@ function planBlock(planKey, items, currentPlan, billing = {}, options = {}) {
                   <div class="item-title">${escapeHtml(item.days)} días</div>
                   <div class="item-subtitle">${escapeHtml(formatMoney(item.price_usdt))}${sameOpenOrder ? ' · Ya pendiente' : hasOtherOpenOrder ? ' · Reemplaza orden actual' : ''}</div>
                 </div>
-                <button class="button ${tone}" data-create-order="${escapeHtml(planKey)}:${escapeHtml(item.days)}" ${softBlockedReason ? `data-order-guard=\"${escapeHtml(softBlockedReason)}\" aria-disabled=\"true\"` : ''}>${cta}</button>
+                <button class="button ${tone}" data-create-order="${escapeHtml(planKey)}:${escapeHtml(item.days)}" ${disabled ? 'disabled' : ''}>${cta}</button>
               </div>
             </div>
           `;
@@ -1820,6 +1793,7 @@ function renderAccount() {
 
   els.account.innerHTML = `
     <div class="section-grid">
+      ${accountNoticeCard(state.accountNotice)}
       <div class="card card-span-12">
         <div class="item-header">
           <div>
@@ -1842,8 +1816,6 @@ function renderAccount() {
           ${accountMetricCard('Órdenes', billingSummary.total ?? 0)}
         </div>
       </div>
-
-      ${accountActionBanner()}
 
       <div class="card card-span-6">
         <h2>Suscripción</h2>
@@ -1978,32 +1950,49 @@ async function copyValue(value, successMessage = 'Copiado correctamente.') {
 }
 
 function bindViewButtons() {
+  document.querySelectorAll('[data-billing-focus-action]').forEach(button => {
+    button.onclick = async () => {
+      const action = String(button.dataset.billingFocusAction || '').trim();
+      if (!action) return;
+      if (action === 'open-plans') {
+        setView('account');
+        setAccountNotice('Selecciona la duración que quieres comprar o renovar en los bloques de planes.', 'accent');
+        renderAccount();
+        bindViewButtons();
+        focusPlanBlock();
+        return;
+      }
+      if (action === 'focus-order') {
+        setView('account');
+        setAccountNotice('Revisa el bloque de pago actual para copiar la wallet, el monto exacto o confirmar la orden.', 'accent');
+        renderAccount();
+        bindViewButtons();
+        focusPaymentCard();
+        return;
+      }
+      if (action === 'refresh-account') {
+        setAccountNotice('Actualizando el estado comercial...', 'accent');
+        renderAccount();
+        bindViewButtons();
+        try {
+          await refreshAccountState();
+          setView('account');
+          setAccountNotice('Cuenta actualizada correctamente.', 'positive');
+          renderAccount();
+          bindViewButtons();
+        } catch (error) {
+          setAccountNotice(paymentReasonMessage(error.message, error.message || 'No se pudo refrescar la cuenta.'), 'warning');
+          renderAccount();
+          bindViewButtons();
+        }
+      }
+    };
+  });
   document.querySelectorAll('[data-goto]').forEach(button => {
     button.onclick = () => setView(button.dataset.goto);
   });
   document.querySelectorAll('[data-copy-value]').forEach(button => {
     button.onclick = () => copyValue(button.dataset.copyValue, 'Copiado correctamente.');
-  });
-  document.querySelectorAll('[data-billing-primary-action]').forEach(button => {
-    button.onclick = () => {
-      const action = String(button.dataset.billingPrimaryAction || '').trim();
-      if (action === 'focus-order') {
-        setView('account');
-        focusPaymentCard();
-        return;
-      }
-      if (action === 'show-payment-diagnostics') {
-        setView('account');
-        setAccountAction('La configuración de pagos todavía no está lista. Revisa el diagnóstico antes de generar una orden.', 'warning', { title: 'Configuración pendiente' });
-        focusPaymentDiagnostics();
-        return;
-      }
-      if (action === 'browse-plans') {
-        setView('account');
-        setAccountAction('Selecciona la duración del plan para generar la orden de pago.', 'info', { title: 'Selecciona tu plan' });
-        focusPlanBlocks();
-      }
-    };
   });
   document.querySelectorAll('[data-signal-detail]').forEach(button => {
     button.onclick = () => openSignalDetail(button.dataset.signalDetail, 'moderado');
@@ -2160,45 +2149,22 @@ function bindViewButtons() {
   document.querySelectorAll('[data-create-order]').forEach(button => {
     button.onclick = async () => {
       if (button.disabled) return;
-      const guard = String(button.dataset.orderGuard || '').trim();
-      if (guard === 'payment_config_missing') {
-        setView('account');
-        setAccountAction('No se puede generar la orden porque la configuración de pagos BEP-20 está incompleta.', 'warning', {
-          title: 'Pagos no disponibles',
-          hint: 'Completa wallet, contrato y RPC antes de intentar cobrar.',
-        });
-        focusPaymentDiagnostics();
-        safeShowAlert('La configuración de pagos todavía no está lista.');
-        return;
-      }
-      if (guard === 'same_open_order') {
-        setView('account');
-        setAccountAction('Ya tienes una orden abierta para ese mismo plan. Usa la orden actual o cancélala antes de generar otra.', 'info', {
-          title: 'Orden ya existente',
-        });
-        focusPaymentCard();
-        safeShowAlert('Ya tienes una orden abierta para ese mismo plan.');
-        return;
-      }
-
       const [plan, days] = button.dataset.createOrder.split(':');
       const original = button.textContent;
       button.disabled = true;
       button.textContent = 'Procesando...';
-      setAccountAction(`Generando orden para ${String(plan || '').toUpperCase()} · ${Number(days)} días...`, 'info', {
-        title: 'Procesando orden',
-      });
       try {
+        setAccountNotice('Generando orden de pago...', 'accent');
+        renderAccount();
+        bindViewButtons();
         const result = await api('/api/miniapp/payment-order', {
           method: 'POST',
           body: JSON.stringify({ plan, days: Number(days) }),
         });
         applyPaymentOrderPreview(result.order || null);
+        setAccountNotice('Orden de pago lista. Revisa el bloque de pago para copiar la wallet, el monto exacto y confirmar.', 'positive');
         renderAll();
         setView('account');
-        setAccountAction('Orden de pago lista. Revisa el bloque de pago para copiar la wallet, el monto exacto y confirmar.', 'success', {
-          title: 'Orden creada',
-        });
         focusPaymentCard();
         Promise.resolve(refreshAccountState())
           .then(() => {
@@ -2208,14 +2174,12 @@ function bindViewButtons() {
           .catch(refreshError => {
             console.warn('MiniApp account refresh after create order failed', refreshError);
           });
-        safeShowAlert('Orden de pago lista. Revisa el bloque de pago para copiar la wallet, el monto exacto y confirmar.');
+        tg?.showAlert('Orden de pago lista. Revisa el bloque de pago para copiar la wallet, el monto exacto y confirmar.');
       } catch (error) {
-        const message = paymentReasonMessage(error.message, error.message);
-        setView('account');
-        setAccountAction(`No se pudo generar la orden: ${message}`, 'error', {
-          title: 'Error al generar la orden',
-        });
-        safeShowAlert(`No se pudo generar la orden: ${message}`);
+        setAccountNotice(`No se pudo generar la orden: ${paymentReasonMessage(error.message, error.message)}`, 'warning');
+        renderAccount();
+        bindViewButtons();
+        tg?.showAlert(`No se pudo generar la orden: ${paymentReasonMessage(error.message, error.message)}`);
       } finally {
         if (button.isConnected) {
           button.disabled = false;
@@ -2224,7 +2188,6 @@ function bindViewButtons() {
       }
     };
   });
-
   document.querySelectorAll('[data-confirm-order]').forEach(button => {
     button.onclick = async () => {
       if (button.disabled) return;
@@ -2232,11 +2195,15 @@ function bindViewButtons() {
       button.disabled = true;
       button.textContent = 'Verificando...';
       try {
+        setAccountNotice('Verificando el pago...', 'accent');
+        renderAccount();
+        bindViewButtons();
         const result = await api('/api/miniapp/payment-order/confirm', {
           method: 'POST',
           body: JSON.stringify({ order_id: button.dataset.confirmOrder }),
         });
         applyPaymentOrderPreview(result.order || null);
+        setAccountNotice(paymentReasonMessage(result.reason, result.ok ? 'Estado de pago actualizado.' : 'Pago pendiente.'), result.ok ? 'positive' : 'warning');
         renderAll();
         setView('account');
         focusPaymentCard();
@@ -2248,17 +2215,12 @@ function bindViewButtons() {
           .catch(refreshError => {
             console.warn('MiniApp account refresh after confirm payment failed', refreshError);
           });
-        const message = paymentReasonMessage(result.reason, result.ok ? 'Estado de pago actualizado.' : 'Pago pendiente.');
-        setAccountAction(message, result.ok ? 'success' : 'warning', {
-          title: result.ok ? 'Pago actualizado' : 'Pago pendiente',
-        });
-        safeShowAlert(message);
+        tg?.showAlert(paymentReasonMessage(result.reason, result.ok ? 'Estado de pago actualizado.' : 'Pago pendiente.'));
       } catch (error) {
-        const message = paymentReasonMessage(error.message, error.message);
-        setAccountAction(`No se pudo confirmar: ${message}`, 'error', {
-          title: 'Error al confirmar',
-        });
-        safeShowAlert(`No se pudo confirmar: ${message}`);
+        setAccountNotice(`No se pudo confirmar: ${paymentReasonMessage(error.message, error.message)}`, 'warning');
+        renderAccount();
+        bindViewButtons();
+        tg?.showAlert(`No se pudo confirmar: ${paymentReasonMessage(error.message, error.message)}`);
       } finally {
         if (button.isConnected) {
           button.disabled = false;
@@ -2274,11 +2236,15 @@ function bindViewButtons() {
       button.disabled = true;
       button.textContent = 'Cancelando...';
       try {
+        setAccountNotice('Cancelando orden de pago...', 'accent');
+        renderAccount();
+        bindViewButtons();
         await api('/api/miniapp/payment-order/cancel', {
           method: 'POST',
           body: JSON.stringify({ order_id: button.dataset.cancelOrder }),
         });
         applyPaymentOrderPreview(null);
+        setAccountNotice('Orden cancelada correctamente.', 'positive');
         renderAll();
         setView('account');
         Promise.resolve(refreshAccountState())
@@ -2288,16 +2254,12 @@ function bindViewButtons() {
           .catch(refreshError => {
             console.warn('MiniApp account refresh after cancel order failed', refreshError);
           });
-        setAccountAction('Orden cancelada correctamente.', 'success', {
-          title: 'Orden cancelada',
-        });
-        safeShowAlert('Orden cancelada correctamente.');
+        tg?.showAlert('Orden cancelada correctamente.');
       } catch (error) {
-        const message = paymentReasonMessage(error.message, error.message);
-        setAccountAction(`No se pudo cancelar: ${message}`, 'error', {
-          title: 'Error al cancelar',
-        });
-        safeShowAlert(`No se pudo cancelar: ${message}`);
+        setAccountNotice(`No se pudo cancelar: ${paymentReasonMessage(error.message, error.message)}`, 'warning');
+        renderAccount();
+        bindViewButtons();
+        tg?.showAlert(`No se pudo cancelar: ${paymentReasonMessage(error.message, error.message)}`);
       } finally {
         if (button.isConnected) {
           button.disabled = false;
