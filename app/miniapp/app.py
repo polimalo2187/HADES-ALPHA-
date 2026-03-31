@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
+from bson import ObjectId
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -102,6 +103,18 @@ def _resolve_dev_telegram_user(payload: MiniAppAuthRequest) -> Dict[str, Any]:
 def _resolve_watchlist_plan(user: Dict[str, Any]) -> str:
     status = plan_status(user)
     return normalize_plan(status.get("plan") or user.get("plan"))
+
+
+def _sanitize_json_payload(value: Any) -> Any:
+    if isinstance(value, ObjectId):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: _sanitize_json_payload(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_json_payload(item) for item in value]
+    if isinstance(value, tuple):
+        return [_sanitize_json_payload(item) for item in value]
+    return value
 
 
 def create_mini_app() -> FastAPI:
@@ -450,7 +463,10 @@ def create_mini_app() -> FastAPI:
     @app.post("/api/miniapp/payment-order/confirm")
     async def miniapp_confirm_payment(payload: MiniAppPaymentActionRequest, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
         result = confirm_payment_order(payload.order_id, int(user.get("user_id") or 0))
-        return result
+        if isinstance(result, dict) and result.get("order") is not None:
+            result = dict(result)
+            result["order"] = serialize_order_public(result.get("order"))
+        return _sanitize_json_payload(result)
 
     @app.post("/api/miniapp/payment-order/cancel")
     async def miniapp_cancel_payment(payload: MiniAppPaymentActionRequest, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
