@@ -18,7 +18,19 @@ from app.statistics import get_performance_snapshot
 from app.user_service import get_or_create_user
 from app.models import utcnow
 from app.watchlist import get_watchlist, get_watchlist_limit_for_plan
-from app.signals import get_signal_analysis_for_user, get_signal_tracking_for_user
+from app.signals import get_signal_analysis_for_user, get_signal_tracking_for_user, get_user_signal_by_signal_id
+from app.risk import (
+    ENTRY_MODE_LABELS,
+    RiskConfigurationError,
+    SignalProfileError,
+    SignalRiskError,
+    build_risk_preview_from_user_signal,
+    get_exchange_fee_preset,
+    get_risk_profile_label,
+    get_user_risk_profile,
+    normalize_risk_profile,
+    ensure_risk_profile_ready,
+)
 
 
 
@@ -1699,6 +1711,250 @@ def build_signal_detail_payload(user: Dict[str, Any], signal_id: str, *, profile
         "analysis": analysis_payload,
         "upgrade_hint": upgrade_hint,
     }
+
+
+
+RISK_EXCHANGE_LABELS: Dict[str, str] = {
+    "binance": "Binance",
+    "lbank": "LBank",
+    "coinw": "CoinW",
+    "weex": "WEEX",
+    "coinex": "CoinEx",
+    "bitunix": "Bitunix",
+    "mexc": "MEXC",
+    "other": "Otro",
+}
+
+
+def _risk_feature_tier(plan: str) -> str:
+    plan_value = normalize_plan(plan)
+    return "basic" if plan_value == "free" else "full"
+
+
+def _risk_profile_options_for_plan(plan: str) -> List[str]:
+    return ["moderado"] if _risk_feature_tier(plan) == "basic" else ["conservador", "moderado", "agresivo"]
+
+
+def _risk_exchange_options() -> List[Dict[str, Any]]:
+    order = ["binance", "lbank", "coinw", "weex", "coinex", "bitunix", "mexc", "other"]
+    return [
+        {"value": value, "label": RISK_EXCHANGE_LABELS.get(value, str(value).upper())}
+        for value in order
+    ]
+
+
+def _risk_entry_mode_options() -> List[Dict[str, Any]]:
+    order = ["limit_wait", "limit_fast", "limit_unknown"]
+    return [
+        {"value": value, "label": ENTRY_MODE_LABELS.get(value, value)}
+        for value in order
+    ]
+
+
+def _serialize_risk_profile(profile: Optional[Dict[str, Any]], *, effective_plan: str) -> Dict[str, Any]:
+    normalized = normalize_risk_profile(profile)
+    profile_options = _risk_profile_options_for_plan(effective_plan)
+    if normalized.get("default_profile") not in profile_options:
+        normalized["default_profile"] = profile_options[0]
+    return {
+        **normalized,
+        "updated_at": _iso(normalized.get("updated_at")),
+        "exchange_label": RISK_EXCHANGE_LABELS.get(normalized.get("exchange"), str(normalized.get("exchange") or "—").upper()),
+        "entry_mode_label": ENTRY_MODE_LABELS.get(normalized.get("entry_mode"), ENTRY_MODE_LABELS.get("limit_wait")),
+        "default_profile_label": get_risk_profile_label(normalized.get("default_profile") or "moderado"),
+    }
+
+
+def _serialize_risk_candidate(doc: Dict[str, Any], *, source: str) -> Dict[str, Any]:
+    visibility = normalize_plan(doc.get("visibility"))
+    result_value = str(doc.get("result") or "").lower().strip()
+    status_value = str(doc.get("status") or result_value or ("active" if source == "live" else "closed")).lower().strip()
+    return {
+        "signal_id": str(doc.get("signal_id") or doc.get("_id") or ""),
+        "source": source,
+        "symbol": str(doc.get("symbol") or "").upper(),
+        "direction": str(doc.get("direction") or "").upper(),
+        "visibility": visibility,
+        "visibility_name": get_plan_name(visibility),
+        "score": doc.get("normalized_score", doc.get("score")),
+        "setup_group": doc.get("setup_group"),
+        "entry_price": doc.get("entry_price"),
+        "status": status_value,
+        "result": result_value or None,
+        "created_at": _iso(doc.get("created_at") or doc.get("signal_created_at")),
+        "telegram_valid_until": _iso(doc.get("telegram_valid_until")),
+        "evaluation_valid_until": _iso(doc.get("evaluation_valid_until") or doc.get("valid_until")),
+        "evaluated_at": _iso(doc.get("evaluated_at")),
+        "resolution_minutes": doc.get("resolution_minutes"),
+    }
+
+
+def _serialize_risk_preview(calc: Dict[str, Any]) -> Dict[str, Any]:
+    diagnostics = calc.get("diagnostics") or {}
+    return {
+        "signal_id": calc.get("signal_id"),
+        "symbol": calc.get("symbol"),
+        "direction": calc.get("direction"),
+        "visibility": normalize_plan(calc.get("visibility")),
+        "visibility_name": get_plan_name(calc.get("visibility")),
+        "profile_name": calc.get("profile_name"),
+        "profile_label": calc.get("profile_label"),
+        "requested_profile_name": calc.get("requested_profile_name"),
+        "requested_profile_label": calc.get("requested_profile_label"),
+        "profile_fallback_used": bool(calc.get("profile_fallback_used")),
+        "profile_resolution_errors": list(calc.get("profile_resolution_errors") or []),
+        "entry_price": calc.get("entry_price"),
+        "stop_loss": calc.get("stop_loss"),
+        "take_profits": list(calc.get("take_profits") or []),
+        "capital_usdt": calc.get("capital_usdt"),
+        "risk_percent": calc.get("risk_percent"),
+        "risk_amount_usdt": calc.get("risk_amount_usdt"),
+        "leverage": calc.get("leverage"),
+        "signal_leverage_default": calc.get("signal_leverage_default"),
+        "signal_leverage_hint": calc.get("signal_leverage_hint"),
+        "fee_percent_per_side": calc.get("fee_percent_per_side"),
+        "slippage_percent": calc.get("slippage_percent"),
+        "exchange": calc.get("exchange"),
+        "exchange_label": RISK_EXCHANGE_LABELS.get(calc.get("exchange"), str(calc.get("exchange") or "—").upper()),
+        "entry_mode": calc.get("entry_mode"),
+        "entry_mode_label": calc.get("entry_mode_label"),
+        "position_notional_usdt": calc.get("position_notional_usdt"),
+        "required_margin_usdt": calc.get("required_margin_usdt"),
+        "quantity_estimate": calc.get("quantity_estimate"),
+        "loss_at_stop_usdt": calc.get("loss_at_stop_usdt"),
+        "stop_distance_pct": calc.get("stop_distance_pct"),
+        "effective_loss_pct": calc.get("effective_loss_pct"),
+        "fee_roundtrip_pct": calc.get("fee_roundtrip_pct"),
+        "slippage_decimal": calc.get("slippage_decimal"),
+        "tp_results": list(calc.get("tp_results") or []),
+        "warnings": list(calc.get("warnings") or []),
+        "is_operable": bool(calc.get("is_operable")),
+        "signal_active_for_entry": bool(calc.get("signal_active_for_entry")),
+        "diagnostics": {
+            "margin_usage_pct": diagnostics.get("margin_usage_pct"),
+            "capital_buffer_usdt": diagnostics.get("capital_buffer_usdt"),
+            "tp_count": diagnostics.get("tp_count"),
+            "best_rr_net": diagnostics.get("best_rr_net"),
+            "risk_band": diagnostics.get("risk_band"),
+        },
+        "risk_profile": _serialize_risk_profile(calc.get("risk_profile"), effective_plan=normalize_plan(calc.get("visibility") or "free")),
+        "created_at": _iso(calc.get("created_at")),
+        "telegram_valid_until": _iso(calc.get("telegram_valid_until")),
+        "evaluation_valid_until": _iso(calc.get("evaluation_valid_until")),
+        "timeframes": list(calc.get("timeframes") or []),
+        "score": calc.get("score"),
+    }
+
+
+def build_risk_center_payload(
+    user: Dict[str, Any],
+    *,
+    signal_id: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    override_leverage: Optional[float] = None,
+) -> Dict[str, Any]:
+    user_id = int(user.get("user_id") or 0)
+    status = plan_status(user)
+    effective_plan = normalize_plan(status.get("plan") or user.get("plan"))
+    feature_tier = _risk_feature_tier(effective_plan)
+    risk_profile = get_user_risk_profile(user_id)
+    profile_options = _risk_profile_options_for_plan(effective_plan)
+    risk_profile_public = _serialize_risk_profile(risk_profile, effective_plan=effective_plan)
+
+    readiness = {
+        "is_ready": True,
+        "message": "Perfil listo para calcular riesgo desde señales activas o históricas.",
+        "blocking_reason": None,
+    }
+    try:
+        normalize_risk_profile(risk_profile)
+        ensure_risk_profile_ready(risk_profile)
+    except RiskConfigurationError as exc:
+        readiness = {
+            "is_ready": False,
+            "message": str(exc),
+            "blocking_reason": str(exc),
+        }
+
+    live_docs = _safe_call(
+        lambda: list(
+            user_signals_collection()
+            .find({"user_id": user_id})
+            .sort("created_at", -1)
+            .limit(18)
+        ),
+        [],
+    )
+    live_items = []
+    for doc in live_docs:
+        if doc.get("result"):
+            continue
+        live_items.append(_serialize_risk_candidate(doc, source="live"))
+        if len(live_items) >= 8:
+            break
+
+    history_docs = _safe_call(lambda: get_history_entries_for_user(user_id, user_plan=user.get("plan"), limit=8), []) or []
+    history_items = [_serialize_risk_candidate(doc, source="history") for doc in history_docs]
+
+    selected_signal = None
+    preview = None
+    preview_error = None
+    selected_signal_id = str(signal_id or "").strip() or None
+    requested_profile = str(profile_name or risk_profile_public.get("default_profile") or "moderado").strip().lower() or None
+    if requested_profile not in profile_options:
+        requested_profile = profile_options[0]
+
+    if selected_signal_id:
+        user_signal = get_user_signal_by_signal_id(user_id, selected_signal_id)
+        if not user_signal:
+            preview_error = "No pude encontrar esa señal para calcular riesgo."
+        else:
+            source = "live" if not user_signal.get("result") else "history"
+            selected_signal = _serialize_risk_candidate(user_signal, source=source)
+            try:
+                preview = _serialize_risk_preview(
+                    build_risk_preview_from_user_signal(
+                        user_signal,
+                        risk_profile=risk_profile,
+                        profile_name=requested_profile,
+                        override_leverage=override_leverage if override_leverage and float(override_leverage) > 0 else None,
+                    )
+                )
+            except (RiskConfigurationError, SignalProfileError, SignalRiskError) as exc:
+                preview_error = str(exc)
+
+    preset_matrix: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for exchange in [item["value"] for item in _risk_exchange_options()]:
+        preset_matrix[exchange] = {}
+        for entry_mode in [item["value"] for item in _risk_entry_mode_options()]:
+            preset_matrix[exchange][entry_mode] = get_exchange_fee_preset(exchange, entry_mode)
+
+    return {
+        "overview": {
+            "plan": effective_plan,
+            "plan_name": get_plan_name(effective_plan),
+            "feature_tier": feature_tier,
+            "profile_options": profile_options,
+        },
+        "profile": risk_profile_public,
+        "readiness": readiness,
+        "catalog": {
+            "exchanges": _risk_exchange_options(),
+            "entry_modes": _risk_entry_mode_options(),
+            "presets": preset_matrix,
+        },
+        "signals": {
+            "live": live_items,
+            "history": history_items,
+            "selected_signal_id": selected_signal_id,
+            "selected_profile": requested_profile,
+            "selected_signal": selected_signal,
+        },
+        "preview": preview,
+        "preview_error": preview_error,
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+
 
 def ensure_mini_app_user(*, user_id: int, username: Optional[str], telegram_language: Optional[str]) -> Dict[str, Any]:
     user, _ = get_or_create_user(
