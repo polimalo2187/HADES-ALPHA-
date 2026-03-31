@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 OPEN_ORDER_STATUSES = {"awaiting_payment", "verification_in_progress", "paid_unconfirmed"}
 VERIFYABLE_ORDER_STATUSES = {"awaiting_payment", "paid_unconfirmed"}
 VERIFICATION_LOCK_STALE_AFTER = timedelta(minutes=3)
+ORDER_REUSE_MIN_REMAINING = timedelta(minutes=5)
 _DECIMAL_QUANT = Decimal("0.001")
 
 
@@ -88,6 +89,62 @@ def _existing_order_uses_oversized_unique_delta(order: Optional[Dict[str, Any]])
         return False
     return unique_delta > Decimal("0.150")
 
+
+
+
+def _seconds_until(value: Optional[datetime], *, now: Optional[datetime] = None) -> Optional[int]:
+    if not isinstance(value, datetime):
+        return None
+    remaining = int((value - (now or utcnow())).total_seconds())
+    return max(0, remaining)
+
+
+def _current_payment_configuration() -> Dict[str, str]:
+    return {
+        "network": str(get_payment_network() or "").strip().lower(),
+        "token_symbol": str(get_payment_token_symbol() or "").strip().upper(),
+        "token_contract": str(get_payment_token_contract() or "").strip().lower(),
+        "deposit_address": str(get_payment_receiver_address() or "").strip().lower(),
+    }
+
+
+def _existing_order_matches_current_payment_configuration(order: Optional[Dict[str, Any]]) -> bool:
+    if not order:
+        return False
+    current = _current_payment_configuration()
+    return (
+        str(order.get("network") or "").strip().lower() == current["network"]
+        and str(order.get("token_symbol") or "").strip().upper() == current["token_symbol"]
+        and str(order.get("token_contract") or "").strip().lower() == current["token_contract"]
+        and str(order.get("deposit_address") or "").strip().lower() == current["deposit_address"]
+    )
+
+
+def _existing_order_reissue_reason(order: Optional[Dict[str, Any]], *, now: Optional[datetime] = None) -> Optional[str]:
+    if not order:
+        return None
+    status = str(order.get("status") or "")
+    if status != "awaiting_payment":
+        return None
+    if _existing_order_uses_oversized_unique_delta(order):
+        return "reissued_for_lower_unique_delta"
+    if not _existing_order_matches_current_payment_configuration(order):
+        return "reissued_for_payment_config_change"
+    expires_in_seconds = _seconds_until(order.get("expires_at"), now=now)
+    if expires_in_seconds is not None and expires_in_seconds < int(ORDER_REUSE_MIN_REMAINING.total_seconds()):
+        return "reissued_for_short_ttl"
+    return None
+
+
+def _existing_order_blocks_replacement(order: Optional[Dict[str, Any]]) -> bool:
+    if not order:
+        return False
+    status = str(order.get("status") or "")
+    if status == "verification_in_progress":
+        return True
+    if status == "paid_unconfirmed":
+        return bool(order.get("matched_tx_hash")) or int(order.get("confirmations") or 0) > 0
+    return False
 
 def _next_unique_amount(base_price: float, user_id: int) -> Decimal:
     orders = payment_orders_collection()
@@ -222,8 +279,23 @@ def create_payment_order(user_id: int, plan: str, days: int) -> Dict[str, Any]:
         existing_plan = normalize_plan(existing_open.get("plan"))
         existing_days = int(existing_open.get("days") or 0)
         if existing_plan == plan and existing_days == int(days):
-            if _existing_order_uses_oversized_unique_delta(existing_open):
-                cancel_open_orders_for_user(user_id, reason="reissued_for_lower_unique_delta")
+            reissue_reason = _existing_order_reissue_reason(existing_open)
+            if reissue_reason:
+                cancel_open_orders_for_user(user_id, reason=reissue_reason)
+                record_audit_event(
+                    event_type="payment_order_reissued",
+                    status="info",
+                    module="payments",
+                    user_id=user_id,
+                    order_id=existing_open.get("order_id"),
+                    message=reissue_reason,
+                    metadata={
+                        "plan": plan,
+                        "days": days,
+                        "status": existing_open.get("status"),
+                        "expires_in_seconds": _seconds_until(existing_open.get("expires_at")),
+                    },
+                )
             else:
                 record_audit_event(
                     event_type="payment_order_reused",
@@ -232,10 +304,32 @@ def create_payment_order(user_id: int, plan: str, days: int) -> Dict[str, Any]:
                     user_id=user_id,
                     order_id=existing_open.get("order_id"),
                     message="payment_order_reused",
-                    metadata={"plan": plan, "days": days, "status": existing_open.get("status")},
+                    metadata={
+                        "plan": plan,
+                        "days": days,
+                        "status": existing_open.get("status"),
+                        "expires_in_seconds": _seconds_until(existing_open.get("expires_at")),
+                    },
                 )
                 return existing_open
         else:
+            if _existing_order_blocks_replacement(existing_open):
+                record_audit_event(
+                    event_type="payment_order_replacement_blocked",
+                    status="warning",
+                    module="payments",
+                    user_id=user_id,
+                    order_id=existing_open.get("order_id"),
+                    message="payment_order_replacement_blocked",
+                    metadata={
+                        "existing_plan": existing_plan,
+                        "existing_days": existing_days,
+                        "requested_plan": plan,
+                        "requested_days": int(days),
+                        "status": existing_open.get("status"),
+                    },
+                )
+                return existing_open
             cancel_open_orders_for_user(user_id, reason="superseded_by_new_order")
 
     amount = _next_unique_amount(base_price, user_id)
@@ -347,7 +441,8 @@ def confirm_payment_order(order_id: str, user_id: int) -> Dict[str, Any]:
         if current and current.get("status") == "completed":
             return {"ok": True, "reason": "already_completed", "order": current}
         if current and current.get("status") == "verification_in_progress":
-            return {"ok": False, "reason": "verification_in_progress", "order": current}
+            retry_after_seconds = _seconds_until((current.get("verification_started_at") or utcnow()) + VERIFICATION_LOCK_STALE_AFTER)
+            return {"ok": False, "reason": "verification_in_progress", "order": current, "retry_after_seconds": retry_after_seconds}
         if current and current.get("status") == "cancelled":
             return {"ok": False, "reason": "order_cancelled", "order": current}
         if current and _is_order_expired(current):
