@@ -1523,9 +1523,47 @@ async function openSignalDetail(signalId, profile = 'moderado') {
   }
 }
 
-function billingFocusCard(focus = {}) {
+function paymentConfigStatusWithFallback(billing = {}) {
+  const topLevelStatus = state.payload.payment_config_status || {};
+  const status = billing.payment_config_status || topLevelStatus || {};
+  const checks = Array.isArray(status.checks) ? status.checks.filter(Boolean) : [];
+  const missingKeys = Array.isArray(status.missing_keys) ? status.missing_keys.filter(Boolean) : [];
+  if (checks.length || missingKeys.length || typeof status.ready === 'boolean') {
+    return {
+      ready: typeof status.ready === 'boolean' ? status.ready : !missingKeys.length,
+      checks,
+      missing_keys: missingKeys,
+    };
+  }
+  if (billing.payment_config_ready === false || state.payload.payment_config_ready === false) {
+    const fallbackChecks = [
+      { key: 'BSC_RPC_HTTP_URL', label: 'RPC BSC', value_present: false },
+      { key: 'PAYMENT_TOKEN_CONTRACT', label: 'Contrato del token', value_present: false },
+      { key: 'PAYMENT_RECEIVER_ADDRESS', label: 'Wallet receptora', value_present: false },
+    ];
+    return {
+      ready: false,
+      checks: fallbackChecks,
+      missing_keys: fallbackChecks.map(item => item.key),
+      derived: true,
+    };
+  }
+  return { ready: true, checks: [], missing_keys: [] };
+}
+
+function billingFocusCard(focus = {}, billing = {}) {
   const toneClass = billingToneClass(focus.tone);
   const steps = Array.isArray(focus.steps) ? focus.steps : [];
+  const status = paymentConfigStatusWithFallback(billing);
+  const missingKeys = Array.isArray(status.missing_keys) ? status.missing_keys.filter(Boolean) : [];
+  const diagnostics = !status.ready && missingKeys.length
+    ? `
+      <div class="payment-focus-diagnostics">
+        <div class="payment-focus-diagnostics-title">Faltan variables en el proceso web</div>
+        <div class="payment-focus-diagnostics-list">${missingKeys.map(key => `<span class="pill pill-warning">${escapeHtml(key)}</span>`).join('')}</div>
+      </div>
+    `
+    : '';
   return `
     <div class="card card-span-12 payment-focus-panel ${toneClass}">
       <div class="payment-focus-card ${toneClass}">
@@ -1542,6 +1580,7 @@ function billingFocusCard(focus = {}) {
           ${focus.confirmations !== undefined ? `<div class="payment-timer">${escapeHtml(focus.confirmations)}/${escapeHtml(focus.required_confirmations || 0)}</div><div class="payment-timer-label">Confirmaciones</div>` : ''}
         </div>
       </div>
+      ${diagnostics}
       ${steps.length ? `<div class="billing-step-row">${steps.map(step => `<div class="billing-step ${billingStepClass(step.state)}"><span class="billing-step-dot"></span><span>${escapeHtml(step.label)}</span></div>`).join('')}</div>` : ''}
     </div>
   `;
@@ -1557,7 +1596,7 @@ function accountMetricCard(label, value, tone = '') {
 }
 
 function paymentConfigDiagnosticsCard(billing = {}) {
-  const status = billing.payment_config_status || {};
+  const status = paymentConfigStatusWithFallback(billing);
   const checks = Array.isArray(status.checks) ? status.checks : [];
   const missingKeys = Array.isArray(status.missing_keys) ? status.missing_keys.filter(Boolean) : [];
   if (billing.payment_config_ready !== false && !missingKeys.length) {
@@ -1661,6 +1700,9 @@ function renderAccount() {
   };
   const billing = account.billing || {};
   const referrals = account.referrals || {};
+  const botUsername = state.payload.bot_username || 'HADES_ALPHA_bot';
+  const referralCode = referrals.ref_code || me.ref_code || '';
+  const referralLink = referrals.referral_link || (referralCode ? `https://t.me/${botUsername}?start=${referralCode}` : '');
   const timeline = account.timeline || [];
   const support = account.support || { url: state.payload.support_url || '#' };
   const activeOrder = billing.active_order || state.payload.dashboard?.active_payment_order || null;
@@ -1718,13 +1760,13 @@ function renderAccount() {
           <span class="pill">Válidos: ${escapeHtml(referrals.valid_referrals_total || 0)}</span>
         </div>
         <div class="action-row compact">
-          <button class="button button-secondary" data-copy-value="${escapeHtml(referrals.ref_code || me.ref_code || '')}">Copiar código</button>
-          <button class="button button-secondary" data-copy-value="${escapeHtml(referrals.referral_link || '')}">Copiar enlace</button>
+          <button class="button button-secondary" data-copy-value="${escapeHtml(referralCode)}">Copiar código</button>
+          <button class="button button-secondary" data-copy-value="${escapeHtml(referralLink)}">Copiar enlace</button>
         </div>
         ${rewardRules.length ? `<div class="feature-list" style="margin-top:12px;">${rewardRules.map(rule => `<div class="feature-item">• ${escapeHtml(rule)}</div>`).join('')}</div>` : '<div class="empty-state">Sin reglas de recompensa disponibles.</div>'}
       </div>
 
-      ${billingFocusCard(billingFocus)}
+      ${billingFocusCard(billingFocus, billing)}
       ${paymentConfigDiagnosticsCard(billing)}
 
       <div class="card card-span-12">
@@ -1796,12 +1838,37 @@ function setView(view) {
 }
 
 async function copyValue(value, successMessage = 'Copiado correctamente.') {
-  try {
-    await navigator.clipboard.writeText(String(value || ''));
-    tg?.showAlert(successMessage);
-  } catch {
-    tg?.showAlert('No se pudo copiar.');
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    tg?.showAlert('No hay valor para copiar.');
+    return;
   }
+  try {
+    await navigator.clipboard.writeText(normalized);
+    tg?.showAlert(successMessage);
+    return;
+  } catch {}
+
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = normalized;
+    textarea.setAttribute('readonly', 'readonly');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    textarea.style.pointerEvents = 'none';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    const copied = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    if (copied) {
+      tg?.showAlert(successMessage);
+      return;
+    }
+  } catch {}
+
+  tg?.showAlert('No se pudo copiar.');
 }
 
 function bindViewButtons() {
