@@ -503,8 +503,82 @@ function applyPaymentOrderPreview(order) {
   billing.summary = summary;
 }
 
+function reconcileActivePaymentOrder(order) {
+  ensurePayloadShell();
+  const billing = state.payload.account.billing;
+  billing.active_order = order || null;
+  if (!state.payload.dashboard || typeof state.payload.dashboard !== 'object') state.payload.dashboard = {};
+  state.payload.dashboard.active_payment_order = order || null;
+}
+
+function setBillingFlash(message, tone = 'accent') {
+  ensurePayloadShell();
+  state.payload.account.billing.flash = {
+    message: String(message || '').trim(),
+    tone: String(tone || 'accent').trim() || 'accent',
+    created_at: Date.now(),
+  };
+}
+
+function clearBillingFlash() {
+  ensurePayloadShell();
+  delete state.payload.account.billing.flash;
+}
+
+function notifyUser(message) {
+  const normalized = String(message || '').trim();
+  if (!normalized) return;
+  try {
+    if (tg?.showAlert) {
+      tg.showAlert(normalized);
+      return;
+    }
+  } catch (error) {
+    console.warn('MiniApp alert failed', error);
+  }
+  try {
+    if (typeof window !== 'undefined' && typeof window.alert === 'function') {
+      window.alert(normalized);
+      return;
+    }
+  } catch (error) {
+    console.warn('Window alert failed', error);
+  }
+  console.info(normalized);
+}
+
+function focusPaymentCard() {
+  window.requestAnimationFrame(() => {
+    const target = document.querySelector('[data-payment-active-card]') || document.querySelector('.payment-card');
+    if (!target || typeof target.scrollIntoView !== 'function') return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+}
+
+function renderAccountState(options = {}) {
+  const { focusOrder = false } = options;
+  setTopSummary();
+  renderAccount();
+  bindViewButtons();
+  els.loading.classList.add('hidden');
+  els.content.classList.remove('hidden');
+  els.bottomNav.classList.remove('hidden');
+  setView('account');
+  if (focusOrder) focusPaymentCard();
+}
+
+async function syncActivePaymentOrder(options = {}) {
+  const timeoutMs = Number(options.timeoutMs || 5000);
+  const result = await api('/api/miniapp/payment-order', { timeoutMs });
+  const order = result && typeof result === 'object' ? (result.order || null) : null;
+  reconcileActivePaymentOrder(order);
+  return order;
+}
+
 async function refreshAccountState(options = {}) {
   const timeoutMs = Number(options.timeoutMs || 8000);
+  const renderMode = String(options.renderMode || 'full').toLowerCase();
+  const focusOrder = Boolean(options.focusOrder);
   const [account, me] = await Promise.all([
     api('/api/miniapp/account', { timeoutMs }),
     api('/api/miniapp/me', { timeoutMs }),
@@ -512,6 +586,10 @@ async function refreshAccountState(options = {}) {
   ensurePayloadShell();
   if (me && typeof me === 'object') state.payload.me = me;
   if (account && typeof account === 'object') state.payload.account = account;
+  if (renderMode === 'account') {
+    renderAccountState({ focusOrder });
+    return;
+  }
   renderAll();
 }
 
@@ -606,7 +684,7 @@ function paymentInstructions(order, focus = null) {
   const canConfirm = order.status === 'awaiting_payment' || order.status === 'paid_unconfirmed';
   const canCancel = order.status === 'awaiting_payment';
   return `
-    <div class="card payment-card card-span-12">
+    <div class="card payment-card card-span-12" data-payment-active-card="true">
       <div class="payment-focus-card ${toneClass}">
         <div class="payment-focus-copy">
           <div class="payment-focus-kicker">Billing activo</div>
@@ -1758,6 +1836,8 @@ function renderAccount() {
   const recentOrders = billing.recent_orders || [];
   const recentRewards = referrals.recent_rewards || [];
   const rewardRules = referrals.reward_rules || [];
+  const billingFlash = billing.flash || null;
+  const activePaymentMarkup = paymentInstructions(activeOrder, billingFocus);
 
   els.account.innerHTML = `
     <div class="section-grid">
@@ -1814,6 +1894,12 @@ function renderAccount() {
       ${billingFocusCard(billingFocus, billing)}
       ${paymentConfigDiagnosticsCard(billing)}
 
+      ${billingFlash?.message ? `
+      <div class="card card-span-12 ${escapeHtml(billingToneClass(billingFlash.tone))}">
+        <div class="diagnostic-title">Estado de pago</div>
+        <div class="diagnostic-text">${escapeHtml(billingFlash.message)}</div>
+      </div>` : ''}
+
       <div class="card card-span-12">
         <h2>Billing</h2>
         <div class="account-metric-grid">
@@ -1826,9 +1912,9 @@ function renderAccount() {
         </div>
       </div>
 
+      ${activePaymentMarkup || '<div class="card card-span-12"><h2>Pago actual</h2><div class="empty-state">No tienes una orden de pago pendiente.</div></div>'}
       ${planBlock('plus', plans.plus || [], me.plan, billing, { hidden: isPremiumActive })}
       ${planBlock('premium', plans.premium || [], me.plan, billing)}
-      ${paymentInstructions(activeOrder, billingFocus) || '<div class="card card-span-12"><h2>Pago actual</h2><div class="empty-state">No tienes una orden de pago pendiente.</div></div>'}
 
       <div class="card card-span-6">
         <h2>Órdenes recientes</h2>
@@ -2088,17 +2174,28 @@ function bindViewButtons() {
           body: JSON.stringify({ plan, days: Number(days) }),
           timeoutMs: 15000,
         });
-        applyPaymentOrderPreview(result.order || null);
-        renderAll();
-        setView('account');
+        const createdOrder = result.order || null;
+        clearBillingFlash();
+        reconcileActivePaymentOrder(createdOrder);
+        setBillingFlash('Orden de pago lista. Aquí mismo tienes la wallet, el monto exacto y la confirmación.', 'positive');
+        renderAccountState({ focusOrder: true });
         try {
-          await refreshAccountState({ timeoutMs: 8000 });
+          await syncActivePaymentOrder({ timeoutMs: 5000 });
+          renderAccountState({ focusOrder: true });
+        } catch (syncError) {
+          console.warn('MiniApp active payment order sync after create failed', syncError);
+        }
+        try {
+          await refreshAccountState({ timeoutMs: 8000, renderMode: 'account', focusOrder: true });
         } catch (refreshError) {
           console.warn('MiniApp account refresh after create order timed out or failed', refreshError);
         }
-        tg?.showAlert('Orden de pago lista. Revisa el bloque de billing para pagar y confirmar.');
+        notifyUser('Orden de pago lista. Revisa el bloque de pago que quedó abierto en esta misma pantalla.');
       } catch (error) {
-        tg?.showAlert(`No se pudo generar la orden: ${paymentReasonMessage(error.message, error.message)}`);
+        const message = `No se pudo generar la orden: ${paymentReasonMessage(error.message, error.message)}`;
+        setBillingFlash(message, 'warning');
+        renderAccountState();
+        notifyUser(message);
       } finally {
         if (button.isConnected) {
           button.disabled = false;
@@ -2119,16 +2216,28 @@ function bindViewButtons() {
           body: JSON.stringify({ order_id: button.dataset.confirmOrder }),
           timeoutMs: 20000,
         });
-        applyPaymentOrderPreview(result.order || null);
-        renderAll();
+        const order = result.order || null;
+        clearBillingFlash();
+        reconcileActivePaymentOrder(order);
+        setBillingFlash(paymentReasonMessage(result.reason, result.ok ? 'Estado de pago actualizado.' : 'Pago pendiente.'), result.ok ? 'positive' : 'warning');
+        renderAccountState({ focusOrder: Boolean(order) });
         try {
-          await refreshAccountState({ timeoutMs: 8000 });
+          await syncActivePaymentOrder({ timeoutMs: 5000 });
+          renderAccountState({ focusOrder: true });
+        } catch (syncError) {
+          console.warn('MiniApp active payment order sync after confirm failed', syncError);
+        }
+        try {
+          await refreshAccountState({ timeoutMs: 8000, renderMode: 'account', focusOrder: true });
         } catch (refreshError) {
           console.warn('MiniApp account refresh after confirm payment timed out or failed', refreshError);
         }
-        tg?.showAlert(paymentReasonMessage(result.reason, result.ok ? 'Estado de pago actualizado.' : 'Pago pendiente.'));
+        notifyUser(paymentReasonMessage(result.reason, result.ok ? 'Estado de pago actualizado.' : 'Pago pendiente.'));
       } catch (error) {
-        tg?.showAlert(`No se pudo confirmar: ${paymentReasonMessage(error.message, error.message)}`);
+        const message = `No se pudo confirmar: ${paymentReasonMessage(error.message, error.message)}`;
+        setBillingFlash(message, 'warning');
+        renderAccountState();
+        notifyUser(message);
       } finally {
         if (button.isConnected) {
           button.disabled = false;
@@ -2149,16 +2258,26 @@ function bindViewButtons() {
           body: JSON.stringify({ order_id: button.dataset.cancelOrder }),
           timeoutMs: 15000,
         });
-        applyPaymentOrderPreview(null);
-        renderAll();
+        reconcileActivePaymentOrder(null);
+        setBillingFlash('Orden cancelada correctamente.', 'accent');
+        renderAccountState();
         try {
-          await refreshAccountState({ timeoutMs: 8000 });
+          await syncActivePaymentOrder({ timeoutMs: 5000 });
+          renderAccountState();
+        } catch (syncError) {
+          console.warn('MiniApp active payment order sync after cancel failed', syncError);
+        }
+        try {
+          await refreshAccountState({ timeoutMs: 8000, renderMode: 'account' });
         } catch (refreshError) {
           console.warn('MiniApp account refresh after cancel order timed out or failed', refreshError);
         }
-        tg?.showAlert('Orden cancelada correctamente.');
+        notifyUser('Orden cancelada correctamente.');
       } catch (error) {
-        tg?.showAlert(`No se pudo cancelar: ${paymentReasonMessage(error.message, error.message)}`);
+        const message = `No se pudo cancelar: ${paymentReasonMessage(error.message, error.message)}`;
+        setBillingFlash(message, 'warning');
+        renderAccountState();
+        notifyUser(message);
       } finally {
         if (button.isConnected) {
           button.disabled = false;
