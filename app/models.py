@@ -232,7 +232,6 @@ def new_payment_order(
         "verification_started_at": None,
         "verification_lock_token": None,
         "last_verification_reason": None,
-        "matched_tx_hash": None,
         "matched_from": None,
         "matched_to": None,
         "matched_amount": None,
