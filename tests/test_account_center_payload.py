@@ -188,6 +188,32 @@ class AccountCenterPayloadTests(unittest.TestCase):
         self.assertTrue(payload['account']['referrals']['reward_rules'])
         self.assertIn('PAYMENT_RECEIVER_ADDRESS', payload['account']['billing']['payment_config_status']['missing_keys'])
 
+    def test_bootstrap_exposes_top_level_payment_status_and_bot_username(self):
+        user = {
+            'user_id': 11,
+            'username': 'neo',
+            'language': 'es',
+            'plan': 'free',
+            'subscription_status': 'free',
+        }
+        status = {
+            'ready': False,
+            'checks': [
+                {'key': 'BSC_RPC_HTTP_URL', 'label': 'RPC BSC', 'value_present': False},
+                {'key': 'PAYMENT_TOKEN_CONTRACT', 'label': 'Contrato del token', 'value_present': True},
+                {'key': 'PAYMENT_RECEIVER_ADDRESS', 'label': 'Wallet receptora', 'value_present': True},
+            ],
+            'missing_keys': ['BSC_RPC_HTTP_URL'],
+        }
+        with patch('app.miniapp.service.get_payment_configuration_status', return_value=status),              patch('app.miniapp.service.get_bot_username', return_value='NeoTrade_bot'):
+            payload = build_bootstrap_payload(user)
+
+        self.assertEqual(payload['payment_config_status']['missing_keys'], ['BSC_RPC_HTTP_URL'])
+        self.assertFalse(payload['payment_config_ready'])
+        self.assertEqual(payload['bot_username'], 'NeoTrade_bot')
+        self.assertEqual(payload['account']['billing']['payment_config_status']['missing_keys'], ['BSC_RPC_HTTP_URL'])
+
+
 
 if __name__ == '__main__':
     unittest.main()
