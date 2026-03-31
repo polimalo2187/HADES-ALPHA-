@@ -244,6 +244,11 @@ def _calculate_pending_rewards() -> List[str]:
     ]
 
 
+
+def get_referral_reward_rules() -> List[str]:
+    return list(_calculate_pending_rewards())
+
+
 # =========================
 # COMPATIBILIDAD
 # =========================
