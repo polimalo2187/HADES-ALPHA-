@@ -30,6 +30,16 @@ const state = {
     confirmReset: false,
     lastResetSummary: null,
   },
+  riskCenter: {
+    payload: null,
+    loading: false,
+    notice: null,
+    query: {
+      signalId: null,
+      profile: null,
+      leverage: null,
+    },
+  },
 };
 
 const els = {
@@ -44,6 +54,7 @@ const els = {
   market: document.getElementById('view-market'),
   history: document.getElementById('view-history'),
   account: document.getElementById('view-account'),
+  risk: document.getElementById('view-risk'),
   admin: document.getElementById('view-admin'),
   signalDetailModal: document.getElementById('signalDetailModal'),
   signalDetailTitle: document.getElementById('signalDetailTitle'),
@@ -57,6 +68,7 @@ const labels = {
   market: 'Mercado',
   history: 'Historial',
   account: 'Cuenta',
+  risk: 'Gestión de riesgo',
   admin: 'Panel admin',
 };
 
@@ -603,6 +615,378 @@ function adminResetSummaryCard(summary) {
   `;
 }
 
+function setRiskNotice(message, tone = 'warning') {
+  const normalized = String(message || '').trim();
+  state.riskCenter.notice = normalized ? { message: normalized, tone: String(tone || 'warning') } : null;
+}
+
+function riskNoticeCard(notice) {
+  if (!notice?.message) return '';
+  const toneClass = billingToneClass(notice.tone);
+  return `
+    <div class="card payment-focus-panel card-span-12 ${toneClass}">
+      <div class="payment-focus-card ${toneClass}">
+        <div class="payment-focus-copy">
+          <div class="payment-focus-kicker">Riesgo</div>
+          <div class="payment-focus-title">Estado del centro de riesgo</div>
+          <div class="payment-focus-message">${escapeHtml(notice.message)}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function riskMetricCard(label, value, subtitle = '', toneClass = '') {
+  return metricCard(label, value, subtitle, '', toneClass);
+}
+
+function riskBandLabel(value) {
+  const normalized = String(value || '').toLowerCase();
+  const map = { normal: 'Normal', medio: 'Medio', alto: 'Alto' };
+  return map[normalized] || String(value || '—');
+}
+
+function riskBandToneClass(value) {
+  const normalized = String(value || '').toLowerCase();
+  if (normalized === 'alto') return 'is-warning';
+  if (normalized === 'medio') return 'is-accent';
+  return 'is-positive';
+}
+
+function riskQueryString(query = {}) {
+  const params = new URLSearchParams();
+  if (query.signalId) params.set('signal_id', query.signalId);
+  if (query.profile) params.set('profile', query.profile);
+  if (query.leverage !== null && query.leverage !== undefined && String(query.leverage).trim() !== '') {
+    params.set('leverage', String(query.leverage).trim());
+  }
+  const raw = params.toString();
+  return raw ? `?${raw}` : '';
+}
+
+function normalizeRiskQuery(options = {}) {
+  return {
+    signalId: options.signalId ? String(options.signalId).trim() : null,
+    profile: options.profile ? String(options.profile).trim().toLowerCase() : null,
+    leverage: options.leverage !== null && options.leverage !== undefined && String(options.leverage).trim() !== ''
+      ? String(options.leverage).trim()
+      : null,
+  };
+}
+
+async function refreshRiskCenter(force = false, options = {}) {
+  const nextQuery = {
+    ...state.riskCenter.query,
+    ...normalizeRiskQuery(options),
+  };
+  if (options.signalId === null) nextQuery.signalId = null;
+  if (options.profile === null) nextQuery.profile = null;
+  if (options.leverage === null) nextQuery.leverage = null;
+
+  const sameQuery = JSON.stringify(nextQuery) === JSON.stringify(state.riskCenter.query || {});
+  if (state.riskCenter.loading) return state.riskCenter.payload;
+  if (!force && state.riskCenter.payload && sameQuery) return state.riskCenter.payload;
+
+  state.riskCenter.loading = true;
+  state.riskCenter.query = nextQuery;
+  renderRisk();
+  bindViewButtons();
+  try {
+    const payload = await api(`/api/miniapp/risk${riskQueryString(nextQuery)}`);
+    state.riskCenter.payload = payload;
+    return payload;
+  } catch (error) {
+    setRiskNotice(`No se pudo cargar gestión de riesgo: ${error.message || 'error'}`, 'warning');
+    throw error;
+  } finally {
+    state.riskCenter.loading = false;
+    renderRisk();
+    bindViewButtons();
+  }
+}
+
+async function openRiskCenter(options = {}) {
+  closeSignalDetailModal();
+  setView('risk');
+  renderRisk();
+  bindViewButtons();
+  try {
+    await refreshRiskCenter(true, options);
+  } catch (_) {}
+}
+
+function collectRiskProfilePatch() {
+  const readNumber = (id) => {
+    const raw = String(document.getElementById(id)?.value || '').trim();
+    return raw === '' ? null : Number(raw);
+  };
+  return {
+    capital_usdt: readNumber('riskCapitalInput'),
+    risk_percent: readNumber('riskPercentInput'),
+    exchange: String(document.getElementById('riskExchangeSelect')?.value || '').trim() || null,
+    entry_mode: String(document.getElementById('riskEntryModeSelect')?.value || '').trim() || null,
+    fee_percent_per_side: readNumber('riskFeeInput'),
+    slippage_percent: readNumber('riskSlippageInput'),
+    default_leverage: readNumber('riskLeverageInput'),
+    default_profile: String(document.getElementById('riskDefaultProfileSelect')?.value || '').trim() || null,
+  };
+}
+
+function applyRiskPresetToInputs() {
+  const payload = state.riskCenter.payload || {};
+  const presets = payload.catalog?.presets || {};
+  const exchange = String(document.getElementById('riskExchangeSelect')?.value || '').trim();
+  const entryMode = String(document.getElementById('riskEntryModeSelect')?.value || '').trim();
+  const preset = presets?.[exchange]?.[entryMode];
+  if (!preset) return false;
+  const feeInput = document.getElementById('riskFeeInput');
+  const slippageInput = document.getElementById('riskSlippageInput');
+  if (feeInput) feeInput.value = String(preset.fee_percent_per_side ?? '');
+  if (slippageInput) slippageInput.value = String(preset.slippage_percent ?? '');
+  return true;
+}
+
+function riskCandidateCard(item, selectedSignalId) {
+  const isSelected = String(item?.signal_id || '') === String(selectedSignalId || '');
+  const statusValue = item?.result ? resultLabel(item) : formatStatusLabel(item?.status || 'active');
+  return `
+    <div class="item compact-item ${isSelected ? 'card is-accent' : ''}">
+      <div class="item-header">
+        <div>
+          <div class="item-title">${escapeHtml(item.symbol)} <span class="${dirClass(item.direction)}">${escapeHtml(item.direction)}</span></div>
+          <div class="item-subtitle">${escapeHtml(item.setup_group || 'setup')} · Score ${escapeHtml(formatNumber(item.score || 0, 1))}</div>
+        </div>
+        <span class="plan-tag">${escapeHtml(statusValue)}</span>
+      </div>
+      <div class="inline-meta">
+        <span>${item.source === 'history' ? 'Historial' : 'En vivo'}</span>
+        <span>Tier ${escapeHtml(String(item.visibility_name || item.visibility || '—').toUpperCase())}</span>
+        <span>Emitida: ${escapeHtml(formatDate(item.created_at))}</span>
+      </div>
+      <div class="action-row compact">
+        <button class="button button-secondary" data-open-risk-signal="${escapeHtml(item.signal_id)}">${isSelected ? 'Recalcular' : 'Calcular riesgo'}</button>
+      </div>
+    </div>
+  `;
+}
+
+function riskPreviewCard(preview, payload) {
+  if (!preview) return '';
+  const diagnostics = preview.diagnostics || {};
+  const tpResults = Array.isArray(preview.tp_results) ? preview.tp_results : [];
+  const profileOptions = payload.overview?.profile_options || ['moderado'];
+  const selectedProfile = payload.signals?.selected_profile || preview.profile_name || 'moderado';
+  const leverageValue = state.riskCenter.query?.leverage || '';
+  return `
+    <div class="card card-span-12">
+      <div class="item-header">
+        <div>
+          <h2 style="margin:0;">Calculadora de riesgo</h2>
+          <div class="item-subtitle">${escapeHtml(preview.symbol)} · ${escapeHtml(preview.profile_label || preview.profile_name || 'Moderado')} · ${escapeHtml(preview.entry_mode_label || 'Límite')}</div>
+        </div>
+        <span class="plan-tag ${riskBandToneClass(diagnostics.risk_band)}">Banda ${escapeHtml(riskBandLabel(diagnostics.risk_band))}</span>
+      </div>
+      <div class="pill-row compact-pill-row">
+        <span class="pill">Operable: ${preview.is_operable ? 'Sí' : 'No'}</span>
+        <span class="pill">Señal activa: ${preview.signal_active_for_entry ? 'Sí' : 'No'}</span>
+        <span class="pill">Exchange: ${escapeHtml(preview.exchange_label || preview.exchange || '—')}</span>
+        <span class="pill">Leverage usado: ${escapeHtml(formatNumber(preview.leverage || 0, 0))}x</span>
+      </div>
+      <div class="action-row compact" style="margin-top:12px;">
+        ${profileOptions.map(option => `<button class="button ${option === selectedProfile ? 'button-primary' : 'button-secondary'}" data-risk-select-profile="${escapeHtml(option)}">${escapeHtml(profileLabel(option))}</button>`).join('')}
+      </div>
+      <div class="action-row compact" style="margin-top:12px; align-items:flex-end;">
+        <label style="display:flex; flex-direction:column; gap:6px; min-width:160px;">
+          <span>Override leverage</span>
+          <input id="riskPreviewLeverageInput" class="input" type="number" min="1" step="0.1" value="${escapeHtml(leverageValue)}" placeholder="Usar default">
+        </label>
+        <button class="button button-secondary" data-risk-preview-run="true">Recalcular</button>
+        <button class="button button-secondary" data-risk-clear-selection="true">Limpiar selección</button>
+      </div>
+      <div class="section-grid" style="margin-top:12px;">
+        ${riskMetricCard('Riesgo USDT', formatMoney(preview.risk_amount_usdt), 'Pérdida máxima prevista')}
+        ${riskMetricCard('Margen requerido', formatMoney(preview.required_margin_usdt), `${formatNumber(diagnostics.margin_usage_pct || 0, 2)}% del capital`)}
+        ${riskMetricCard('Notional', formatMoney(preview.position_notional_usdt), `Qty ${escapeHtml(formatNumber(preview.quantity_estimate || 0, 6))}`)}
+        ${riskMetricCard('Buffer', formatMoney(diagnostics.capital_buffer_usdt), `Mejor RR ${escapeHtml(formatNumber(diagnostics.best_rr_net || 0, 2))}`)}
+      </div>
+      <div class="feature-list" style="margin-top:12px;">
+        <div class="feature-item">Entrada <strong>${escapeHtml(formatNumber(preview.entry_price, 6))}</strong></div>
+        <div class="feature-item">Stop <strong>${escapeHtml(formatNumber(preview.stop_loss, 6))}</strong></div>
+        <div class="feature-item">Distancia al stop <strong>${escapeHtml(formatFractionPercent(preview.stop_distance_pct))}</strong></div>
+        <div class="feature-item">Pérdida efectiva <strong>${escapeHtml(formatFractionPercent(preview.effective_loss_pct))}</strong></div>
+        <div class="feature-item">Fee round-trip <strong>${escapeHtml(formatFractionPercent(preview.fee_roundtrip_pct))}</strong></div>
+        <div class="feature-item">Slippage <strong>${escapeHtml(formatFractionPercent(preview.slippage_decimal))}</strong></div>
+      </div>
+      <div class="list" style="margin-top:12px;">
+        ${tpResults.length ? tpResults.map(tp => `
+          <div class="item compact-item">
+            <div class="item-header">
+              <div class="item-title">${escapeHtml(tp.name || 'TP')}</div>
+              <span class="plan-tag">RR ${escapeHtml(formatNumber(tp.rr_net || 0, 2))}</span>
+            </div>
+            <div class="inline-meta">
+              <span>Precio: ${escapeHtml(formatNumber(tp.price, 6))}</span>
+              <span>Distancia: ${escapeHtml(formatFractionPercent(tp.distance_pct))}</span>
+              <span>Neto: ${escapeHtml(formatMoney(tp.net_profit_usdt))}</span>
+            </div>
+          </div>
+        `).join('') : '<div class="empty-state">No hay take profits calculables para esta señal.</div>'}
+      </div>
+      ${preview.warnings?.length ? `<div class="card" style="margin-top:12px;"><h3 style="margin-top:0;">Notas</h3><div class="feature-list">${preview.warnings.map(item => `<div class="feature-item">• ${escapeHtml(item)}</div>`).join('')}</div></div>` : ''}
+    </div>
+  `;
+}
+
+function renderRisk() {
+  if (!els.risk) return;
+  const payload = state.riskCenter.payload || {};
+  const overview = payload.overview || {};
+  const profile = payload.profile || {};
+  const readiness = payload.readiness || {};
+  const catalog = payload.catalog || {};
+  const signals = payload.signals || {};
+  const preview = payload.preview || null;
+  const previewError = payload.preview_error || '';
+  const liveSignals = Array.isArray(signals.live) ? signals.live : [];
+  const historySignals = Array.isArray(signals.history) ? signals.history : [];
+  const selectedSignalId = signals.selected_signal_id || preview?.signal_id || null;
+  const selectedSignal = signals.selected_signal || null;
+  const loadingBanner = state.riskCenter.loading
+    ? '<div class="card card-span-12"><div class="loading-inline">Actualizando gestión de riesgo...</div></div>'
+    : '';
+
+  if (!state.riskCenter.payload && !state.riskCenter.loading) {
+    els.risk.innerHTML = `
+      <div class="section-grid">
+        ${riskNoticeCard(state.riskCenter.notice)}
+        <div class="card card-span-12">
+          <h2>Gestión de riesgo</h2>
+          <p>Configura tu capital, riesgo por trade y calculadora para señales activas e históricas.</p>
+          <div class="action-row"><button class="button button-primary" data-open-risk-center="true">Abrir centro de riesgo</button></div>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  const exchangeOptions = Array.isArray(catalog.exchanges) ? catalog.exchanges : [];
+  const entryModeOptions = Array.isArray(catalog.entry_modes) ? catalog.entry_modes : [];
+  const profileOptions = Array.isArray(overview.profile_options) && overview.profile_options.length ? overview.profile_options : ['moderado'];
+  const isBasicTier = String(overview.feature_tier || '') === 'basic';
+  const configStateClass = readiness.is_ready ? 'is-positive' : 'is-warning';
+
+  els.risk.innerHTML = `
+    <div class="section-grid">
+      ${riskNoticeCard(state.riskCenter.notice)}
+      ${loadingBanner}
+      <div class="card card-span-12">
+        <div class="item-header">
+          <div>
+            <h2 style="margin:0;">Gestión de riesgo</h2>
+            <div class="item-subtitle">Centro único para capital, riesgo por trade, exchange, fees, slippage y calculadora sobre señales reales.</div>
+          </div>
+          <div class="action-row compact">
+            <button class="button button-secondary" data-goto="account">Volver a cuenta</button>
+            <button class="button button-secondary" data-risk-refresh="true">Refrescar</button>
+          </div>
+        </div>
+        <div class="pill-row compact-pill-row">
+          <span class="pill">Plan: ${escapeHtml(overview.plan_name || 'FREE')}</span>
+          <span class="pill">Tier: ${escapeHtml(isBasicTier ? 'Básico' : 'Completo')}</span>
+          <span class="pill">Perfiles: ${escapeHtml(profileOptions.map(profileLabel).join(' / '))}</span>
+        </div>
+      </div>
+
+      ${riskMetricCard('Capital', formatMoney(profile.capital_usdt), 'Base para el sizing')}
+      ${riskMetricCard('Riesgo / trade', `${escapeHtml(formatNumber(profile.risk_percent || 0, 2))}%`, 'Pérdida máxima objetivo')}
+      ${riskMetricCard('Leverage base', `${escapeHtml(formatNumber(profile.default_leverage || 0, 0))}x`, escapeHtml(profile.entry_mode_label || 'Límite'))}
+      ${riskMetricCard('Estado', readiness.is_ready ? 'Listo' : 'Bloqueado', readiness.message || 'Sin diagnóstico', configStateClass)}
+
+      <div class="card card-span-12 ${configStateClass}">
+        <h2>Perfil operativo</h2>
+        <div class="section-grid" style="margin-top:12px;">
+          <label class="card card-span-3" style="padding:12px;">
+            <div class="metric-label">Capital USDT</div>
+            <input id="riskCapitalInput" class="input" type="number" min="0" step="0.01" value="${escapeHtml(profile.capital_usdt ?? '')}">
+          </label>
+          <label class="card card-span-3" style="padding:12px;">
+            <div class="metric-label">Riesgo %</div>
+            <input id="riskPercentInput" class="input" type="number" min="0.01" step="0.01" value="${escapeHtml(profile.risk_percent ?? '')}">
+          </label>
+          <label class="card card-span-3" style="padding:12px;">
+            <div class="metric-label">Exchange</div>
+            <select id="riskExchangeSelect" class="input">${exchangeOptions.map(option => `<option value="${escapeHtml(option.value)}" ${option.value === profile.exchange ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select>
+          </label>
+          <label class="card card-span-3" style="padding:12px;">
+            <div class="metric-label">Tipo de entrada</div>
+            <select id="riskEntryModeSelect" class="input">${entryModeOptions.map(option => `<option value="${escapeHtml(option.value)}" ${option.value === profile.entry_mode ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select>
+          </label>
+          <label class="card card-span-3" style="padding:12px;">
+            <div class="metric-label">Fee por lado %</div>
+            <input id="riskFeeInput" class="input" type="number" min="0" step="0.001" value="${escapeHtml(profile.fee_percent_per_side ?? '')}">
+          </label>
+          <label class="card card-span-3" style="padding:12px;">
+            <div class="metric-label">Slippage %</div>
+            <input id="riskSlippageInput" class="input" type="number" min="0" step="0.001" value="${escapeHtml(profile.slippage_percent ?? '')}">
+          </label>
+          <label class="card card-span-3" style="padding:12px;">
+            <div class="metric-label">Leverage por defecto</div>
+            <input id="riskLeverageInput" class="input" type="number" min="1" step="0.1" value="${escapeHtml(profile.default_leverage ?? '')}">
+          </label>
+          <label class="card card-span-3" style="padding:12px;">
+            <div class="metric-label">Perfil base</div>
+            <select id="riskDefaultProfileSelect" class="input" ${isBasicTier ? 'disabled' : ''}>${profileOptions.map(option => `<option value="${escapeHtml(option)}" ${option === profile.default_profile ? 'selected' : ''}>${escapeHtml(profileLabel(option))}</option>`).join('')}</select>
+          </label>
+        </div>
+        <div class="action-row" style="margin-top:12px;">
+          <button class="button button-secondary" data-risk-apply-preset="true">Cargar preset exchange</button>
+          <button class="button button-primary" data-risk-save-profile="true">Guardar perfil</button>
+        </div>
+        ${isBasicTier ? '<div class="detail-note" style="margin-top:12px;">En FREE el cálculo usa el perfil Moderado. Plus y Premium desbloquean Conservador y Agresivo.</div>' : ''}
+      </div>
+
+      <div class="card card-span-12">
+        <div class="item-header">
+          <div>
+            <h2 style="margin:0;">Calculadora por señal</h2>
+            <div class="item-subtitle">Selecciona una señal en vivo o del historial para calcular sizing, margen, pérdida y RR neto.</div>
+          </div>
+          ${selectedSignal ? `<span class="plan-tag">${escapeHtml(selectedSignal.symbol)} ${escapeHtml(selectedSignal.direction)}</span>` : ''}
+        </div>
+        ${previewError ? `<div class="error-banner" style="margin-top:12px;">${escapeHtml(previewError)}</div>` : ''}
+      </div>
+
+      <div class="card card-span-6">
+        <h2>Señales en vivo</h2>
+        <div class="list">${liveSignals.length ? liveSignals.map(item => riskCandidateCard(item, selectedSignalId)).join('') : '<div class="empty-state">No hay señales activas recientes para calcular ahora mismo.</div>'}</div>
+      </div>
+
+      <div class="card card-span-6">
+        <h2>Historial reciente</h2>
+        <div class="list">${historySignals.length ? historySignals.map(item => riskCandidateCard(item, selectedSignalId)).join('') : '<div class="empty-state">Todavía no hay histórico para calcular.</div>'}</div>
+      </div>
+
+      ${selectedSignal && !preview ? `
+        <div class="card card-span-12">
+          <h2>Señal seleccionada</h2>
+          <div class="pill-row compact-pill-row">
+            <span class="pill">${escapeHtml(selectedSignal.symbol)}</span>
+            <span class="pill">${escapeHtml(selectedSignal.direction)}</span>
+            <span class="pill">${selectedSignal.source === 'history' ? 'Historial' : 'En vivo'}</span>
+          </div>
+          <div class="action-row compact" style="margin-top:12px;">
+            ${profileOptions.map(option => `<button class="button ${option === (signals.selected_profile || profile.default_profile) ? 'button-primary' : 'button-secondary'}" data-risk-select-profile="${escapeHtml(option)}">${escapeHtml(profileLabel(option))}</button>`).join('')}
+            <button class="button button-secondary" data-risk-preview-run="true">Calcular</button>
+            <button class="button button-secondary" data-risk-clear-selection="true">Limpiar</button>
+          </div>
+        </div>
+      ` : ''}
+
+      ${riskPreviewCard(preview, payload)}
+    </div>
+  `;
+}
+
 async function refreshAdminOverview(force = false) {
   if (!state.payload?.me?.is_admin) return null;
   if (state.adminPanel.loading) return state.adminPanel.overview;
@@ -769,6 +1153,7 @@ function signalCard(item) {
       </div>
       <div class="action-row compact">
         <button class="button button-secondary" data-signal-detail="${escapeHtml(item.signal_id)}" data-signal-source="signals">Ver inteligencia</button>
+        <button class="button button-secondary" data-open-risk-signal="${escapeHtml(item.signal_id)}">Calcular riesgo</button>
       </div>
     </div>
   `;
@@ -791,6 +1176,7 @@ function historyCard(item) {
       </div>
       <div class="action-row compact">
         <button class="button button-secondary" data-signal-detail="${escapeHtml(item.signal_id)}" data-signal-source="history">Ver inteligencia</button>
+        <button class="button button-secondary" data-open-risk-signal="${escapeHtml(item.signal_id)}">Calcular riesgo</button>
       </div>
     </div>
   `;
@@ -1391,6 +1777,7 @@ function renderMarket() {
               ${item.latest_signal?.signal_id ? `
                 <div class="action-row compact watchlist-card-actions">
                   <button class="button button-secondary" data-signal-detail="${escapeHtml(item.latest_signal.signal_id)}" data-signal-source="watchlist">Ver inteligencia</button>
+                  <button class="button button-secondary" data-open-risk-signal="${escapeHtml(item.latest_signal.signal_id)}">Calcular riesgo</button>
                 </div>
               ` : ''}
             </div>
@@ -1894,6 +2281,13 @@ function renderSignalDetailModal(payload) {
       </div>
 
       ${warnings.length ? `<div class="card signal-intel-section signal-intel-section-full"><h3>Notas</h3><div class="feature-list">${warnings.map(item => `<div class="feature-item">• ${escapeHtml(item)}</div>`).join('')}</div></div>` : ''}
+      <div class="card signal-intel-section signal-intel-section-full">
+        <h3>Gestión de riesgo</h3>
+        <p>Lleva esta señal directamente a la calculadora para revisar sizing, margen requerido, pérdida al stop y RR neto.</p>
+        <div class="action-row compact">
+          <button class="button button-secondary" data-open-risk-signal="${escapeHtml(signal.signal_id)}">Abrir calculadora</button>
+        </div>
+      </div>
       ${payload.upgrade_hint ? `<div class="card signal-intel-section signal-intel-section-full upgrade-note-card"><h3>Lectura premium</h3><p>${escapeHtml(payload.upgrade_hint)}</p></div>` : ''}
     </div>
   `;
@@ -2008,6 +2402,19 @@ function renderAccount() {
       </div>
 
       <div class="card card-span-6">
+        <h2>Gestión de riesgo</h2>
+        <p>Configura capital, riesgo por trade, fees, slippage y calcula sizing real desde señales vivas e históricas.</p>
+        <div class="pill-row compact-pill-row">
+          <span class="pill">Capital: ${escapeHtml(formatMoney((state.riskCenter.payload?.profile || {}).capital_usdt ?? 0))}</span>
+          <span class="pill">Riesgo: ${escapeHtml(formatNumber((state.riskCenter.payload?.profile || {}).risk_percent ?? 0, 2))}%</span>
+          <span class="pill">Leverage: ${escapeHtml(formatNumber((state.riskCenter.payload?.profile || {}).default_leverage ?? 0, 0))}x</span>
+        </div>
+        <div class="action-row compact" style="margin-top:12px;">
+          <button class="button button-secondary" data-open-risk-center="true">Abrir gestión de riesgo</button>
+        </div>
+      </div>
+
+      <div class="card card-span-6">
         <h2>Referidos</h2>
         <div class="pill-row">
           <span class="pill">Totales: ${escapeHtml(referrals.total_referred || 0)}</span>
@@ -2093,6 +2500,7 @@ function renderAll() {
   renderMarket();
   renderHistory();
   renderAccount();
+  renderRisk();
   renderAdmin();
   bindViewButtons();
   els.loading.classList.add('hidden');
@@ -2180,6 +2588,83 @@ function bindViewButtons() {
         }
       }
     };
+  });
+  document.querySelectorAll('[data-open-risk-center]').forEach(button => {
+    button.onclick = () => openRiskCenter({});
+  });
+  document.querySelectorAll('[data-open-risk-signal]').forEach(button => {
+    button.onclick = () => openRiskCenter({
+      signalId: button.dataset.openRiskSignal,
+      profile: state.riskCenter.payload?.signals?.selected_profile || state.riskCenter.payload?.profile?.default_profile || null,
+      leverage: state.riskCenter.query?.leverage || null,
+    });
+  });
+  document.querySelectorAll('[data-risk-refresh]').forEach(button => {
+    button.onclick = async () => {
+      setRiskNotice('Actualizando gestión de riesgo...', 'accent');
+      renderRisk();
+      bindViewButtons();
+      try {
+        await refreshRiskCenter(true, state.riskCenter.query || {});
+        setRiskNotice('Gestión de riesgo actualizada correctamente.', 'positive');
+      } catch (_) {}
+    };
+  });
+  document.querySelectorAll('[data-risk-apply-preset]').forEach(button => {
+    button.onclick = () => {
+      const applied = applyRiskPresetToInputs();
+      setRiskNotice(applied ? 'Preset de exchange cargado en fee y slippage.' : 'No pude aplicar el preset para esa combinación.', applied ? 'accent' : 'warning');
+      tg?.showAlert(applied ? 'Preset de exchange cargado en fee y slippage.' : 'No pude aplicar el preset para esa combinación.');
+    };
+  });
+  document.querySelectorAll('[data-risk-save-profile]').forEach(button => {
+    button.onclick = async () => {
+      if (button.disabled) return;
+      const original = button.textContent;
+      button.disabled = true;
+      button.textContent = 'Guardando...';
+      try {
+        const patch = collectRiskProfilePatch();
+        setRiskNotice('Guardando perfil de riesgo...', 'accent');
+        renderRisk();
+        bindViewButtons();
+        await api('/api/miniapp/risk/profile', {
+          method: 'POST',
+          body: JSON.stringify(patch),
+        });
+        await refreshRiskCenter(true, state.riskCenter.query || {});
+        setRiskNotice('Perfil de riesgo guardado correctamente.', 'positive');
+        renderRisk();
+        bindViewButtons();
+      } catch (error) {
+        setRiskNotice(`No se pudo guardar el perfil: ${error.message || 'error'}`, 'warning');
+        renderRisk();
+        bindViewButtons();
+        tg?.showAlert(`No se pudo guardar el perfil: ${error.message || 'error'}`);
+      } finally {
+        if (button.isConnected) {
+          button.disabled = false;
+          button.textContent = original;
+        }
+      }
+    };
+  });
+  document.querySelectorAll('[data-risk-select-profile]').forEach(button => {
+    button.onclick = () => openRiskCenter({
+      signalId: state.riskCenter.payload?.signals?.selected_signal_id || state.riskCenter.query?.signalId || null,
+      profile: button.dataset.riskSelectProfile || null,
+      leverage: document.getElementById('riskPreviewLeverageInput')?.value || state.riskCenter.query?.leverage || null,
+    });
+  });
+  document.querySelectorAll('[data-risk-preview-run]').forEach(button => {
+    button.onclick = () => openRiskCenter({
+      signalId: state.riskCenter.payload?.signals?.selected_signal_id || state.riskCenter.query?.signalId || null,
+      profile: state.riskCenter.payload?.signals?.selected_profile || state.riskCenter.query?.profile || state.riskCenter.payload?.profile?.default_profile || null,
+      leverage: document.getElementById('riskPreviewLeverageInput')?.value || null,
+    });
+  });
+  document.querySelectorAll('[data-risk-clear-selection]').forEach(button => {
+    button.onclick = () => openRiskCenter({ signalId: null, profile: null, leverage: null });
   });
   document.querySelectorAll('[data-open-admin-panel]').forEach(button => {
     button.onclick = () => openAdminPanel(false);
