@@ -6,6 +6,7 @@ from math import isfinite, log10
 from typing import Any, Dict, Iterable, List, Optional
 
 from app.binance_api import get_futures_24h_tickers, get_open_interest, get_premium_index, get_radar_opportunities
+from app.services.market_data_service import get_funding_rate_pct_map, get_open_interest_map
 from app.config import is_payment_configuration_ready
 from app.database import payment_orders_collection, subscription_events_collection, users_collection, user_signals_collection, watchlists_collection
 from app.history_service import get_history_entries_for_user
@@ -789,6 +790,8 @@ def _serialize_radar(
         }
 
     symbols = [str(row.get("symbol") or "").upper() for row in radar_rows if row.get("symbol")]
+    funding_rate_map = get_funding_rate_pct_map(symbols, premium_index_fn=get_premium_index)
+    open_interest_map = get_open_interest_map(symbols, open_interest_fn=get_open_interest)
     market_snapshot = market_snapshot or {}
     market_bias = market_snapshot.get("bias")
     preferred_side = market_snapshot.get("preferred_side")
@@ -847,10 +850,8 @@ def _serialize_radar(
         setup_priority_score = max(0.0, min(100.0, setup_priority_score))
         setup_proximity_score = max(0.0, min(100.0, setup_proximity_score))
 
-        premium = _safe_call(get_premium_index, {}, symbol) or {}
-        funding_rate_pct = _safe_float(premium.get("lastFundingRate")) * 100.0
-        oi_data = _safe_call(get_open_interest, {}, symbol) or {}
-        open_interest = _safe_float(oi_data.get("openInterest"))
+        funding_rate_pct = float(funding_rate_map.get(symbol) or 0.0)
+        open_interest = float(open_interest_map.get(symbol) or 0.0)
 
         setup_action_label = _watchlist_action_label(
             direction,
