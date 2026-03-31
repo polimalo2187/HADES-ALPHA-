@@ -29,6 +29,7 @@ from app.miniapp.service import (
     build_market_payload,
     build_me_payload,
     build_plans_payload,
+    build_risk_center_payload,
     build_signals_payload,
     build_watchlist_context,
     build_watchlist_payload,
@@ -49,6 +50,7 @@ from app.payment_service import cancel_payment_order, confirm_payment_order, cre
 from app.statistics import reset_statistics
 from app.plans import normalize_plan, plan_status
 from app.watchlist import add_symbol, normalize_many, remove_symbol, set_symbols, clear_watchlist
+from app.risk import RiskConfigurationError, get_exchange_fee_preset, normalize_exchange_name, normalize_entry_mode, save_user_risk_profile
 
 logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
@@ -81,6 +83,17 @@ class MiniAppWatchlistReplaceRequest(BaseModel):
 
 class MiniAppAdminResetRequest(BaseModel):
     confirm: bool = False
+
+
+class MiniAppRiskProfileUpdateRequest(BaseModel):
+    capital_usdt: Optional[float] = None
+    risk_percent: Optional[float] = None
+    exchange: Optional[str] = None
+    entry_mode: Optional[str] = None
+    fee_percent_per_side: Optional[float] = None
+    slippage_percent: Optional[float] = None
+    default_leverage: Optional[float] = None
+    default_profile: Optional[str] = None
 
 
 def _resolve_dev_telegram_user(payload: MiniAppAuthRequest) -> Dict[str, Any]:
@@ -476,6 +489,68 @@ def create_mini_app() -> FastAPI:
     async def miniapp_cancel_payment(payload: MiniAppPaymentActionRequest, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
         cancelled = cancel_payment_order(payload.order_id, int(user.get("user_id") or 0))
         return {"ok": cancelled}
+
+    @app.get("/api/miniapp/risk")
+    async def miniapp_risk_center(
+        signal_id: Optional[str] = None,
+        profile: Optional[str] = None,
+        leverage: Optional[float] = None,
+        user: Dict[str, Any] = Depends(get_authenticated_user),
+    ) -> Dict[str, Any]:
+        return build_risk_center_payload(
+            user,
+            signal_id=signal_id,
+            profile_name=profile,
+            override_leverage=leverage,
+        )
+
+    @app.post("/api/miniapp/risk/profile")
+    async def miniapp_update_risk_profile(
+        payload: MiniAppRiskProfileUpdateRequest,
+        user: Dict[str, Any] = Depends(get_authenticated_user),
+    ) -> Dict[str, Any]:
+        raw_patch = payload.model_dump(exclude_none=True)
+        if not raw_patch:
+            raise HTTPException(status_code=400, detail="empty_risk_patch")
+
+        user_id = int(user.get("user_id") or 0)
+        effective_plan = normalize_plan(plan_status(user).get("plan") or user.get("plan"))
+        patch = dict(raw_patch)
+
+        current_exchange = normalize_exchange_name(patch.get("exchange") or "") if patch.get("exchange") is not None else None
+        current_entry_mode = normalize_entry_mode(patch.get("entry_mode") or "") if patch.get("entry_mode") is not None else None
+        if current_exchange or current_entry_mode:
+            current_payload = build_risk_center_payload(user)
+            current_profile = current_payload.get("profile") or {}
+            preset = get_exchange_fee_preset(
+                current_exchange or current_profile.get("exchange"),
+                current_entry_mode or current_profile.get("entry_mode"),
+            )
+            patch["exchange"] = preset["exchange"]
+            patch["entry_mode"] = preset["entry_mode"]
+            if "fee_percent_per_side" not in patch:
+                patch["fee_percent_per_side"] = preset["fee_percent_per_side"]
+            if "slippage_percent" not in patch:
+                patch["slippage_percent"] = preset["slippage_percent"]
+
+        if effective_plan == "free":
+            patch["default_profile"] = "moderado"
+        elif "default_profile" in patch and patch["default_profile"] is not None:
+            patch["default_profile"] = str(patch["default_profile"]).strip().lower()
+
+        try:
+            save_user_risk_profile(user_id, patch)
+        except RiskConfigurationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        record_audit_event(
+            event_type="miniapp_risk_profile_updated",
+            status="ok",
+            module="miniapp",
+            user_id=user_id,
+            metadata={"fields": sorted(list(patch.keys()))},
+        )
+        return build_risk_center_payload(user)
 
     @app.get("/api/miniapp/admin/overview")
     async def miniapp_admin_overview(admin_user: Dict[str, Any] = Depends(get_authenticated_admin_user)) -> Dict[str, Any]:
