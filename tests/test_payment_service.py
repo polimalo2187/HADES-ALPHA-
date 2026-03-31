@@ -40,7 +40,8 @@ class PaymentServiceTests(unittest.TestCase):
             'expires_at': utcnow() + timedelta(minutes=10),
         }
         collection = MagicMock()
-        with patch('app.payment_service.get_active_payment_order_for_user', return_value=existing), \
+        with patch('app.payment_service.get_payment_configuration_status', return_value={'ready': True, 'missing_keys': []}), \
+             patch('app.payment_service.get_active_payment_order_for_user', return_value=existing), \
              patch('app.payment_service.payment_orders_collection', return_value=collection), \
              patch('app.payment_service.cancel_open_orders_for_user') as mocked_cancel, \
              patch('app.payment_service.record_audit_event') as mocked_audit:
@@ -62,7 +63,8 @@ class PaymentServiceTests(unittest.TestCase):
         }
         collection = MagicMock()
         collection.find_one.return_value = None
-        with patch('app.payment_service.get_active_payment_order_for_user', return_value=existing), \
+        with patch('app.payment_service.get_payment_configuration_status', return_value={'ready': True, 'missing_keys': []}), \
+             patch('app.payment_service.get_active_payment_order_for_user', return_value=existing), \
              patch('app.payment_service.payment_orders_collection', return_value=collection), \
              patch('app.payment_service.cancel_open_orders_for_user', return_value=1) as mocked_cancel, \
              patch('app.payment_service.get_payment_network', return_value='bep20'), \
@@ -76,6 +78,13 @@ class PaymentServiceTests(unittest.TestCase):
         self.assertEqual(order['plan'], 'premium')
         mocked_cancel.assert_called_once_with(77, reason='superseded_by_new_order')
         collection.insert_one.assert_called_once()
+
+
+    def test_create_payment_order_rejects_when_payment_configuration_is_incomplete(self):
+        with patch('app.payment_service.get_payment_configuration_status', return_value={'ready': False, 'missing_keys': ['BSC_RPC_HTTP_URL']}):
+            with self.assertRaises(RuntimeError) as ctx:
+                create_payment_order(77, 'premium', 30)
+        self.assertIn('Configuración de pagos incompleta', str(ctx.exception))
 
     def test_confirm_payment_order_returns_in_progress_when_lock_is_already_held(self):
         now = utcnow()
