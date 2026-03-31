@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from app.binance_api import get_futures_24h_tickers, get_open_interest, get_premium_index, get_radar_opportunities
 from app.services.market_data_service import get_funding_rate_pct_map, get_open_interest_map
-from app.config import is_payment_configuration_ready
+from app.config import get_payment_min_confirmations, is_payment_configuration_ready
 from app.database import payment_orders_collection, subscription_events_collection, users_collection, user_signals_collection, watchlists_collection
 from app.history_service import get_history_entries_for_user
 from app.market import get_market_state_snapshot
@@ -72,6 +72,154 @@ def _label_order_status(value: Any) -> str:
     return mapping.get(normalized, normalized.replace("_", " ").title())
 
 
+def _minutes_until(value: Any) -> Optional[int]:
+    if not isinstance(value, datetime):
+        return None
+    delta = int((value - utcnow()).total_seconds())
+    return max(delta // 60, 0)
+
+
+def _time_left_label(minutes: Optional[int]) -> str:
+    if minutes is None:
+        return "Sin horario"
+    if minutes <= 0:
+        return "Expirada"
+    if minutes < 60:
+        return f"{minutes} min"
+    hours, rem = divmod(int(minutes), 60)
+    if hours < 24:
+        return f"{hours} h {rem} min" if rem else f"{hours} h"
+    days, rem_hours = divmod(hours, 24)
+    return f"{days} d {rem_hours} h" if rem_hours else f"{days} d"
+
+
+def _billing_steps_for_order(order: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    steps = [
+        {"key": "created", "label": "Orden", "state": "done" if order else "upcoming"},
+        {"key": "fund", "label": "Enviar monto", "state": "upcoming"},
+        {"key": "verify", "label": "Verificación", "state": "upcoming"},
+        {"key": "activate", "label": "Activación", "state": "upcoming"},
+    ]
+    if not order:
+        return steps
+    status = str(order.get("status") or "awaiting_payment").lower().strip()
+    if status == "awaiting_payment":
+        steps[1]["state"] = "current"
+    elif status == "verification_in_progress":
+        steps[1]["state"] = "done"
+        steps[2]["state"] = "current"
+    elif status == "paid_unconfirmed":
+        steps[1]["state"] = "done"
+        steps[2]["state"] = "current"
+    elif status == "completed":
+        for item in steps[1:]:
+            item["state"] = "done"
+        steps[3]["state"] = "done"
+    elif status in {"cancelled", "expired"}:
+        steps[1]["state"] = "blocked"
+    return steps
+
+
+def _build_billing_focus(*, payment_config_ready: bool, active_order: Optional[Dict[str, Any]], billing_summary: Dict[str, Any], subscription: Dict[str, Any]) -> Dict[str, Any]:
+    required_confirmations = int(get_payment_min_confirmations() or 3)
+    base = {
+        "state": "idle",
+        "tone": "neutral",
+        "title": "Centro de billing listo",
+        "headline": "Sin orden abierta por ahora",
+        "message": "Puedes renovar o hacer upgrade desde los planes disponibles.",
+        "can_create_order": bool(payment_config_ready),
+        "required_confirmations": required_confirmations,
+        "steps": _billing_steps_for_order(active_order),
+        "primary_cta": "Generar orden",
+        "hint": None,
+    }
+    if not payment_config_ready:
+        base.update({
+            "state": "config_missing",
+            "tone": "warning",
+            "title": "Pagos no disponibles",
+            "headline": "La configuración de cobro está incompleta",
+            "message": "No generes órdenes hasta que la configuración BEP-20 esté lista.",
+            "can_create_order": False,
+            "primary_cta": "Soporte",
+            "hint": "Revisa wallet, contrato y RPC antes de cobrar.",
+        })
+        return base
+
+    if active_order:
+        status = str(active_order.get("status") or "awaiting_payment").lower().strip()
+        confirmations = int(active_order.get("confirmations") or 0)
+        minutes_left = _minutes_until(active_order.get("expires_at"))
+        time_left = _time_left_label(minutes_left)
+        plan_name = active_order.get("plan_name") or get_plan_name(active_order.get("plan"))
+        headline = f"{plan_name} · {int(active_order.get('days') or 0)} días · {active_order.get('amount_usdt')} USDT"
+        base.update({
+            "state": status,
+            "headline": headline,
+            "expires_in_minutes": minutes_left,
+            "time_left_label": time_left,
+            "steps": _billing_steps_for_order(active_order),
+            "confirmations": confirmations,
+        })
+        if status == "awaiting_payment":
+            base.update({
+                "tone": "accent",
+                "title": "Orden abierta y lista para pago",
+                "message": f"Envía el monto exacto por BEP-20 y luego confirma dentro de la MiniApp. Tiempo restante: {time_left}.",
+                "primary_cta": "Confirmar pago",
+                "hint": "Si generas otra orden distinta, esta se reemplaza.",
+            })
+        elif status == "verification_in_progress":
+            base.update({
+                "tone": "warning",
+                "title": "Verificación en curso",
+                "message": "Ya hay una verificación corriendo. No envíes otro pago ni generes otra orden hasta que termine.",
+                "primary_cta": "Esperando verificación",
+                "hint": "Si tocaste dos veces, la segunda solicitud no debería duplicar nada.",
+            })
+        elif status == "paid_unconfirmed":
+            missing = max(required_confirmations - confirmations, 0)
+            base.update({
+                "tone": "positive",
+                "title": "Pago detectado, esperando confirmaciones",
+                "message": f"La red detectó tu pago. Confirmaciones actuales: {confirmations}/{required_confirmations}. Faltan {missing}.",
+                "primary_cta": "Revisar de nuevo",
+                "hint": "No reenvíes fondos. Solo espera más confirmaciones y vuelve a confirmar luego.",
+            })
+        return base
+
+    open_orders = int((billing_summary or {}).get("open") or 0)
+    days_left = int((subscription or {}).get("days_left") or 0)
+    if open_orders > 0:
+        base.update({
+            "state": "open_without_payload",
+            "tone": "warning",
+            "title": "Hay órdenes abiertas",
+            "headline": f"Órdenes abiertas: {open_orders}",
+            "message": "Refresca la cuenta o revisa el estado antes de crear otra orden.",
+            "primary_cta": "Refrescar cuenta",
+        })
+    elif days_left <= 3:
+        base.update({
+            "state": "renew_soon",
+            "tone": "warning",
+            "title": "Renovación recomendada",
+            "headline": f"Tu acceso vence en {days_left} días",
+            "message": "Conviene dejar la renovación lista antes del vencimiento para no perder continuidad.",
+            "primary_cta": "Renovar",
+        })
+    else:
+        current_plan = get_plan_name((subscription or {}).get("plan"))
+        base.update({
+            "headline": f"Plan actual: {current_plan}",
+            "message": "Puedes renovar tu plan o hacer upgrade desde los bloques de Plus y Premium.",
+        })
+    return base
+
+
+
+
 def _plan_features(plan: str) -> list[str]:
     plan_value = normalize_plan(plan)
     if plan_value == "premium":
@@ -103,6 +251,9 @@ def serialize_order_public(order: Optional[Dict[str, Any]]) -> Optional[Dict[str
     except Exception:
         unique_delta = None
     plan = normalize_plan(order.get("plan"))
+    expires_at = order.get("expires_at")
+    expires_in_minutes = _minutes_until(expires_at)
+    status = str(order.get("status") or "awaiting_payment").lower().strip()
     return {
         "order_id": order.get("order_id"),
         "plan": plan,
@@ -114,11 +265,15 @@ def serialize_order_public(order: Optional[Dict[str, Any]]) -> Optional[Dict[str
         "network": order.get("network"),
         "token_symbol": order.get("token_symbol"),
         "deposit_address": order.get("deposit_address"),
-        "status": order.get("status"),
-        "status_label": _label_order_status(order.get("status")),
+        "status": status,
+        "status_label": _label_order_status(status),
         "last_verification_reason": order.get("last_verification_reason"),
         "confirmations": int(order.get("confirmations") or 0),
-        "expires_at": _iso(order.get("expires_at")),
+        "expires_at": _iso(expires_at),
+        "expires_in_minutes": expires_in_minutes,
+        "time_left_label": _time_left_label(expires_in_minutes),
+        "is_open": status in {"awaiting_payment", "verification_in_progress", "paid_unconfirmed"},
+        "steps": _billing_steps_for_order(order),
         "created_at": _iso(order.get("created_at")),
         "updated_at": _iso(order.get("updated_at")),
         "confirmed_at": _iso(order.get("confirmed_at")),
@@ -1602,6 +1757,42 @@ def build_account_center_payload(user: Dict[str, Any]) -> Dict[str, Any]:
 
     last_purchase_plan = normalize_plan(user.get("last_purchase_plan"))
 
+    subscription_payload = {
+        "plan": display_plan,
+        "plan_name": get_plan_name(display_plan),
+        "status": me.get("subscription_status"),
+        "status_label": me.get("subscription_status_label"),
+        "days_left": int(me.get("days_left") or 0),
+        "expires_at": me.get("expires_at"),
+        "plan_started_at": _iso(user.get("plan_started_at")),
+        "last_purchase_at": _iso(user.get("last_purchase_at")),
+        "last_purchase_plan": last_purchase_plan,
+        "last_purchase_plan_name": get_plan_name(last_purchase_plan),
+        "last_purchase_days": int(user.get("last_purchase_days") or 0),
+        "last_entitlement_source": user.get("last_entitlement_source"),
+        "features": _plan_features(display_plan),
+        "is_trial": str(me.get("subscription_status") or "") == "trial",
+        "is_paid": display_plan in {"plus", "premium"} and str(me.get("subscription_status") or "") == "active",
+        "can_upgrade_plus": display_plan == "free",
+        "can_upgrade_premium": display_plan in {"free", "plus"},
+        "watchlist": watchlist_meta,
+    }
+    payment_config_ready = bool(is_payment_configuration_ready())
+    active_order_public = serialize_order_public(active_order)
+    billing_payload = {
+        "payment_config_ready": payment_config_ready,
+        "active_order": active_order_public,
+        "recent_orders": recent_orders,
+        "summary": billing_summary,
+        "latest_completed_at": latest_completed_at,
+    }
+    billing_payload["focus"] = _build_billing_focus(
+        payment_config_ready=payment_config_ready,
+        active_order=active_order_public,
+        billing_summary=billing_summary,
+        subscription=subscription_payload,
+    )
+
     return {
         "overview": {
             **me,
@@ -1609,33 +1800,8 @@ def build_account_center_payload(user: Dict[str, Any]) -> Dict[str, Any]:
             "watchlist_limit": watchlist_meta.get("max_symbols"),
             "watchlist_slots_left": watchlist_meta.get("slots_left"),
         },
-        "subscription": {
-            "plan": display_plan,
-            "plan_name": get_plan_name(display_plan),
-            "status": me.get("subscription_status"),
-            "status_label": me.get("subscription_status_label"),
-            "days_left": int(me.get("days_left") or 0),
-            "expires_at": me.get("expires_at"),
-            "plan_started_at": _iso(user.get("plan_started_at")),
-            "last_purchase_at": _iso(user.get("last_purchase_at")),
-            "last_purchase_plan": last_purchase_plan,
-            "last_purchase_plan_name": get_plan_name(last_purchase_plan),
-            "last_purchase_days": int(user.get("last_purchase_days") or 0),
-            "last_entitlement_source": user.get("last_entitlement_source"),
-            "features": _plan_features(display_plan),
-            "is_trial": str(me.get("subscription_status") or "") == "trial",
-            "is_paid": display_plan in {"plus", "premium"} and str(me.get("subscription_status") or "") == "active",
-            "can_upgrade_plus": display_plan == "free",
-            "can_upgrade_premium": display_plan in {"free", "plus"},
-            "watchlist": watchlist_meta,
-        },
-        "billing": {
-            "payment_config_ready": bool(is_payment_configuration_ready()),
-            "active_order": serialize_order_public(active_order),
-            "recent_orders": recent_orders,
-            "summary": billing_summary,
-            "latest_completed_at": latest_completed_at,
-        },
+        "subscription": subscription_payload,
+        "billing": billing_payload,
         "referrals": {
             "ref_code": me.get("ref_code"),
             "referral_link": referral_link,
