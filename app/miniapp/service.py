@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from app.binance_api import get_futures_24h_tickers, get_open_interest, get_premium_index, get_radar_opportunities
 from app.services.market_data_service import get_funding_rate_pct_map, get_open_interest_map
-from app.config import get_payment_configuration_status, get_payment_min_confirmations
+from app.config import get_bot_username, get_payment_configuration_status, get_payment_min_confirmations
 from app.database import payment_orders_collection, subscription_events_collection, users_collection, user_signals_collection, watchlists_collection
 from app.history_service import get_history_entries_for_user
 from app.market import get_market_state_snapshot
@@ -2040,6 +2040,15 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         },
     )
     plans_payload = _safe_call(lambda: build_plans_payload(me_plan), {"plus": [], "premium": []})
+    payment_config_status = _safe_call(get_payment_configuration_status, {
+        "ready": False,
+        "checks": [
+            {"key": "BSC_RPC_HTTP_URL", "label": "RPC BSC", "value_present": False},
+            {"key": "PAYMENT_TOKEN_CONTRACT", "label": "Contrato del token", "value_present": False},
+            {"key": "PAYMENT_RECEIVER_ADDRESS", "label": "Wallet receptora", "value_present": False},
+        ],
+        "missing_keys": ["BSC_RPC_HTTP_URL", "PAYMENT_TOKEN_CONTRACT", "PAYMENT_RECEIVER_ADDRESS"],
+    })
 
     account_payload = _safe_call(lambda: build_account_center_payload(user), {
         "overview": {
@@ -2059,22 +2068,14 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
             "watchlist": watchlist_meta_payload,
         },
         "billing": {
-            "payment_config_ready": False,
-            "payment_config_status": {
-                "ready": False,
-                "checks": [
-                    {"key": "BSC_RPC_HTTP_URL", "label": "RPC BSC", "value_present": False},
-                    {"key": "PAYMENT_TOKEN_CONTRACT", "label": "Contrato del token", "value_present": False},
-                    {"key": "PAYMENT_RECEIVER_ADDRESS", "label": "Wallet receptora", "value_present": False},
-                ],
-                "missing_keys": ["BSC_RPC_HTTP_URL", "PAYMENT_TOKEN_CONTRACT", "PAYMENT_RECEIVER_ADDRESS"],
-            },
+            "payment_config_ready": bool(payment_config_status.get("ready")),
+            "payment_config_status": payment_config_status,
             "active_order": dashboard_payload.get("active_payment_order"),
             "recent_orders": [],
             "summary": {"open": 0, "completed": 0, "expired": 0, "cancelled": 0, "total": 0},
             "latest_completed_at": None,
             "focus": _build_billing_focus(
-                payment_config_ready=False,
+                payment_config_ready=bool(payment_config_status.get("ready")),
                 active_order=dashboard_payload.get("active_payment_order"),
                 billing_summary={"open": 0, "completed": 0, "expired": 0, "cancelled": 0, "total": 0},
                 subscription={
@@ -2083,15 +2084,7 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
                     "status": me_payload.get("subscription_status"),
                     "status_label": me_payload.get("subscription_status_label"),
                 },
-                payment_config_status={
-                    "ready": False,
-                    "checks": [
-                        {"key": "BSC_RPC_HTTP_URL", "label": "RPC BSC", "value_present": False},
-                        {"key": "PAYMENT_TOKEN_CONTRACT", "label": "Contrato del token", "value_present": False},
-                        {"key": "PAYMENT_RECEIVER_ADDRESS", "label": "Wallet receptora", "value_present": False},
-                    ],
-                    "missing_keys": ["BSC_RPC_HTTP_URL", "PAYMENT_TOKEN_CONTRACT", "PAYMENT_RECEIVER_ADDRESS"],
-                },
+                payment_config_status=payment_config_status,
             ),
         },
         "referrals": {
@@ -2124,6 +2117,9 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         "plans": plans_payload,
         "account": account_payload,
         "support_url": "https://chat.whatsapp.com/JXxSGjaKtqRH9c0jTlGv2l?mode=gi_t",
+        "payment_config_status": payment_config_status,
+        "payment_config_ready": bool(payment_config_status.get("ready")),
+        "bot_username": get_bot_username(),
         "generated_at": datetime.utcnow().isoformat(),
     }
 
