@@ -1614,9 +1614,25 @@ function accountTimelineItem(item) {
 
 function renderAccount() {
   const account = state.payload.account || {};
-  const me = account.overview || state.payload.me || {};
-  const plans = account.plans || state.payload.plans || {};
-  const subscription = account.subscription || {};
+  const overview = account.overview || {};
+  const fallbackMe = state.payload.me || {};
+  const me = {
+    ...fallbackMe,
+    ...overview,
+  };
+  const fallbackPlans = state.payload.plans || {};
+  const plans = {
+    plus: (account.plans?.plus && account.plans.plus.length ? account.plans.plus : fallbackPlans.plus) || [],
+    premium: (account.plans?.premium && account.plans.premium.length ? account.plans.premium : fallbackPlans.premium) || [],
+  };
+  const fallbackWatchlistMeta = state.payload.watchlist_meta || {};
+  const subscription = {
+    ...(account.subscription || {}),
+    watchlist: {
+      ...fallbackWatchlistMeta,
+      ...((account.subscription || {}).watchlist || {}),
+    },
+  };
   const billing = account.billing || {};
   const referrals = account.referrals || {};
   const timeline = account.timeline || [];
