@@ -6,6 +6,7 @@ import logging
 
 from app.database import subscription_events_collection, users_collection
 from app.models import activate_plan, is_plan_active, is_trial_active, new_subscription_event, update_timestamp, utcnow
+from app.services.admin_service import is_effectively_banned
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +193,7 @@ def has_access(user: dict) -> bool:
 
 
 def get_subscription_status(user: dict) -> str:
-    if user.get("banned"):
+    if is_effectively_banned(user):
         return SUBSCRIPTION_STATUS_BANNED
     if is_plan_active(user):
         return SUBSCRIPTION_STATUS_ACTIVE
