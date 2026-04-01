@@ -26,6 +26,13 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
             'ensurePayloadShell',
             'applyPaymentOrderPreview',
             'refreshAccountState',
+            'ensureDashboardShell',
+            'applyLiveSignalsPayload',
+            'stopLiveSignalsPolling',
+            'scheduleLiveSignalsTick',
+            'refreshLiveSignalsState',
+            'startLiveSignalsPolling',
+            'queueLiveSignalsRefresh',
             'focusPaymentCard',
             'focusPlanBlock',
             'setAccountNotice',
@@ -85,6 +92,9 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
         self.assertIn('Moderación de usuario', text)
         self.assertIn('data-admin-moderation-action', text)
         self.assertIn('data-admin-moderation-confirm', text)
+        self.assertIn('/api/miniapp/live-signals', text)
+        self.assertIn('visibilitychange', text)
+        self.assertIn('window-focus', text)
 
 if __name__ == '__main__':
     unittest.main()
