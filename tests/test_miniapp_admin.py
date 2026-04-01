@@ -29,8 +29,8 @@ class MiniAppAdminEndpointTests(unittest.TestCase):
     def test_admin_overview_returns_payload_for_admin(self):
         payload = {
             'generated_at': '2026-03-30T12:00:00',
-            'runtime': {'ok': True, 'overall_status': 'ok', 'runtimes': {}},
-            'users': {'total': 10, 'banned': 1, 'active_paid': 4},
+            'runtime': {'ok': True, 'overall_status': 'ok', 'runtimes': {'web': {'overall_status': 'ok', 'components': {}}}},
+            'users': {'total': 10, 'banned': 1, 'active_paid': 4, 'free': 5, 'plus_active': 2, 'premium_active': 2, 'trialing': 1, 'expired_free': 3, 'current_mix': {'free': 5, 'plus': 2, 'premium': 2}},
             'signals': {'created_last_24h': 8, 'pending_evaluation': 2},
             'payments': {'configuration_ready': True, 'pending_orders': 1, 'awaiting_confirmation': 0, 'paid_last_24h': 2},
             'audit': {'errors_last_24h': 0, 'warnings_last_24h': 1},
@@ -50,6 +50,8 @@ class MiniAppAdminEndpointTests(unittest.TestCase):
         body = response.json()
         self.assertEqual(body['requested_by'], 999)
         self.assertEqual(body['users']['total'], 10)
+        self.assertEqual(body['users']['plus_active'], 2)
+        self.assertEqual(body['users']['premium_active'], 2)
         self.assertTrue(body['runtime']['ok'])
 
 
