@@ -2766,6 +2766,66 @@ def build_dashboard_payload(user: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+
+
+def _latest_activity_iso(docs: List[Dict[str, Any]]) -> Optional[str]:
+    latest: Optional[datetime] = None
+    for doc in docs or []:
+        for candidate in (doc.get("updated_at"), doc.get("created_at"), doc.get("signal_created_at")):
+            if isinstance(candidate, datetime) and (latest is None or candidate > latest):
+                latest = candidate
+    return _iso(latest)
+
+
+def build_live_signals_payload(
+    user: Dict[str, Any],
+    *,
+    active_limit: int = 6,
+    signals_limit: int = 20,
+) -> Dict[str, Any]:
+    user_id = int(user.get("user_id") or 0)
+    now = datetime.utcnow()
+    active_query = {"user_id": user_id, "telegram_valid_until": {"$gte": now}}
+
+    active_docs = _safe_call(
+        lambda: list(
+            user_signals_collection()
+            .find(active_query)
+            .sort("created_at", -1)
+            .limit(max(1, int(active_limit)))
+        ),
+        [],
+    )
+    recent_docs = _safe_call(
+        lambda: list(
+            user_signals_collection()
+            .find({"user_id": user_id})
+            .sort("created_at", -1)
+            .limit(max(1, int(signals_limit)))
+        ),
+        [],
+    )
+    active_count = _safe_call(lambda: int(user_signals_collection().count_documents(active_query)), len(active_docs))
+    latest_activity = _latest_activity_iso(recent_docs) or _latest_activity_iso(active_docs)
+    latest_active_activity = _latest_activity_iso(active_docs)
+    feed_version = "|".join([
+        str(active_count),
+        latest_activity or "",
+        latest_active_activity or "",
+        str(len(recent_docs)),
+    ])
+
+    return {
+        "active_signals_count": active_count,
+        "recent_signals": [_serialize_signal(doc) for doc in active_docs],
+        "signals": [_serialize_signal(doc) for doc in recent_docs],
+        "latest_signal_activity_at": latest_activity,
+        "latest_active_signal_activity_at": latest_active_activity,
+        "feed_version": feed_version,
+        "generated_at": utcnow().isoformat(),
+    }
+
+
 def build_signals_payload(user: Dict[str, Any], *, limit: int = 20) -> List[Dict[str, Any]]:
     user_id = int(user.get("user_id") or 0)
     docs = list(
