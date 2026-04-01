@@ -7,6 +7,7 @@ from app.database import users_collection
 from app.menus import main_menu
 from app.telegram_handlers.admin import handle_admin_callback
 from app.telegram_handlers.common import _banned_message, _get_user_language, _tr
+from app.services.admin_service import is_effectively_banned
 from app.telegram_handlers.features import handle_standard_menu_action
 from app.telegram_handlers.onboarding import handle_onboarding_callback
 from app.telegram_handlers.referrals import handle_copy_ref_code, handle_referrals
@@ -31,7 +32,7 @@ async def handle_menu(update, context):
         users_col = users_collection()
         user = users_col.find_one({"user_id": user_id})
 
-        if user and user.get("banned"):
+        if user and is_effectively_banned(user):
             await query.edit_message_text(_banned_message(_get_user_language(user)))
             return
 
