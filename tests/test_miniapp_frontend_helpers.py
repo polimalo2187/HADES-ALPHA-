@@ -47,6 +47,8 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
             'renderSettings',
             'adminManualActivationButton',
             'adminManualTargetSummaryCard',
+            'adminModerationActionButton',
+            'adminModerationSummaryCard',
             'adminRuntimeStatusClass',
             'adminRuntimeRoleCard',
         ]:
@@ -80,6 +82,9 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
         self.assertIn('function resetRadarView(', text)
         self.assertIn('Base de usuarios', text)
         self.assertIn('Salud operativa', text)
+        self.assertIn('Moderación de usuario', text)
+        self.assertIn('data-admin-moderation-action', text)
+        self.assertIn('data-admin-moderation-confirm', text)
 
 if __name__ == '__main__':
     unittest.main()
