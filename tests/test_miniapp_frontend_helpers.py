@@ -40,6 +40,10 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
             'refreshPerformanceCenter',
             'openPerformanceCenter',
             'renderPerformance',
+            'marketChunkSize',
+            'marketWindow',
+            'marketWindowLabel',
+            'rotateMarketSection',
         ]:
             self.assertIn(f'function {name}(', text)
 
@@ -64,6 +68,10 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
         self.assertIn('data-open-risk-center="true"', text)
         self.assertIn('data-open-performance-center="true"', text)
         self.assertIn('data-open-risk-signal="${escapeHtml(item.signal_id)}"', text)
+        self.assertIn("marketPager('gainers'", text)
+        self.assertIn("marketPager('losers'", text)
+        self.assertIn("marketPager('volume'", text)
+        self.assertIn("[data-market-rotate]", text)
 
 if __name__ == '__main__':
     unittest.main()
