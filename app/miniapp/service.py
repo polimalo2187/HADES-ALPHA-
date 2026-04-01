@@ -2404,7 +2404,7 @@ def build_history_payload(user: Dict[str, Any], *, limit: int = 20) -> List[Dict
 def build_market_payload(user: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     snapshot = get_market_state_snapshot() or {}
     user_id = int((user or {}).get("user_id") or 0)
-    radar_items, radar_summary = _serialize_radar(user_id, limit=12, market_snapshot=snapshot)
+    radar_items, radar_summary = _serialize_radar(user_id, limit=24, market_snapshot=snapshot)
     snapshot["radar"] = radar_items
     snapshot["radar_summary"] = radar_summary
     snapshot["top_gainers"] = list(snapshot.get("top_gainers") or [])[:5]
