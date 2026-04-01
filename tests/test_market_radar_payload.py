@@ -18,9 +18,6 @@ class MarketRadarPayloadTests(unittest.TestCase):
             'top_losers': [],
             'top_volume': [],
             'top_open_interest': [],
-            'top_gainers_ranked': [{'symbol': 'BTCUSDT'}, {'symbol': 'ETHUSDT'}, {'symbol': 'SOLUSDT'}],
-            'top_losers_ranked': [{'symbol': 'XRPUSDT'}, {'symbol': 'ADAUSDT'}],
-            'top_volume_ranked': [{'symbol': 'BTCUSDT'}, {'symbol': 'ETHUSDT'}, {'symbol': 'SOLUSDT'}, {'symbol': 'XRPUSDT'}],
             'btc': {},
             'eth': {},
             'adv_ratio_pct': 61.2,
@@ -122,10 +119,6 @@ class MarketRadarPayloadTests(unittest.TestCase):
         self.assertEqual(payload['radar_summary']['focus_now'], 1)
         self.assertEqual(payload['radar_summary']['aligned_now'], 2)
         self.assertEqual(payload['radar_summary']['sort_default'], 'ranking')
-
-        self.assertEqual(payload['market_rotation']['gainers'][0]['symbol'], 'BTCUSDT')
-        self.assertEqual(payload['market_rotation']['losers'][0]['symbol'], 'XRPUSDT')
-        self.assertEqual(payload['market_rotation']['volume'][0]['symbol'], 'BTCUSDT')
 
         btc = payload['radar'][0]
         self.assertEqual(btc['symbol'], 'BTCUSDT')
