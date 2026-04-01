@@ -8,6 +8,7 @@ from app.config import is_payment_configuration_ready
 from app.database import audit_logs_collection, payment_orders_collection, signals_collection, users_collection
 from app.observability import build_runtime_health_report
 from app.models import utcnow
+from app.plans import normalize_plan, plan_status
 
 _RUNTIME_ROLES = ["web", "bot", "signal_worker", "scheduler"]
 _ALLOWED_AUDIT_STATUSES = {"info", "ok", "success", "warning", "error"}
@@ -43,6 +44,59 @@ def _clamp_limit(limit: int) -> int:
 
 
 
+
+
+def _build_user_overview(users_collection_handle) -> Dict[str, Any]:
+    summary = {
+        "total": 0,
+        "banned": 0,
+        "active_paid": 0,
+        "free": 0,
+        "plus_active": 0,
+        "premium_active": 0,
+        "trialing": 0,
+        "expired_free": 0,
+    }
+
+    try:
+        cursor = users_collection_handle.find({}, {
+            "user_id": 1,
+            "plan": 1,
+            "plan_end": 1,
+            "trial_end": 1,
+            "subscription_status": 1,
+            "banned": 1,
+        })
+    except Exception:
+        return summary
+
+    for user in cursor:
+        summary["total"] += 1
+        if bool(user.get("banned")):
+            summary["banned"] += 1
+            continue
+
+        effective = plan_status(user)
+        plan_value = normalize_plan(effective.get("plan") or user.get("plan"))
+        status_value = str(effective.get("status") or user.get("subscription_status") or "free").lower()
+
+        if plan_value == "plus" and status_value == "active":
+            summary["plus_active"] += 1
+            summary["active_paid"] += 1
+            continue
+
+        if plan_value == "premium" and status_value == "active":
+            summary["premium_active"] += 1
+            summary["active_paid"] += 1
+            continue
+
+        summary["free"] += 1
+        if status_value == "trial":
+            summary["trialing"] += 1
+        elif status_value == "expired":
+            summary["expired_free"] += 1
+
+    return summary
 def get_admin_runtime_health_matrix() -> Dict[str, Any]:
     runtimes: Dict[str, Any] = {}
     overall_status = "ok"
@@ -75,13 +129,18 @@ def get_admin_operational_overview() -> Dict[str, Any]:
 
     runtime_health = get_admin_runtime_health_matrix()
 
+    user_overview = _build_user_overview(users)
+
     overview = {
         "generated_at": _serialize_datetime(now),
         "runtime": runtime_health,
         "users": {
-            "total": _safe_count(users, {}),
-            "banned": _safe_count(users, {"banned": True}),
-            "active_paid": _safe_count(users, {"subscription_status": "active"}),
+            **user_overview,
+            "current_mix": {
+                "free": user_overview.get("free", 0),
+                "plus": user_overview.get("plus_active", 0),
+                "premium": user_overview.get("premium_active", 0),
+            },
         },
         "signals": {
             "created_last_24h": _safe_count(signals, {"created_at": {"$gte": last_24h}}),
