@@ -45,6 +45,8 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
             'refreshSettingsCenter',
             'openSettingsCenter',
             'renderSettings',
+            'adminManualActivationButton',
+            'adminManualTargetSummaryCard',
         ]:
             self.assertIn(f'function {name}(', text)
 
