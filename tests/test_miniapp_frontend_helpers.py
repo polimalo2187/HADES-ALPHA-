@@ -64,6 +64,10 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
         self.assertIn('data-open-risk-center="true"', text)
         self.assertIn('data-open-performance-center="true"', text)
         self.assertIn('data-open-risk-signal="${escapeHtml(item.signal_id)}"', text)
+        self.assertIn('data-radar-rotate', text)
+        self.assertIn('function getRadarWindow(', text)
+        self.assertIn('function rotateRadarWindow(', text)
+        self.assertIn('function resetRadarView(', text)
 
 if __name__ == '__main__':
     unittest.main()
