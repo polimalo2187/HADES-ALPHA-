@@ -8,7 +8,7 @@ from uuid import uuid4
 from bson import ObjectId
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -58,6 +58,23 @@ BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 INDEX_FILE = STATIC_DIR / "index.html"
 
+
+
+
+def _asset_version(path: Path) -> str:
+    try:
+        return str(int(path.stat().st_mtime))
+    except Exception:
+        return "1"
+
+
+def _render_index_html() -> str:
+    css_version = _asset_version(STATIC_DIR / "app.css")
+    js_version = _asset_version(STATIC_DIR / "app.js")
+    html = INDEX_FILE.read_text(encoding="utf-8")
+    html = html.replace("{{APP_CSS_TAG}}", f'<link rel="stylesheet" href="/miniapp/static/app.css?v={css_version}">')
+    html = html.replace("{{APP_JS_TAG}}", f'<script src="/miniapp/static/app.js?v={js_version}"></script>')
+    return html
 
 class MiniAppAuthRequest(BaseModel):
     init_data: Optional[str] = None
@@ -257,8 +274,12 @@ def create_mini_app() -> FastAPI:
         return user
 
     @app.get("/miniapp")
-    async def miniapp_index() -> FileResponse:
-        return FileResponse(str(INDEX_FILE))
+    async def miniapp_index() -> HTMLResponse:
+        response = HTMLResponse(_render_index_html())
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
 
     @app.get("/miniapp/health/live")
     async def miniapp_liveness() -> Dict[str, Any]:
