@@ -18,6 +18,9 @@ class MarketRadarPayloadTests(unittest.TestCase):
             'top_losers': [],
             'top_volume': [],
             'top_open_interest': [],
+            'ranked_gainers': [{'symbol': 'BTCUSDT'}, {'symbol': 'SOLUSDT'}, {'symbol': 'ETHUSDT'}, {'symbol': 'XRPUSDT'}, {'symbol': 'ADAUSDT'}],
+            'ranked_losers': [{'symbol': 'ETHUSDT'}, {'symbol': 'XRPUSDT'}, {'symbol': 'ADAUSDT'}, {'symbol': 'DOGEUSDT'}, {'symbol': 'LINKUSDT'}],
+            'ranked_volume': [{'symbol': 'BTCUSDT'}, {'symbol': 'ETHUSDT'}, {'symbol': 'SOLUSDT'}, {'symbol': 'XRPUSDT'}, {'symbol': 'ADAUSDT'}],
             'btc': {},
             'eth': {},
             'adv_ratio_pct': 61.2,
@@ -107,6 +110,10 @@ class MarketRadarPayloadTests(unittest.TestCase):
             payload = build_market_payload({'user_id': 10, 'plan': 'premium'})
 
         self.assertEqual(payload['bias'], 'Alcista')
+        self.assertEqual(payload['market_rotation']['chunk_size'], 4)
+        self.assertEqual(payload['market_rotation']['gainers_total'], 5)
+        self.assertEqual(len(payload['top_gainers']), 4)
+        self.assertEqual(len(payload['top_gainers_ranked']), 5)
         self.assertEqual(len(payload['radar']), 3)
         self.assertEqual(payload['radar_summary']['total'], 3)
         self.assertEqual(payload['radar_summary']['longs'], 2)
