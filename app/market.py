@@ -147,13 +147,9 @@ def get_market_state_snapshot() -> Dict[str, Any] | None:
     top_abs_change = max(abs_changes) if abs_changes else 0.0
     active_ratio = sum(1 for value in abs_changes if value >= 2.0) / universe if universe else 0.0
 
-    top_gainers_ranked = sorted(parsed, key=lambda x: x["change"], reverse=True)[:24]
-    top_losers_ranked = sorted(parsed, key=lambda x: x["change"])[:24]
-    top_volume_ranked = sorted(parsed, key=lambda x: x["quote_volume"], reverse=True)[:24]
-
-    top_gainers = top_gainers_ranked[:4]
-    top_losers = top_losers_ranked[:4]
-    top_volume = top_volume_ranked[:5]
+    top_gainers = sorted(parsed, key=lambda x: x["change"], reverse=True)[:4]
+    top_losers = sorted(parsed, key=lambda x: x["change"])[:4]
+    top_volume = sorted(parsed, key=lambda x: x["quote_volume"], reverse=True)[:5]
 
     oi_rows = []
     for row in top_volume[:12]:
@@ -202,9 +198,6 @@ def get_market_state_snapshot() -> Dict[str, Any] | None:
         "top_losers": top_losers,
         "top_volume": top_volume,
         "top_open_interest": top_open_interest,
-        "top_gainers_ranked": top_gainers_ranked,
-        "top_losers_ranked": top_losers_ranked,
-        "top_volume_ranked": top_volume_ranked,
     }
 
 
