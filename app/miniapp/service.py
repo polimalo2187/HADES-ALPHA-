@@ -2407,26 +2407,14 @@ def build_market_payload(user: Optional[Dict[str, Any]] = None) -> Dict[str, Any
     radar_items, radar_summary = _serialize_radar(user_id, limit=12, market_snapshot=snapshot)
     snapshot["radar"] = radar_items
     snapshot["radar_summary"] = radar_summary
-
-    ranked_gainers = list(snapshot.get("ranked_gainers") or snapshot.get("top_gainers") or [])[:24]
-    ranked_losers = list(snapshot.get("ranked_losers") or snapshot.get("top_losers") or [])[:24]
-    ranked_volume = list(snapshot.get("ranked_volume") or snapshot.get("top_volume") or [])[:24]
-    ranked_open_interest = list(snapshot.get("top_open_interest") or [])[:12]
-
-    snapshot["top_gainers_ranked"] = ranked_gainers
-    snapshot["top_losers_ranked"] = ranked_losers
-    snapshot["top_volume_ranked"] = ranked_volume
-    snapshot["top_open_interest_ranked"] = ranked_open_interest
-    snapshot["top_gainers"] = ranked_gainers[:4]
-    snapshot["top_losers"] = ranked_losers[:4]
-    snapshot["top_volume"] = ranked_volume[:4]
-    snapshot["top_open_interest"] = ranked_open_interest[:4]
+    snapshot["top_gainers"] = list(snapshot.get("top_gainers") or [])[:4]
+    snapshot["top_losers"] = list(snapshot.get("top_losers") or [])[:4]
+    snapshot["top_volume"] = list(snapshot.get("top_volume") or [])[:5]
+    snapshot["top_open_interest"] = list(snapshot.get("top_open_interest") or [])[:4]
     snapshot["market_rotation"] = {
-        "chunk_size": 4,
-        "gainers_total": len(ranked_gainers),
-        "losers_total": len(ranked_losers),
-        "volume_total": len(ranked_volume),
-        "open_interest_total": len(ranked_open_interest),
+        "gainers": list(snapshot.get("top_gainers_ranked") or snapshot.get("top_gainers") or [])[:24],
+        "losers": list(snapshot.get("top_losers_ranked") or snapshot.get("top_losers") or [])[:24],
+        "volume": list(snapshot.get("top_volume_ranked") or snapshot.get("top_volume") or [])[:24],
     }
     return snapshot
 
