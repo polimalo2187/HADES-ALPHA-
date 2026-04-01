@@ -7,6 +7,9 @@ from typing import Any, Dict, List, Tuple
 from app.binance_api import get_futures_24h_tickers, get_open_interest, get_premium_index
 
 
+MARKET_RANK_LIMIT = 24
+
+
 def _now_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
@@ -147,12 +150,16 @@ def get_market_state_snapshot() -> Dict[str, Any] | None:
     top_abs_change = max(abs_changes) if abs_changes else 0.0
     active_ratio = sum(1 for value in abs_changes if value >= 2.0) / universe if universe else 0.0
 
-    top_gainers = sorted(parsed, key=lambda x: x["change"], reverse=True)[:4]
-    top_losers = sorted(parsed, key=lambda x: x["change"])[:4]
-    top_volume = sorted(parsed, key=lambda x: x["quote_volume"], reverse=True)[:5]
+    ranked_gainers = sorted(parsed, key=lambda x: x["change"], reverse=True)[:MARKET_RANK_LIMIT]
+    ranked_losers = sorted(parsed, key=lambda x: x["change"])[:MARKET_RANK_LIMIT]
+    ranked_volume = sorted(parsed, key=lambda x: x["quote_volume"], reverse=True)[:MARKET_RANK_LIMIT]
+
+    top_gainers = ranked_gainers[:4]
+    top_losers = ranked_losers[:4]
+    top_volume = ranked_volume[:5]
 
     oi_rows = []
-    for row in top_volume[:12]:
+    for row in ranked_volume[:12]:
         try:
             oi_data = get_open_interest(row["symbol"]) or {}
             oi_value = _safe_float(oi_data.get("openInterest"))
@@ -198,6 +205,9 @@ def get_market_state_snapshot() -> Dict[str, Any] | None:
         "top_losers": top_losers,
         "top_volume": top_volume,
         "top_open_interest": top_open_interest,
+        "ranked_gainers": ranked_gainers,
+        "ranked_losers": ranked_losers,
+        "ranked_volume": ranked_volume,
     }
 
 
