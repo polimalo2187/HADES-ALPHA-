@@ -1,5 +1,6 @@
 import tests._bootstrap
 import unittest
+from datetime import datetime
 from unittest.mock import patch
 
 from app.services.admin_runtime_service import get_admin_runtime_health_matrix, list_recent_audit_events, list_recent_incidents
@@ -19,7 +20,45 @@ class _AuditCollection:
         return self.rows[:limit]
 
 
+
+
+class _UsersCollection:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def find(self, *args, **kwargs):
+        return list(self.rows)
+
+
 class AdminRuntimeServiceTests(unittest.TestCase):
+
+    def test_admin_overview_includes_user_mix_and_paid_tiers(self):
+        users_rows = [
+            {'user_id': 1, 'plan': 'free', 'trial_end': None, 'plan_end': None, 'subscription_status': 'free', 'banned': False},
+            {'user_id': 2, 'plan': 'free', 'trial_end': datetime.max, 'plan_end': None, 'subscription_status': 'trial', 'banned': False},
+            {'user_id': 3, 'plan': 'plus', 'trial_end': None, 'plan_end': datetime.max, 'subscription_status': 'active', 'banned': False},
+            {'user_id': 4, 'plan': 'premium', 'trial_end': None, 'plan_end': datetime.max, 'subscription_status': 'active', 'banned': False},
+            {'user_id': 5, 'plan': 'free', 'trial_end': None, 'plan_end': None, 'subscription_status': 'expired', 'banned': True},
+        ]
+
+        with patch('app.services.admin_runtime_service.users_collection', return_value=_UsersCollection(users_rows)), \
+             patch('app.services.admin_runtime_service.signals_collection', return_value=type('C', (), {'count_documents': lambda self, q: 0})()), \
+             patch('app.services.admin_runtime_service.payment_orders_collection', return_value=type('C', (), {'count_documents': lambda self, q: 0})()), \
+             patch('app.services.admin_runtime_service.audit_logs_collection', return_value=type('C', (), {'count_documents': lambda self, q: 0})()), \
+             patch('app.services.admin_runtime_service.is_payment_configuration_ready', return_value=True), \
+             patch('app.services.admin_runtime_service.get_admin_runtime_health_matrix', return_value={'ok': True, 'overall_status': 'ok', 'generated_at': '2026-03-30T12:00:00', 'runtimes': {}}):
+            from app.services.admin_runtime_service import get_admin_operational_overview
+            payload = get_admin_operational_overview()
+
+        self.assertEqual(payload['users']['total'], 5)
+        self.assertEqual(payload['users']['banned'], 1)
+        self.assertEqual(payload['users']['free'], 2)
+        self.assertEqual(payload['users']['trialing'], 1)
+        self.assertEqual(payload['users']['plus_active'], 1)
+        self.assertEqual(payload['users']['premium_active'], 1)
+        self.assertEqual(payload['users']['active_paid'], 2)
+        self.assertEqual(payload['users']['current_mix']['free'], 2)
+
     def test_runtime_health_matrix_becomes_error_if_any_runtime_errors(self):
         def _build(role):
             status = 'error' if role == 'scheduler' else 'ok'
