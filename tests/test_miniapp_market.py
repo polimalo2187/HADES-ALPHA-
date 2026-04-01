@@ -22,7 +22,6 @@ class MiniAppMarketEndpointTests(unittest.TestCase):
             'top_losers': [],
             'top_volume': [],
             'top_open_interest': [],
-            'market_rotation': {'gainers': [{'symbol': 'BTCUSDT'}], 'losers': [], 'volume': []},
             'btc': {},
             'eth': {},
         }
@@ -40,7 +39,6 @@ class MiniAppMarketEndpointTests(unittest.TestCase):
         body = response.json()
         self.assertEqual(body['radar_summary']['hot'], 1)
         self.assertEqual(body['radar'][0]['symbol'], 'BTCUSDT')
-        self.assertEqual(body['market_rotation']['gainers'][0]['symbol'], 'BTCUSDT')
         mocked_build.assert_called_once()
         args, _ = mocked_build.call_args
         self.assertEqual(args[0]['user_id'], 10)
