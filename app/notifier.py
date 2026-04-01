@@ -6,6 +6,7 @@ from telegram import Bot
 from datetime import datetime
 
 from app.database import users_collection
+from app.services.admin_service import is_effectively_banned
 from app.plans import PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM, normalize_plan, plan_status
 from app.config import is_admin
 from app.models import is_trial_active, is_plan_active
@@ -57,7 +58,7 @@ def _eligible_users_for_alert(signal_visibility: str) -> List[int]:
     requested_visibility = normalize_plan(signal_visibility)
 
     for user in users:
-        if user.get("banned"):
+        if is_effectively_banned(user):
             continue
 
         user_id = user.get("user_id")
