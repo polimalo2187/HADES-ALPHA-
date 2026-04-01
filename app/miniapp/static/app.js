@@ -1,4 +1,28 @@
 const tg = window.Telegram?.WebApp;
+
+function showFatalBootError(message) {
+  const safe = String(message || 'No se pudo abrir la MiniApp.');
+  const loading = document.getElementById('loading');
+  const content = document.getElementById('content');
+  const bottomNav = document.getElementById('bottomNav');
+  const home = document.getElementById('view-home');
+  if (home) home.innerHTML = `<div class="error-banner">${safe.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')}</div>`;
+  if (loading) loading.classList.add('hidden');
+  if (content) content.classList.remove('hidden');
+  if (bottomNav) bottomNav.classList.remove('hidden');
+}
+
+window.addEventListener('error', (event) => {
+  const message = event?.error?.message || event?.message || 'No se pudo abrir la MiniApp.';
+  showFatalBootError(message);
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event?.reason;
+  const message = reason?.message || String(reason || 'No se pudo abrir la MiniApp.');
+  showFatalBootError(message);
+});
+
 if (tg) {
   tg.ready();
   tg.expand();
