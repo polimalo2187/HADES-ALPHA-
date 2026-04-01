@@ -44,7 +44,7 @@ MESSAGES: Dict[str, Dict[str, Any]] = {
             "admin_menu_short": "🛠 HADES Admin",
             "admin_menu_full": (
                 "🔥 {bot_name}\n\n"
-                "Bienvenido a HADES, tu plataforma operativa de señales.\n\n"
+                "Bienvenido a HADES ALPHA V2, tu plataforma operativa de señales.\n\n"
                 "Desde la MiniApp puedes acceder a todo el ecosistema:\n"
                 "• señales en vivo\n"
                 "• radar y mercado\n"
