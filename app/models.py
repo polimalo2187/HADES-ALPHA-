@@ -65,6 +65,16 @@ def new_user(
         "last_signal_id": None,
         "last_signal_at": None,
         "language": language or "es",
+        "miniapp_settings": {
+            "push_alerts": {
+                "enabled": True,
+                "tiers": {
+                    "free": True,
+                    "plus": False,
+                    "premium": False,
+                },
+            },
+        },
         "onboarding_seen": False,
         "onboarding_completed": False,
         "onboarding_version": 0,
