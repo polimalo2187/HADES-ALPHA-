@@ -34,6 +34,13 @@ SHARED_PROFILE = {
     "retest_tol_atr": 0.48,
     "min_body_ratio_breakout": 0.30,
     "min_body_ratio_continuation": 0.22,
+    # Entrada adaptativa: si el retest queda superficial y la continuación
+    # sale con desplazamiento, acercamos la entrada al precio actual para no
+    # dejar demasiadas señales sin fill por retroceso flojo.
+    "entry_blend_min": 0.28,
+    "entry_blend_max": 0.74,
+    "entry_blend_neutral_atr": 0.18,
+    "entry_blend_ramp_atr": 0.92,
 }
 
 FREE_PROFILE = {
@@ -44,6 +51,10 @@ FREE_PROFILE = {
     "retest_tol_atr": 0.62,
     "min_body_ratio_breakout": 0.22,
     "min_body_ratio_continuation": 0.16,
+    "entry_blend_min": 0.24,
+    "entry_blend_max": 0.68,
+    "entry_blend_neutral_atr": 0.22,
+    "entry_blend_ramp_atr": 1.05,
 }
 
 # =======================================
@@ -308,6 +319,7 @@ def _confirm_breakout_retest(df: pd.DataFrame, direction: str, profile: Dict) ->
         "continuation_body_ratio": float(last["body_ratio"]),
         "overshoot_atr": float(overshoot_atr),
         "retest_distance_atr": float(retest_distance_atr),
+        "close_extension_atr": float(abs(float(last["close"]) - float(level)) / atr),
     }
     return True, quality
 
@@ -372,6 +384,55 @@ def _entry_freshness_score(level: float, close_price: float, atr: float) -> floa
         quality = 0.0
 
     return _clamp(quality * 10.0, 0.0, 10.0)
+
+
+def _adaptive_entry_blend(quality: Dict[str, float], profile: Dict) -> float:
+    """
+    Determina qué tan cerca del cierre dejamos la entrada.
+
+    0.0 = entrada pegada al nivel.
+    1.0 = entrada pegada al cierre de continuidad.
+
+    Objetivo: reducir expiradas por falta de fill cuando el retroceso posterior
+    es demasiado flojo, sin convertir la estrategia en market-chasing bruto.
+    """
+    retest_tol = max(float(profile.get("retest_tol_atr", 0.5)), 1e-9)
+    retest_distance = float(quality.get("retest_distance_atr", 0.0))
+    continuation_body = float(quality.get("continuation_body_ratio", 0.0))
+    min_cont_body = float(profile.get("min_body_ratio_continuation", 0.15))
+    extension_atr = float(quality.get("close_extension_atr", 0.0))
+
+    # Si el retest queda lejos del nivel, el pullback fue flojo.
+    pullback_weakness = _clamp(retest_distance / retest_tol, 0.0, 1.0)
+
+    # Si la vela de continuidad sale con cuerpo fuerte, es más probable que el
+    # precio no regale un retroceso profundo antes de seguir.
+    continuation_pressure = _clamp(
+        (continuation_body - min_cont_body) / max(0.30, 1e-9),
+        0.0,
+        1.0,
+    )
+
+    # Si el cierre ya se alejó varios ATR del nivel, perseguir una entrada muy
+    # baja vuelve demasiadas señales no ejecutables.
+    extension_pressure = _clamp(
+        (extension_atr - float(profile.get("entry_blend_neutral_atr", 0.20)))
+        / max(float(profile.get("entry_blend_ramp_atr", 1.0)), 1e-9),
+        0.0,
+        1.0,
+    )
+
+    aggressiveness = _clamp(
+        (pullback_weakness * 0.45)
+        + (continuation_pressure * 0.30)
+        + (extension_pressure * 0.25),
+        0.0,
+        1.0,
+    )
+
+    blend_min = float(profile.get("entry_blend_min", 0.25))
+    blend_max = float(profile.get("entry_blend_max", 0.70))
+    return round(blend_min + ((blend_max - blend_min) * aggressiveness), 4)
 
 
 def _build_trade_profiles(entry_price: float, direction: str) -> Dict[str, Dict]:
@@ -514,8 +575,11 @@ def _evaluate_profile(
     level = float(quality["level"])
     close_price = float(last["close"])
 
-    # Entrada menos perseguida: más cerca del nivel de retest que del cierre.
-    entry_price = level + ((close_price - level) * 0.25)
+    # Entrada adaptativa: si el retroceso posterior suele quedarse corto,
+    # acercamos la entrada al cierre de continuidad. Si el retest fue limpio,
+    # mantenemos una entrada más paciente cerca del nivel.
+    entry_blend = _adaptive_entry_blend(quality, profile)
+    entry_price = level + ((close_price - level) * entry_blend)
     trade_profiles = _build_trade_profiles(entry_price, direction)
 
     raw_score, raw_components = _compute_raw_score(df, direction, profile, quality)
@@ -541,6 +605,8 @@ def _evaluate_profile(
         "score_profile": str(profile["name"]),
         "score_calibration": SCORE_CALIBRATION_VERSION,
         "higher_tf_context": higher_tf_context,
+        "entry_blend": entry_blend,
+        "entry_model": "adaptive_retest_strength_v1",
     }
 
 
