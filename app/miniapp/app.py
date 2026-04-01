@@ -36,8 +36,10 @@ from app.miniapp.service import (
     build_watchlist_payload,
     build_signal_detail_payload,
     build_radar_symbol_payload,
+    build_settings_center_payload,
     ensure_mini_app_user,
     get_user_by_id,
+    save_settings_center_payload,
     serialize_order_public,
 )
 from app.observability import build_runtime_health_report, heartbeat, record_audit_event, start_background_heartbeat
@@ -95,6 +97,12 @@ class MiniAppRiskProfileUpdateRequest(BaseModel):
     slippage_percent: Optional[float] = None
     default_leverage: Optional[float] = None
     default_profile: Optional[str] = None
+
+
+class MiniAppSettingsUpdateRequest(BaseModel):
+    language: Optional[str] = None
+    push_alerts_enabled: Optional[bool] = None
+    push_tiers: Optional[Dict[str, bool]] = None
 
 
 def _resolve_dev_telegram_user(payload: MiniAppAuthRequest) -> Dict[str, Any]:
@@ -346,6 +354,17 @@ def create_mini_app() -> FastAPI:
     @app.get("/api/miniapp/account")
     async def miniapp_account(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
         return build_account_center_payload(user)
+
+    @app.get("/api/miniapp/settings")
+    async def miniapp_settings(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
+        return build_settings_center_payload(user)
+
+    @app.post("/api/miniapp/settings")
+    async def miniapp_settings_update(payload: MiniAppSettingsUpdateRequest, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
+        try:
+            return save_settings_center_payload(int(user.get("user_id") or 0), payload.model_dump(exclude_none=True))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/miniapp/signals")
     async def miniapp_signals(limit: int = 20, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
