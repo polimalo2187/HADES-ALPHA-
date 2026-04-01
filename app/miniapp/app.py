@@ -25,6 +25,7 @@ from app.miniapp.service import (
     build_bootstrap_payload,
     build_account_center_payload,
     build_dashboard_payload,
+    build_live_signals_payload,
     build_history_payload,
     build_market_payload,
     build_me_payload,
@@ -369,6 +370,10 @@ def create_mini_app() -> FastAPI:
     @app.get("/api/miniapp/dashboard")
     async def miniapp_dashboard(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
         return build_dashboard_payload(user)
+
+    @app.get("/api/miniapp/live-signals")
+    async def miniapp_live_signals(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
+        return build_live_signals_payload(user)
 
     @app.get("/api/miniapp/account")
     async def miniapp_account(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
