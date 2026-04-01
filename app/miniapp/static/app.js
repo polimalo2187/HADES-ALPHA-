@@ -72,7 +72,16 @@ const state = {
     loading: false,
     notice: null,
   },
+  liveSignals: {
+    timer: null,
+    requestInFlight: false,
+    feedVersion: null,
+    lastSyncedAt: null,
+  },
 };
+
+const LIVE_SIGNALS_POLL_INTERVAL_MS = 7000;
+const LIVE_SIGNALS_FOCUS_DEBOUNCE_MS = 2500;
 
 const els = {
   loading: document.getElementById('loading'),
@@ -548,7 +557,77 @@ async function authenticate() {
 
 async function bootstrap() {
   state.payload = await api('/api/miniapp/bootstrap');
+  state.liveSignals.feedVersion = null;
   renderAll();
+}
+
+function ensureDashboardShell() {
+  ensurePayloadShell();
+  if (!state.payload.dashboard || typeof state.payload.dashboard !== 'object') state.payload.dashboard = {};
+  if (!Array.isArray(state.payload.signals)) state.payload.signals = [];
+}
+
+function applyLiveSignalsPayload(payload = {}) {
+  ensureDashboardShell();
+  state.payload.dashboard.active_signals_count = Number(payload.active_signals_count || 0);
+  state.payload.dashboard.recent_signals = Array.isArray(payload.recent_signals) ? payload.recent_signals : [];
+  state.payload.signals = Array.isArray(payload.signals) ? payload.signals : [];
+  if (payload.generated_at) state.payload.generated_at = payload.generated_at;
+  state.liveSignals.feedVersion = String(payload.feed_version || '');
+  state.liveSignals.lastSyncedAt = payload.generated_at || null;
+}
+
+function stopLiveSignalsPolling() {
+  if (state.liveSignals.timer) {
+    clearTimeout(state.liveSignals.timer);
+    state.liveSignals.timer = null;
+  }
+}
+
+function scheduleLiveSignalsTick(delay = LIVE_SIGNALS_POLL_INTERVAL_MS) {
+  stopLiveSignalsPolling();
+  if (!state.token || document.hidden) return;
+  state.liveSignals.timer = setTimeout(async () => {
+    try {
+      await refreshLiveSignalsState(false, 'interval');
+    } catch (error) {
+      console.warn('MiniApp live signals refresh failed', error);
+    } finally {
+      scheduleLiveSignalsTick(LIVE_SIGNALS_POLL_INTERVAL_MS);
+    }
+  }, Math.max(1000, Number(delay || LIVE_SIGNALS_POLL_INTERVAL_MS)));
+}
+
+async function refreshLiveSignalsState(force = false, reason = 'manual') {
+  if (!state.token || state.liveSignals.requestInFlight) return null;
+  state.liveSignals.requestInFlight = true;
+  try {
+    const payload = await api('/api/miniapp/live-signals');
+    const nextVersion = String(payload.feed_version || '');
+    if (!force && nextVersion && nextVersion === String(state.liveSignals.feedVersion || '')) {
+      state.liveSignals.lastSyncedAt = payload.generated_at || state.liveSignals.lastSyncedAt || null;
+      return payload;
+    }
+    applyLiveSignalsPayload(payload);
+    renderHome();
+    renderSignals();
+    bindViewButtons();
+    return payload;
+  } finally {
+    state.liveSignals.requestInFlight = false;
+  }
+}
+
+function startLiveSignalsPolling() {
+  scheduleLiveSignalsTick(LIVE_SIGNALS_POLL_INTERVAL_MS);
+}
+
+function queueLiveSignalsRefresh(reason = 'focus') {
+  if (!state.token) return;
+  scheduleLiveSignalsTick(LIVE_SIGNALS_POLL_INTERVAL_MS);
+  Promise.resolve(refreshLiveSignalsState(true, reason)).catch(error => {
+    console.warn(`MiniApp live signals ${reason} refresh failed`, error);
+  });
 }
 
 function ensurePayloadShell() {
@@ -3312,6 +3391,9 @@ function setView(view) {
   document.getElementById(`view-${view}`).classList.add('active');
   document.querySelectorAll('.nav-item').forEach(node => node.classList.toggle('active', node.dataset.view === view));
   els.titleMain.textContent = labels[view] || 'HADES';
+  if (view === 'home' || view === 'signals') {
+    queueLiveSignalsRefresh('view-change');
+  }
 }
 
 async function copyValue(value, successMessage = 'Copiado correctamente.') {
@@ -4075,6 +4157,19 @@ function bindViewButtons() {
   });
 }
 
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    stopLiveSignalsPolling();
+    return;
+  }
+  queueLiveSignalsRefresh('visibility');
+});
+
+window.addEventListener('focus', () => {
+  if (document.hidden) return;
+  queueLiveSignalsRefresh('window-focus');
+});
+
 document.querySelectorAll('.nav-item').forEach(button => {
   button.addEventListener('click', () => setView(button.dataset.view));
 });
@@ -4084,6 +4179,10 @@ document.querySelectorAll('.nav-item').forEach(button => {
     await authenticate();
     await bootstrap();
     setView('home');
+    startLiveSignalsPolling();
+    setTimeout(() => {
+      queueLiveSignalsRefresh('startup');
+    }, LIVE_SIGNALS_FOCUS_DEBOUNCE_MS);
   } catch (error) {
     showError(error.message || 'No se pudo abrir la mini-app.');
   }
