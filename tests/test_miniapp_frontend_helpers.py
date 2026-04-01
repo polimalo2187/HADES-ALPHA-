@@ -47,6 +47,8 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
             'renderSettings',
             'adminManualActivationButton',
             'adminManualTargetSummaryCard',
+            'adminRuntimeStatusClass',
+            'adminRuntimeRoleCard',
         ]:
             self.assertIn(f'function {name}(', text)
 
@@ -76,6 +78,8 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
         self.assertIn('function getRadarWindow(', text)
         self.assertIn('function rotateRadarWindow(', text)
         self.assertIn('function resetRadarView(', text)
+        self.assertIn('Base de usuarios', text)
+        self.assertIn('Salud operativa', text)
 
 if __name__ == '__main__':
     unittest.main()
