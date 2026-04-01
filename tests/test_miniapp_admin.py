@@ -146,7 +146,7 @@ class MiniAppAdminEndpointTests(unittest.TestCase):
             'plan_options': [{'key': 'free', 'available': True}],
             'rules': {'free_manual_summary': 'Free manual solo aplica a usuarios Free con el trial vencido.'},
         }
-        with patch('app.miniapp.app.initialize_database'),              patch('app.miniapp.app.start_background_heartbeat'),              patch('app.miniapp.app.get_mini_app_cors_origins', return_value=['https://hades.example.com']),              patch('app.miniapp.app.is_mini_app_dev_auth_enabled', return_value=False),              patch('app.miniapp.app.parse_session_token', return_value={'uid': 999}),              patch('app.miniapp.app.get_user_by_id', return_value={'user_id': 999, 'banned': False}),              patch('app.miniapp.app.is_admin', return_value=True),              patch('app.miniapp.app.build_admin_manual_plan_lookup_payload', return_value=payload):
+        with patch('app.miniapp.app.initialize_database'),              patch('app.miniapp.app.start_background_heartbeat'),              patch('app.miniapp.app.get_mini_app_cors_origins', return_value=['https://hades.example.com']),              patch('app.miniapp.app.is_mini_app_dev_auth_enabled', return_value=False),              patch('app.miniapp.app.parse_session_token', return_value={'uid': 999}),              patch('app.miniapp.app.get_user_by_id', return_value={'user_id': 999, 'banned': False}),              patch('app.miniapp.app.is_admin', return_value=True),              patch('app.miniapp.app.build_admin_user_lookup_payload', return_value=payload):
             with self._build_client() as client:
                 response = client.get('/api/miniapp/admin/user-lookup?user_id=777', headers={'Authorization': 'Bearer token'})
 
@@ -183,6 +183,34 @@ class MiniAppAdminEndpointTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()['detail'], 'free_manual_requires_expired_free')
+    def test_admin_user_moderation_requires_confirmation(self):
+        with patch('app.miniapp.app.initialize_database'),              patch('app.miniapp.app.start_background_heartbeat'),              patch('app.miniapp.app.get_mini_app_cors_origins', return_value=['https://hades.example.com']),              patch('app.miniapp.app.is_mini_app_dev_auth_enabled', return_value=False),              patch('app.miniapp.app.parse_session_token', return_value={'uid': 999}),              patch('app.miniapp.app.get_user_by_id', return_value={'user_id': 999, 'banned': False}),              patch('app.miniapp.app.is_admin', return_value=True):
+            with self._build_client() as client:
+                response = client.post('/api/miniapp/admin/user-moderation', headers={'Authorization': 'Bearer token'}, json={'user_id': 123, 'action': 'ban_permanent', 'confirm': False})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()['detail'], 'confirm_required')
+
+    def test_admin_user_moderation_returns_payload_for_admin(self):
+        result = {
+            'ok': True,
+            'requested_by': 999,
+            'action': 'ban_temporary',
+            'before': {'user_id': 123, 'banned': False},
+            'target': {'user_id': 123, 'banned': True, 'ban_mode': 'temporary'},
+            'action_summary': {'mode': 'temporary', 'duration_value': 7, 'duration_unit': 'days'},
+            'moderation': {'can_unban': True},
+        }
+        with patch('app.miniapp.app.initialize_database'),              patch('app.miniapp.app.start_background_heartbeat'),              patch('app.miniapp.app.get_mini_app_cors_origins', return_value=['https://hades.example.com']),              patch('app.miniapp.app.is_mini_app_dev_auth_enabled', return_value=False),              patch('app.miniapp.app.parse_session_token', return_value={'uid': 999}),              patch('app.miniapp.app.get_user_by_id', return_value={'user_id': 999, 'banned': False}),              patch('app.miniapp.app.is_admin', return_value=True),              patch('app.miniapp.app.apply_admin_user_moderation_action', return_value=result),              patch('app.miniapp.app.record_audit_event') as mocked_audit:
+            with self._build_client() as client:
+                response = client.post('/api/miniapp/admin/user-moderation', headers={'Authorization': 'Bearer token'}, json={'user_id': 123, 'action': 'ban_temporary', 'duration_value': 7, 'duration_unit': 'days', 'confirm': True})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body['ok'])
+        self.assertEqual(body['action'], 'ban_temporary')
+        self.assertTrue(body['target']['banned'])
+        self.assertTrue(any(call.kwargs.get('event_type') == 'miniapp_admin_user_ban_temporary' for call in mocked_audit.call_args_list))
 
 
 if __name__ == '__main__':
