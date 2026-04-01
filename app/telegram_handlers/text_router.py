@@ -1,15 +1,17 @@
 import logging
 
 from app.database import users_collection
-from app.telegram_handlers.admin import handle_admin_text_input
+from app.menus import get_menu_text, main_menu
 from app.telegram_handlers.common import _banned_message, _get_user_language
 from app.services.admin_service import is_effectively_banned
-from app.telegram_handlers.risk import handle_risk_text_input
-from app.telegram_handlers.watchlist import handle_exchange_text_input, handle_watchlist_text_input
+from app.config import is_admin
+
+logger = logging.getLogger(__name__)
 
 
 async def handle_text_messages(update, context):
-    """Maneja todos los mensajes de texto, decidiendo el flujo correcto"""
+    """Telegram ya funciona como entrada rápida hacia la MiniApp, no como UI operativa."""
+    user = None
     try:
         user_id = update.effective_user.id
         user = users_collection().find_one({"user_id": user_id})
@@ -19,18 +21,8 @@ async def handle_text_messages(update, context):
     except Exception:
         pass
 
-    if context.user_data.get("watchlist_active"):
-        await handle_watchlist_text_input(update, context)
-        return
-
-    if context.user_data.get("awaiting_user_id") or context.user_data.get("awaiting_delete_user_id") or context.user_data.get("awaiting_plan_days"):
-        await handle_admin_text_input(update, context)
-        return
-
-    if context.user_data.get("awaiting_exchange"):
-        await handle_exchange_text_input(update, context)
-        return
-
-    if context.user_data.get("awaiting_risk_field"):
-        await handle_risk_text_input(update, context)
-        return
+    language = _get_user_language(user)
+    await update.message.reply_text(
+        get_menu_text(language, is_admin=is_admin(update.effective_user.id)),
+        reply_markup=main_menu(language=language, is_admin=is_admin(update.effective_user.id)),
+    )
