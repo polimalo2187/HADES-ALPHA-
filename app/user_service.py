@@ -44,6 +44,12 @@ DEFAULT_EXISTING_USER_FIELDS = {
     "onboarding_completed": False,
     "onboarding_version": 0,
     "banned": False,
+    "miniapp_settings": {
+        "push_alerts": {
+            "enabled": True,
+            "tiers": {"free": True, "plus": False, "premium": False},
+        },
+    },
     "schema_version": USER_SCHEMA_VERSION,
 }
 
