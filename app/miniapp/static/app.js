@@ -879,6 +879,37 @@ function adminManualTargetSummaryCard(target) {
   `;
 }
 
+function adminRuntimeStatusClass(value) {
+  const normalized = String(value || '').toLowerCase();
+  if (normalized === 'ok') return 'is-positive';
+  if (normalized === 'degraded' || normalized === 'stale' || normalized === 'warning') return 'is-warning';
+  if (normalized === 'error' || normalized === 'stopped' || normalized === 'missing') return 'metric-negative';
+  return '';
+}
+
+function adminRuntimeRoleCard(role, report = {}) {
+  const statusValue = String(report.overall_status || 'unknown');
+  const components = Object.values(report.components || {});
+  const incidentCount = components.filter(item => {
+    const effective = String(item?.effective_status || item?.status || 'unknown').toLowerCase();
+    return effective && effective !== 'ok';
+  }).length;
+  const subtitleBits = [];
+  if (report.updated_at) subtitleBits.push(`Actualizado ${formatDate(report.updated_at)}`);
+  if (Number.isFinite(Number(report.max_age_seconds))) subtitleBits.push(`Edad max ${formatNumber(report.max_age_seconds, 0)}s`);
+  return `
+    <div class="card card-span-3 ${adminRuntimeStatusClass(statusValue)}">
+      <div class="metric-label">${escapeHtml(String(role || '').toUpperCase())}</div>
+      <div class="metric-value">${escapeHtml(formatStatusLabel(statusValue))}</div>
+      <div class="metric-subtitle">${escapeHtml(subtitleBits.join(' · ') || 'Sin telemetría adicional')}</div>
+      <div class="pill-row compact-pill-row" style="margin-top:12px;">
+        <span class="pill">Componentes ${escapeHtml(components.length)}</span>
+        <span class="pill">Incidencias ${escapeHtml(incidentCount)}</span>
+      </div>
+    </div>
+  `;
+}
+
 function setRiskNotice(message, tone = 'warning') {
   const normalized = String(message || '').trim();
   state.riskCenter.notice = normalized ? { message: normalized, tone: String(tone || 'warning') } : null;
@@ -1663,9 +1694,31 @@ function renderAdmin() {
       </div>
 
       ${adminOverviewMetricCard('Runtime', runtime.overall_status || '—', runtime.ok ? 'Estado general' : 'Revisar salud', runtime.ok ? 'is-positive' : 'is-warning')}
-      ${adminOverviewMetricCard('Usuarios', formatInteger(users.total || 0), `${formatInteger(users.active_paid || 0)} pagos · ${formatInteger(users.banned || 0)} bloqueados`)}
       ${adminOverviewMetricCard('Señales 24h', formatInteger(signals.created_last_24h || 0), `${formatInteger(signals.pending_evaluation || 0)} pendientes`)}
       ${adminOverviewMetricCard('Pagos', payments.configuration_ready ? 'Configurado' : 'Incompleto', `${formatInteger(payments.pending_orders || 0)} pendientes · ${formatInteger(payments.awaiting_confirmation || 0)} por confirmar`, payments.configuration_ready ? 'is-positive' : 'is-warning')}
+      ${adminOverviewMetricCard('Audit 24h', formatInteger(audit.errors_last_24h || 0), `${formatInteger(audit.warnings_last_24h || 0)} warnings`, Number(audit.errors_last_24h || 0) > 0 ? 'is-warning' : 'is-positive')}
+
+      <div class="card card-span-12">
+        <h2>Base de usuarios</h2>
+        <div class="section-grid" style="margin-top:12px;">
+          ${adminOverviewMetricCard('Usuarios totales', formatInteger(users.total || 0), `${formatInteger(users.banned || 0)} bloqueados`)}
+          ${adminOverviewMetricCard('Free actuales', formatInteger(users.free || 0), `${formatInteger(users.trialing || 0)} en trial`)}
+          ${adminOverviewMetricCard('Plus activos', formatInteger(users.plus_active || 0), 'Acceso Plus vigente', Number(users.plus_active || 0) > 0 ? 'is-accent' : '')}
+          ${adminOverviewMetricCard('Premium activos', formatInteger(users.premium_active || 0), 'Acceso Premium vigente', Number(users.premium_active || 0) > 0 ? 'is-positive' : '')}
+        </div>
+        <div class="pill-row compact-pill-row" style="margin-top:12px;">
+          <span class="pill">Pagos activos: ${escapeHtml(formatInteger(users.active_paid || 0))}</span>
+          <span class="pill">Free expirado: ${escapeHtml(formatInteger(users.expired_free || 0))}</span>
+          <span class="pill">Mix actual Free / Plus / Premium: ${escapeHtml(formatInteger(users.current_mix?.free || 0))} / ${escapeHtml(formatInteger(users.current_mix?.plus || 0))} / ${escapeHtml(formatInteger(users.current_mix?.premium || 0))}</span>
+        </div>
+      </div>
+
+      <div class="card card-span-12">
+        <h2>Salud operativa</h2>
+        <div class="section-grid" style="margin-top:12px;">
+          ${Object.entries(runtime.runtimes || {}).length ? Object.entries(runtime.runtimes || {}).map(([role, report]) => adminRuntimeRoleCard(role, report)).join('') : '<div class="empty-state">No hay matriz de salud disponible todavía.</div>'}
+        </div>
+      </div>
 
       <div class="card card-span-12">
         <h2>Activación manual de planes</h2>
