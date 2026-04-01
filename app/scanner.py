@@ -206,7 +206,10 @@ def _setup_group(signal: Dict) -> str:
 # ------------------------------------------------------
 
 def _qualifies_for_premium(signal: Dict) -> bool:
-    return _setup_group(signal) == "shared" and _raw_score(signal) >= PREMIUM_RAW_SCORE_MIN
+    setup_group = _setup_group(signal)
+    if setup_group == "premium":
+        return True
+    return setup_group == "shared" and _raw_score(signal) >= PREMIUM_RAW_SCORE_MIN
 
 
 def _qualifies_for_plus(signal: Dict) -> bool:
