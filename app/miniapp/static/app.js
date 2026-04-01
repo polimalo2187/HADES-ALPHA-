@@ -40,6 +40,14 @@ const state = {
         days: '30',
       },
     },
+    moderation: {
+      actionLoading: false,
+      confirmAction: null,
+      draft: {
+        durationValue: '7',
+        durationUnit: 'days',
+      },
+    },
   },
   riskCenter: {
     payload: null,
@@ -879,6 +887,65 @@ function adminManualTargetSummaryCard(target) {
   `;
 }
 
+function adminModerationActionButton(label, action, enabled, isBusy = false, variant = 'secondary') {
+  const klass = variant === 'danger' ? 'button button-danger' : variant === 'warning' ? 'button button-secondary' : 'button button-secondary';
+  return `<button class="${klass}" data-admin-moderation-action="${escapeHtml(action)}" ${enabled && !isBusy ? '' : 'disabled'}>${escapeHtml(label)}</button>`;
+}
+
+function adminModerationSummaryCard(target, moderationState) {
+  if (!target) return '';
+  const stateLabel = target.ban_active ? (target.ban_label || 'Baneo activo') : 'Sin baneo';
+  const untilLabel = target.ban_until ? formatDate(target.ban_until) : '—';
+  const confirm = moderationState?.confirmAction || null;
+  const durationValue = String(moderationState?.draft?.durationValue || '7');
+  const durationUnit = String(moderationState?.draft?.durationUnit || 'days');
+  const tempUnits = [
+    { value: 'hours', label: 'Horas' },
+    { value: 'days', label: 'Días' },
+    { value: 'weeks', label: 'Semanas' },
+  ];
+  const moderation = target.moderation || {};
+  const confirmBlock = confirm ? `
+    <div class="notice-list" style="margin-top:12px;">
+      <div class="notice-item">${escapeHtml(confirm.message || 'Confirma la acción administrativa antes de ejecutarla.')}</div>
+    </div>
+    <div class="action-row" style="margin-top:12px;">
+      <button class="button button-danger" data-admin-moderation-confirm="true" ${moderationState?.actionLoading ? 'disabled' : ''}>${moderationState?.actionLoading ? 'Procesando...' : 'Confirmar acción'}</button>
+      <button class="button button-secondary" data-admin-moderation-cancel="true" ${moderationState?.actionLoading ? 'disabled' : ''}>Cancelar</button>
+    </div>
+  ` : '';
+  return `
+    <div class="card card-span-12">
+      <h2>Moderación de usuario</h2>
+      <div class="pill-row compact-pill-row">
+        <span class="pill">Estado baneo: ${escapeHtml(stateLabel)}</span>
+        <span class="pill">Modo: ${escapeHtml(target.ban_mode || '—')}</span>
+        <span class="pill">Hasta: ${escapeHtml(untilLabel)}</span>
+      </div>
+      <div class="action-row compact" style="margin-top:12px; align-items:flex-end; flex-wrap:wrap;">
+        <label style="display:flex; flex-direction:column; gap:6px; min-width:150px;">
+          <span>Duración temporal</span>
+          <input id="adminModerationDurationValueInput" class="input" type="number" min="1" step="1" value="${escapeHtml(durationValue)}" placeholder="Ej: 7">
+        </label>
+        <label style="display:flex; flex-direction:column; gap:6px; min-width:150px;">
+          <span>Unidad</span>
+          <select id="adminModerationDurationUnitSelect" class="input">${tempUnits.map(item => `<option value="${escapeHtml(item.value)}" ${item.value === durationUnit ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}</select>
+        </label>
+        ${adminModerationActionButton('Ban temporal', 'ban_temporary', moderation.can_temporary_ban, moderationState?.actionLoading, 'warning')}
+        ${adminModerationActionButton('Ban permanente', 'ban_permanent', moderation.can_permanent_ban, moderationState?.actionLoading, 'danger')}
+        ${adminModerationActionButton('Levantar baneo', 'unban', moderation.can_unban, moderationState?.actionLoading, 'secondary')}
+        ${adminModerationActionButton('Eliminar usuario', 'delete', moderation.can_delete, moderationState?.actionLoading, 'danger')}
+      </div>
+      <div class="notice-list" style="margin-top:12px;">
+        <div class="notice-item">El baneo temporal bloquea Bot + MiniApp hasta que expire o el admin lo levante.</div>
+        <div class="notice-item">El baneo permanente bloquea indefinidamente el acceso.</div>
+        <div class="notice-item">Eliminar usuario borra su documento principal y sus datos operativos ligados al user_id.</div>
+      </div>
+      ${confirmBlock}
+    </div>
+  `;
+}
+
 function adminRuntimeStatusClass(value) {
   const normalized = String(value || '').toLowerCase();
   if (normalized === 'ok') return 'is-positive';
@@ -1651,6 +1718,7 @@ function renderAdmin() {
   const audit = overview.audit || {};
   const manualActivation = state.adminPanel.manualActivation || {};
   const activationDraft = manualActivation.draft || { userId: '', plan: 'plus', days: '30' };
+  const moderationState = state.adminPanel.moderation || { actionLoading: false, confirmAction: null, draft: { durationValue: '7', durationUnit: 'days' } };
   const lookupPayload = manualActivation.lookup || null;
   const target = lookupPayload?.target || null;
   const planOptions = Array.isArray(lookupPayload?.plan_options) ? lookupPayload.plan_options : [];
@@ -1658,7 +1726,7 @@ function renderAdmin() {
     ? String(activationDraft.plan || '').toLowerCase()
     : (planOptions.find(item => item.available)?.key || String(activationDraft.plan || 'plus').toLowerCase());
   const selectedPlanOption = planOptions.find(item => String(item.key || '').toLowerCase() === selectedPlan) || null;
-  const adminBusy = Boolean(state.adminPanel.loading || manualActivation.lookupLoading || manualActivation.activationLoading);
+  const adminBusy = Boolean(state.adminPanel.loading || manualActivation.lookupLoading || manualActivation.activationLoading || moderationState.actionLoading);
   const loadingBanner = state.adminPanel.loading
     ? '<div class="card card-span-12"><div class="loading-inline">Actualizando panel admin...</div></div>'
     : '';
@@ -1754,6 +1822,8 @@ function renderAdmin() {
           </div>
         ` : '<div class="detail-note" style="margin-top:12px;">Introduce un ID y busca el usuario antes de activar un plan manual.</div>'}
       </div>
+
+      ${target ? adminModerationSummaryCard({ ...target, moderation: lookupPayload?.moderation || {} }, moderationState) : ''}
 
       <div class="card card-span-12">
         <h2>Reset de resultados</h2>
@@ -3497,6 +3567,7 @@ function bindViewButtons() {
       try {
         const payload = await api(`/api/miniapp/admin/user-lookup?user_id=${encodeURIComponent(rawUserId)}`);
         state.adminPanel.manualActivation.lookup = payload;
+        state.adminPanel.moderation.confirmAction = null;
         const defaultPlan = (payload.plan_options || []).find(item => item.available)?.key || 'plus';
         state.adminPanel.manualActivation.draft.plan = String(defaultPlan || 'plus').toLowerCase();
         if (!String(state.adminPanel.manualActivation.draft.days || '').trim()) {
@@ -3550,6 +3621,7 @@ function bindViewButtons() {
           ...(lookup || {}),
           target: result.target || lookup?.target || null,
           plan_options: result.plan_options || lookup?.plan_options || [],
+          moderation: result.moderation || lookup?.moderation || {},
         };
         state.adminPanel.manualActivation.draft.plan = String(result.activation?.plan || selectedPlan).toLowerCase();
         state.adminPanel.manualActivation.draft.days = String(result.activation?.days || rawDays);
@@ -3561,6 +3633,101 @@ function bindViewButtons() {
         tg?.showAlert(`No se pudo activar el plan manual: ${error.message || 'error'}`);
       } finally {
         state.adminPanel.manualActivation.activationLoading = false;
+        renderAdmin();
+        bindViewButtons();
+      }
+    };
+  });
+
+
+  document.querySelectorAll('[data-admin-moderation-action]').forEach(button => {
+    button.onclick = () => {
+      const lookup = state.adminPanel.manualActivation.lookup;
+      const target = lookup?.target;
+      if (!target) {
+        setAdminNotice('Busca primero el usuario antes de aplicar moderación.', 'warning');
+        renderAdmin();
+        bindViewButtons();
+        return;
+      }
+      const action = String(button.dataset.adminModerationAction || '').trim();
+      const durationValue = String(document.getElementById('adminModerationDurationValueInput')?.value || state.adminPanel.moderation.draft.durationValue || '').trim();
+      const durationUnit = String(document.getElementById('adminModerationDurationUnitSelect')?.value || state.adminPanel.moderation.draft.durationUnit || 'days').trim();
+      state.adminPanel.moderation.draft.durationValue = durationValue || state.adminPanel.moderation.draft.durationValue;
+      state.adminPanel.moderation.draft.durationUnit = durationUnit || 'days';
+      const messages = {
+        ban_temporary: `Vas a banear temporalmente al usuario ${target.user_id} por ${durationValue || '?'} ${durationUnit}.`,
+        ban_permanent: `Vas a aplicar baneo permanente al usuario ${target.user_id}.`,
+        unban: `Vas a levantar el baneo del usuario ${target.user_id}.`,
+        delete: `Vas a eliminar el usuario ${target.user_id} y sus datos operativos asociados.`,
+      };
+      if (action === 'ban_temporary' && !durationValue) {
+        setAdminNotice('Introduce la duración del baneo temporal antes de continuar.', 'warning');
+        renderAdmin();
+        bindViewButtons();
+        return;
+      }
+      state.adminPanel.moderation.confirmAction = {
+        action,
+        userId: Number(target.user_id),
+        durationValue: durationValue ? Number(durationValue) : null,
+        durationUnit,
+        message: messages[action] || 'Confirma la acción administrativa.',
+      };
+      setAdminNotice('Confirma la acción administrativa antes de ejecutarla.', 'warning');
+      renderAdmin();
+      bindViewButtons();
+    };
+  });
+  document.querySelectorAll('[data-admin-moderation-cancel]').forEach(button => {
+    button.onclick = () => {
+      state.adminPanel.moderation.confirmAction = null;
+      setAdminNotice('Acción de moderación cancelada.', 'neutral');
+      renderAdmin();
+      bindViewButtons();
+    };
+  });
+  document.querySelectorAll('[data-admin-moderation-confirm]').forEach(button => {
+    button.onclick = async () => {
+      const confirm = state.adminPanel.moderation.confirmAction;
+      if (!confirm) return;
+      state.adminPanel.moderation.actionLoading = true;
+      setAdminNotice('Ejecutando acción de moderación...', 'accent');
+      renderAdmin();
+      bindViewButtons();
+      try {
+        const result = await api('/api/miniapp/admin/user-moderation', {
+          method: 'POST',
+          body: JSON.stringify({
+            user_id: Number(confirm.userId),
+            action: confirm.action,
+            duration_value: confirm.durationValue,
+            duration_unit: confirm.durationUnit,
+            confirm: true,
+          }),
+        });
+        state.adminPanel.moderation.confirmAction = null;
+        const target = result.target || null;
+        state.adminPanel.manualActivation.lookup = target ? {
+          ...(state.adminPanel.manualActivation.lookup || {}),
+          target,
+          plan_options: result.plan_options || (state.adminPanel.manualActivation.lookup?.plan_options || []),
+          moderation: result.moderation || {},
+        } : null;
+        state.adminPanel.overview = null;
+        const messages = {
+          ban_temporary: `Baneo temporal aplicado al usuario ${confirm.userId}.`,
+          ban_permanent: `Baneo permanente aplicado al usuario ${confirm.userId}.`,
+          unban: `Baneo levantado para el usuario ${confirm.userId}.`,
+          delete: `Usuario ${confirm.userId} eliminado correctamente.`,
+        };
+        setAdminNotice(messages[confirm.action] || 'Acción ejecutada correctamente.', 'positive');
+        await refreshAdminOverview(true);
+      } catch (error) {
+        setAdminNotice(`No se pudo ejecutar la moderación: ${error.message || 'error'}`, 'warning');
+        tg?.showAlert(`No se pudo ejecutar la moderación: ${error.message || 'error'}`);
+      } finally {
+        state.adminPanel.moderation.actionLoading = false;
         renderAdmin();
         bindViewButtons();
       }
