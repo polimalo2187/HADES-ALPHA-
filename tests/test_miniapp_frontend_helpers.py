@@ -35,6 +35,11 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
             'refreshRiskCenter',
             'openRiskCenter',
             'renderRisk',
+            'setPerformanceNotice',
+            'performanceNoticeCard',
+            'refreshPerformanceCenter',
+            'openPerformanceCenter',
+            'renderPerformance',
         ]:
             self.assertIn(f'function {name}(', text)
 
@@ -57,6 +62,7 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
         self.assertIn('${accountNoticeCard(state.accountNotice)}', text)
         self.assertIn('data-plan-block="${escapeHtml(planKey)}"', text)
         self.assertIn('data-open-risk-center="true"', text)
+        self.assertIn('data-open-performance-center="true"', text)
         self.assertIn('data-open-risk-signal="${escapeHtml(item.signal_id)}"', text)
 
 if __name__ == '__main__':
