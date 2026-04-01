@@ -30,6 +30,16 @@ const state = {
     notice: null,
     confirmReset: false,
     lastResetSummary: null,
+    manualActivation: {
+      lookup: null,
+      lookupLoading: false,
+      activationLoading: false,
+      draft: {
+        userId: '',
+        plan: 'plus',
+        days: '30',
+      },
+    },
   },
   riskCenter: {
     payload: null,
@@ -839,6 +849,36 @@ function adminResetSummaryCard(summary) {
   `;
 }
 
+
+function adminManualActivationButton(option, selectedPlan, disabled = false) {
+  const optionKey = String(option?.key || '').toLowerCase();
+  const isSelected = optionKey === String(selectedPlan || '').toLowerCase();
+  const isAvailable = Boolean(option?.available);
+  const buttonClass = isSelected && isAvailable ? 'button button-primary' : 'button button-secondary';
+  return `<button class="${buttonClass}" data-admin-plan-select="${escapeHtml(optionKey)}" ${disabled || !isAvailable ? 'disabled' : ''}>${escapeHtml(option?.label || optionKey.toUpperCase())}</button>`;
+}
+
+function adminManualTargetSummaryCard(target) {
+  if (!target) return '';
+  return `
+    <div class="card" style="margin-top:12px;">
+      <div class="item-header">
+        <div>
+          <div class="item-title">${escapeHtml(target.username || 'Sin username')} · ID ${escapeHtml(target.user_id)}</div>
+          <div class="item-subtitle">${escapeHtml(target.subscription_status_label || '—')} · ${escapeHtml(target.plan_name || 'FREE')} · ${escapeHtml(target.days_left ?? 0)} días restantes</div>
+        </div>
+        <span class="plan-tag">${escapeHtml(target.plan_name || 'FREE')}</span>
+      </div>
+      <div class="pill-row compact-pill-row">
+        <span class="pill">Estado: ${escapeHtml(target.subscription_status_label || '—')}</span>
+        <span class="pill">Idioma: ${escapeHtml(String(target.language || 'es').toUpperCase())}</span>
+        <span class="pill">Vence: ${escapeHtml(formatDate(target.expires_at || target.trial_end || target.plan_end))}</span>
+        <span class="pill">Baneado: ${target.banned ? 'Sí' : 'No'}</span>
+      </div>
+    </div>
+  `;
+}
+
 function setRiskNotice(message, tone = 'warning') {
   const normalized = String(message || '').trim();
   state.riskCenter.notice = normalized ? { message: normalized, tone: String(tone || 'warning') } : null;
@@ -1578,6 +1618,16 @@ function renderAdmin() {
   const signals = overview.signals || {};
   const payments = overview.payments || {};
   const audit = overview.audit || {};
+  const manualActivation = state.adminPanel.manualActivation || {};
+  const activationDraft = manualActivation.draft || { userId: '', plan: 'plus', days: '30' };
+  const lookupPayload = manualActivation.lookup || null;
+  const target = lookupPayload?.target || null;
+  const planOptions = Array.isArray(lookupPayload?.plan_options) ? lookupPayload.plan_options : [];
+  const selectedPlan = planOptions.some(item => item.available && String(item.key || '').toLowerCase() === String(activationDraft.plan || '').toLowerCase())
+    ? String(activationDraft.plan || '').toLowerCase()
+    : (planOptions.find(item => item.available)?.key || String(activationDraft.plan || 'plus').toLowerCase());
+  const selectedPlanOption = planOptions.find(item => String(item.key || '').toLowerCase() === selectedPlan) || null;
+  const adminBusy = Boolean(state.adminPanel.loading || manualActivation.lookupLoading || manualActivation.activationLoading);
   const loadingBanner = state.adminPanel.loading
     ? '<div class="card card-span-12"><div class="loading-inline">Actualizando panel admin...</div></div>'
     : '';
@@ -1616,6 +1666,41 @@ function renderAdmin() {
       ${adminOverviewMetricCard('Usuarios', formatInteger(users.total || 0), `${formatInteger(users.active_paid || 0)} pagos · ${formatInteger(users.banned || 0)} bloqueados`)}
       ${adminOverviewMetricCard('Señales 24h', formatInteger(signals.created_last_24h || 0), `${formatInteger(signals.pending_evaluation || 0)} pendientes`)}
       ${adminOverviewMetricCard('Pagos', payments.configuration_ready ? 'Configurado' : 'Incompleto', `${formatInteger(payments.pending_orders || 0)} pendientes · ${formatInteger(payments.awaiting_confirmation || 0)} por confirmar`, payments.configuration_ready ? 'is-positive' : 'is-warning')}
+
+      <div class="card card-span-12">
+        <h2>Activación manual de planes</h2>
+        <p>Busca un usuario por su ID de Telegram, valida su estado actual y activa Free, Plus o Premium por la cantidad exacta de días que necesites.</p>
+        <div class="action-row compact" style="margin-top:12px; align-items:flex-end;">
+          <label style="display:flex; flex-direction:column; gap:6px; min-width:240px;">
+            <span>ID de Telegram</span>
+            <input id="adminManualPlanUserIdInput" class="input" type="number" min="1" step="1" value="${escapeHtml(activationDraft.userId || '')}" placeholder="Ej: 123456789">
+          </label>
+          <button class="button button-secondary" data-admin-plan-lookup="true" ${manualActivation.lookupLoading ? 'disabled' : ''}>${manualActivation.lookupLoading ? 'Buscando...' : 'Buscar usuario'}</button>
+        </div>
+        ${adminManualTargetSummaryCard(target)}
+        ${target ? `
+          <div class="pill-row compact-pill-row" style="margin-top:12px;">
+            <span class="pill">Free manual: ${target.free_manual_allowed ? 'Permitido' : 'Bloqueado'}</span>
+            <span class="pill">Plan actual: ${escapeHtml(target.plan_name || 'FREE')}</span>
+            <span class="pill">Estado: ${escapeHtml(target.subscription_status_label || '—')}</span>
+          </div>
+          <div class="action-row compact" style="margin-top:12px; flex-wrap:wrap;">
+            ${planOptions.map(option => adminManualActivationButton(option, selectedPlan, adminBusy)).join('')}
+          </div>
+          <div class="action-row compact" style="margin-top:12px; align-items:flex-end;">
+            <label style="display:flex; flex-direction:column; gap:6px; min-width:180px;">
+              <span>Días exactos</span>
+              <input id="adminManualPlanDaysInput" class="input" type="number" min="1" step="1" value="${escapeHtml(activationDraft.days || '30')}" placeholder="Ej: 15">
+            </label>
+            <button class="button button-primary" data-admin-plan-activate="true" ${manualActivation.activationLoading || !selectedPlanOption?.available ? 'disabled' : ''}>${manualActivation.activationLoading ? 'Activando...' : 'Activar manualmente'}</button>
+          </div>
+          ${selectedPlanOption && !selectedPlanOption.available ? `<div class="detail-note" style="margin-top:12px;">${escapeHtml(selectedPlanOption.disabled_reason || 'Esa activación no está permitida para el estado actual del usuario.')}</div>` : ''}
+          <div class="notice-list" style="margin-top:12px;">
+            <div class="notice-item">Free manual solo aplica a usuarios Free cuyo trial ya expiró.</div>
+            <div class="notice-item">Plus y Premium se activan por la cantidad exacta de días que defina el admin.</div>
+          </div>
+        ` : '<div class="detail-note" style="margin-top:12px;">Introduce un ID y busca el usuario antes de activar un plan manual.</div>'}
+      </div>
 
       <div class="card card-span-12">
         <h2>Reset de resultados</h2>
@@ -3333,6 +3418,102 @@ function bindViewButtons() {
       } catch (_) {}
     };
   });
+  document.querySelectorAll('[data-admin-plan-select]').forEach(button => {
+    button.onclick = () => {
+      state.adminPanel.manualActivation.draft.plan = String(button.dataset.adminPlanSelect || 'plus').toLowerCase();
+      renderAdmin();
+      bindViewButtons();
+    };
+  });
+  document.querySelectorAll('[data-admin-plan-lookup]').forEach(button => {
+    button.onclick = async () => {
+      const input = document.getElementById('adminManualPlanUserIdInput');
+      const rawUserId = String(input?.value || state.adminPanel.manualActivation.draft.userId || '').trim();
+      if (!rawUserId) {
+        setAdminNotice('Introduce el ID de Telegram del usuario que quieres gestionar.', 'warning');
+        renderAdmin();
+        bindViewButtons();
+        tg?.showAlert('Introduce el ID de Telegram del usuario.');
+        return;
+      }
+      state.adminPanel.manualActivation.draft.userId = rawUserId;
+      state.adminPanel.manualActivation.lookupLoading = true;
+      setAdminNotice('Buscando usuario para activación manual...', 'accent');
+      renderAdmin();
+      bindViewButtons();
+      try {
+        const payload = await api(`/api/miniapp/admin/user-lookup?user_id=${encodeURIComponent(rawUserId)}`);
+        state.adminPanel.manualActivation.lookup = payload;
+        const defaultPlan = (payload.plan_options || []).find(item => item.available)?.key || 'plus';
+        state.adminPanel.manualActivation.draft.plan = String(defaultPlan || 'plus').toLowerCase();
+        if (!String(state.adminPanel.manualActivation.draft.days || '').trim()) {
+          state.adminPanel.manualActivation.draft.days = '30';
+        }
+        setAdminNotice('Usuario cargado. Selecciona plan y días antes de activar.', 'positive');
+      } catch (error) {
+        state.adminPanel.manualActivation.lookup = null;
+        setAdminNotice(`No se pudo cargar el usuario: ${error.message || 'error'}`, 'warning');
+        tg?.showAlert(`No se pudo cargar el usuario: ${error.message || 'error'}`);
+      } finally {
+        state.adminPanel.manualActivation.lookupLoading = false;
+        renderAdmin();
+        bindViewButtons();
+      }
+    };
+  });
+  document.querySelectorAll('[data-admin-plan-activate]').forEach(button => {
+    button.onclick = async () => {
+      const lookup = state.adminPanel.manualActivation.lookup;
+      const target = lookup?.target;
+      const rawUserId = String(document.getElementById('adminManualPlanUserIdInput')?.value || state.adminPanel.manualActivation.draft.userId || target?.user_id || '').trim();
+      const rawDays = String(document.getElementById('adminManualPlanDaysInput')?.value || state.adminPanel.manualActivation.draft.days || '').trim();
+      const selectedPlan = String(state.adminPanel.manualActivation.draft.plan || '').toLowerCase() || 'plus';
+      if (!rawUserId || !target) {
+        setAdminNotice('Busca primero el usuario antes de intentar activar un plan.', 'warning');
+        renderAdmin();
+        bindViewButtons();
+        tg?.showAlert('Busca primero el usuario.');
+        return;
+      }
+      if (!rawDays) {
+        setAdminNotice('Introduce la cantidad exacta de días para la activación manual.', 'warning');
+        renderAdmin();
+        bindViewButtons();
+        tg?.showAlert('Introduce la cantidad de días.');
+        return;
+      }
+      state.adminPanel.manualActivation.draft.userId = rawUserId;
+      state.adminPanel.manualActivation.draft.days = rawDays;
+      state.adminPanel.manualActivation.activationLoading = true;
+      setAdminNotice(`Aplicando ${selectedPlan.toUpperCase()} por ${rawDays} días al usuario ${rawUserId}...`, 'accent');
+      renderAdmin();
+      bindViewButtons();
+      try {
+        const result = await api('/api/miniapp/admin/manual-plan-activation', {
+          method: 'POST',
+          body: JSON.stringify({ user_id: Number(rawUserId), plan: selectedPlan, days: Number(rawDays) }),
+        });
+        state.adminPanel.manualActivation.lookup = {
+          ...(lookup || {}),
+          target: result.target || lookup?.target || null,
+          plan_options: result.plan_options || lookup?.plan_options || [],
+        };
+        state.adminPanel.manualActivation.draft.plan = String(result.activation?.plan || selectedPlan).toLowerCase();
+        state.adminPanel.manualActivation.draft.days = String(result.activation?.days || rawDays);
+        state.adminPanel.overview = null;
+        setAdminNotice(`Plan ${String(result.activation?.plan_name || selectedPlan).toUpperCase()} activado por ${result.activation?.days || rawDays} días para el usuario ${rawUserId}.`, 'positive');
+        await refreshAdminOverview(true);
+      } catch (error) {
+        setAdminNotice(`No se pudo activar el plan manual: ${error.message || 'error'}`, 'warning');
+        tg?.showAlert(`No se pudo activar el plan manual: ${error.message || 'error'}`);
+      } finally {
+        state.adminPanel.manualActivation.activationLoading = false;
+        renderAdmin();
+        bindViewButtons();
+      }
+    };
+  });
+
   document.querySelectorAll('[data-admin-reset-request]').forEach(button => {
     button.onclick = () => {
       state.adminPanel.confirmReset = true;
