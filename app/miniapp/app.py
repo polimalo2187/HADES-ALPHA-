@@ -41,6 +41,8 @@ from app.miniapp.service import (
     get_user_by_id,
     save_settings_center_payload,
     serialize_order_public,
+    build_admin_manual_plan_lookup_payload,
+    apply_admin_manual_plan_activation,
 )
 from app.observability import build_runtime_health_report, heartbeat, record_audit_event, start_background_heartbeat
 from app.services.admin_runtime_service import (
@@ -86,6 +88,12 @@ class MiniAppWatchlistReplaceRequest(BaseModel):
 
 class MiniAppAdminResetRequest(BaseModel):
     confirm: bool = False
+
+
+class MiniAppAdminManualPlanActivationRequest(BaseModel):
+    user_id: int
+    plan: str
+    days: int
 
 
 class MiniAppRiskProfileUpdateRequest(BaseModel):
@@ -580,6 +588,56 @@ def create_mini_app() -> FastAPI:
             metadata={"fields": sorted(list(patch.keys()))},
         )
         return build_risk_center_payload(user)
+
+    @app.get("/api/miniapp/admin/user-lookup")
+    async def miniapp_admin_user_lookup(
+        user_id: int,
+        admin_user: Dict[str, Any] = Depends(get_authenticated_admin_user),
+    ) -> Dict[str, Any]:
+        try:
+            payload = build_admin_manual_plan_lookup_payload(int(user_id))
+        except ValueError as exc:
+            message = str(exc)
+            if message == "user_not_found":
+                raise HTTPException(status_code=404, detail=message) from exc
+            raise HTTPException(status_code=400, detail=message) from exc
+        payload["requested_by"] = int(admin_user.get("user_id") or 0)
+        return _sanitize_json_payload(payload)
+
+    @app.post("/api/miniapp/admin/manual-plan-activation")
+    async def miniapp_admin_manual_plan_activation(
+        payload: MiniAppAdminManualPlanActivationRequest,
+        admin_user: Dict[str, Any] = Depends(get_authenticated_admin_user),
+    ) -> Dict[str, Any]:
+        admin_id = int(admin_user.get("user_id") or 0)
+        try:
+            result = apply_admin_manual_plan_activation(
+                admin_user_id=admin_id,
+                target_user_id=int(payload.user_id),
+                plan=payload.plan,
+                days=int(payload.days),
+            )
+        except ValueError as exc:
+            message = str(exc)
+            status_code = 404 if message == "user_not_found" else 400
+            raise HTTPException(status_code=status_code, detail=message) from exc
+
+        record_audit_event(
+            event_type="miniapp_admin_manual_plan_activation",
+            status="ok",
+            module="miniapp_admin",
+            user_id=int(payload.user_id),
+            admin_id=admin_id,
+            message="miniapp_admin_manual_plan_activation",
+            metadata={
+                "target_user_id": int(payload.user_id),
+                "plan": str(result.get("activation", {}).get("plan") or payload.plan),
+                "days": int(result.get("activation", {}).get("days") or payload.days),
+                "before_plan": result.get("before", {}).get("plan"),
+                "after_plan": result.get("target", {}).get("plan"),
+            },
+        )
+        return _sanitize_json_payload(result)
 
     @app.get("/api/miniapp/admin/overview")
     async def miniapp_admin_overview(admin_user: Dict[str, Any] = Depends(get_authenticated_admin_user)) -> Dict[str, Any]:
