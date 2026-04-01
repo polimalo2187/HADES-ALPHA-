@@ -40,6 +40,11 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
             'refreshPerformanceCenter',
             'openPerformanceCenter',
             'renderPerformance',
+            'setSettingsNotice',
+            'settingsNoticeCard',
+            'refreshSettingsCenter',
+            'openSettingsCenter',
+            'renderSettings',
         ]:
             self.assertIn(f'function {name}(', text)
 
@@ -63,6 +68,7 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
         self.assertIn('data-plan-block="${escapeHtml(planKey)}"', text)
         self.assertIn('data-open-risk-center="true"', text)
         self.assertIn('data-open-performance-center="true"', text)
+        self.assertIn('data-open-settings-center="true"', text)
         self.assertIn('data-open-risk-signal="${escapeHtml(item.signal_id)}"', text)
         self.assertIn('data-radar-rotate', text)
         self.assertIn('function getRadarWindow(', text)
