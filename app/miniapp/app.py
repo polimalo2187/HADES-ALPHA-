@@ -42,7 +42,9 @@ from app.miniapp.service import (
     save_settings_center_payload,
     serialize_order_public,
     build_admin_manual_plan_lookup_payload,
+    build_admin_user_lookup_payload,
     apply_admin_manual_plan_activation,
+    apply_admin_user_moderation_action,
 )
 from app.observability import build_runtime_health_report, heartbeat, record_audit_event, start_background_heartbeat
 from app.services.admin_runtime_service import (
@@ -51,6 +53,7 @@ from app.services.admin_runtime_service import (
     list_recent_audit_events,
     list_recent_incidents,
 )
+from app.services.admin_service import is_effectively_banned
 from app.payment_service import cancel_payment_order, confirm_payment_order, create_payment_order, get_active_payment_order_for_user
 from app.statistics import reset_statistics
 from app.plans import normalize_plan, plan_status
@@ -94,6 +97,14 @@ class MiniAppAdminManualPlanActivationRequest(BaseModel):
     user_id: int
     plan: str
     days: int
+
+
+class MiniAppAdminUserModerationRequest(BaseModel):
+    user_id: int
+    action: str
+    duration_value: Optional[int] = None
+    duration_unit: Optional[str] = None
+    confirm: bool = False
 
 
 class MiniAppRiskProfileUpdateRequest(BaseModel):
@@ -261,7 +272,7 @@ def create_mini_app() -> FastAPI:
         user = get_user_by_id(int(payload.get("uid") or 0))
         if not user:
             raise HTTPException(status_code=401, detail="session_user_not_found")
-        if user.get("banned"):
+        if is_effectively_banned(user):
             raise HTTPException(status_code=403, detail="user_banned")
         request.state.user_id = int(user.get("user_id") or 0)
         return user
@@ -595,7 +606,7 @@ def create_mini_app() -> FastAPI:
         admin_user: Dict[str, Any] = Depends(get_authenticated_admin_user),
     ) -> Dict[str, Any]:
         try:
-            payload = build_admin_manual_plan_lookup_payload(int(user_id))
+            payload = build_admin_user_lookup_payload(int(user_id), admin_user_id=int(admin_user.get("user_id") or 0))
         except ValueError as exc:
             message = str(exc)
             if message == "user_not_found":
@@ -636,6 +647,49 @@ def create_mini_app() -> FastAPI:
                 "before_plan": result.get("before", {}).get("plan"),
                 "after_plan": result.get("target", {}).get("plan"),
             },
+        )
+        return _sanitize_json_payload(result)
+
+
+    @app.post("/api/miniapp/admin/user-moderation")
+    async def miniapp_admin_user_moderation(
+        payload: MiniAppAdminUserModerationRequest,
+        admin_user: Dict[str, Any] = Depends(get_authenticated_admin_user),
+    ) -> Dict[str, Any]:
+        admin_id = int(admin_user.get("user_id") or 0)
+        normalized_action = str(payload.action or "").strip().lower()
+        if not payload.confirm:
+            raise HTTPException(status_code=400, detail="confirm_required")
+        try:
+            result = apply_admin_user_moderation_action(
+                admin_user_id=admin_id,
+                target_user_id=int(payload.user_id),
+                action=normalized_action,
+                duration_value=payload.duration_value,
+                duration_unit=payload.duration_unit,
+            )
+        except ValueError as exc:
+            message = str(exc)
+            status_code = 404 if message == "user_not_found" else 400
+            raise HTTPException(status_code=status_code, detail=message) from exc
+
+        metadata = {
+            "target_user_id": int(payload.user_id),
+            "action": normalized_action,
+        }
+        if payload.duration_value is not None:
+            metadata["duration_value"] = int(payload.duration_value)
+        if payload.duration_unit is not None:
+            metadata["duration_unit"] = str(payload.duration_unit)
+
+        record_audit_event(
+            event_type=f"miniapp_admin_user_{normalized_action}",
+            status="warning" if normalized_action in {"ban_temporary", "ban_permanent", "delete"} else "ok",
+            module="miniapp_admin",
+            user_id=int(payload.user_id),
+            admin_id=admin_id,
+            message=f"miniapp_admin_user_{normalized_action}",
+            metadata=_sanitize_json_payload(metadata),
         )
         return _sanitize_json_payload(result)
 
