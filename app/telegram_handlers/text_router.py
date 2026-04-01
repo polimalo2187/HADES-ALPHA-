@@ -3,6 +3,7 @@ import logging
 from app.database import users_collection
 from app.telegram_handlers.admin import handle_admin_text_input
 from app.telegram_handlers.common import _banned_message, _get_user_language
+from app.services.admin_service import is_effectively_banned
 from app.telegram_handlers.risk import handle_risk_text_input
 from app.telegram_handlers.watchlist import handle_exchange_text_input, handle_watchlist_text_input
 
@@ -12,7 +13,7 @@ async def handle_text_messages(update, context):
     try:
         user_id = update.effective_user.id
         user = users_collection().find_one({"user_id": user_id})
-        if user and user.get("banned"):
+        if user and is_effectively_banned(user):
             await update.message.reply_text(_banned_message(_get_user_language(user)))
             return
     except Exception:
