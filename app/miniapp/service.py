@@ -14,7 +14,17 @@ from app.history_service import get_history_entries_for_user
 from app.market import get_market_state_snapshot
 from app.payment_service import get_active_payment_order_for_user
 from app.referrals import get_referral_link, get_referral_reward_rules, get_user_referral_stats
-from app.plans import get_plan_catalog, get_plan_name, normalize_plan, plan_status
+from app.plans import (
+    PLAN_FREE,
+    PLAN_PLUS,
+    PLAN_PREMIUM,
+    get_plan_catalog,
+    get_plan_name,
+    grant_plan_entitlement,
+    normalize_plan,
+    plan_status,
+    validate_entitlement_days,
+)
 from app.statistics import build_performance_window, get_materialized_window, get_performance_snapshot
 from app.user_service import get_or_create_user
 from app.models import utcnow
@@ -196,6 +206,124 @@ def save_settings_center_payload(user_id: int, patch: Dict[str, Any]) -> Dict[st
     users_collection().update_one({"user_id": int(user_id)}, {"$set": update_doc})
     refreshed = get_user_by_id(int(user_id)) or user
     return build_settings_center_payload(refreshed)
+
+
+def _admin_manual_free_allowed(user: Dict[str, Any]) -> bool:
+    status = plan_status(user)
+    effective_plan = normalize_plan(status.get("plan") or user.get("plan"))
+    subscription_status = str(status.get("status") or "free").lower().strip()
+    return effective_plan == PLAN_FREE and subscription_status in {"free", "expired"}
+
+
+def _serialize_admin_target_user(user: Dict[str, Any]) -> Dict[str, Any]:
+    status = plan_status(user)
+    effective_plan = normalize_plan(status.get("plan") or user.get("plan"))
+    return {
+        "user_id": int(user.get("user_id") or 0),
+        "username": user.get("username"),
+        "language": normalize_language(user.get("language") or "es"),
+        "is_admin": bool(is_admin(int(user.get("user_id") or 0))),
+        "banned": bool(user.get("banned")),
+        "plan": effective_plan,
+        "plan_name": get_plan_name(effective_plan),
+        "subscription_status": str(status.get("status") or "free"),
+        "subscription_status_label": _label_subscription_status(status.get("status") or "free"),
+        "days_left": int(status.get("days_left") or 0),
+        "expires_at": _iso(status.get("expires")),
+        "trial_end": _iso(user.get("trial_end")),
+        "plan_end": _iso(user.get("plan_end")),
+        "free_manual_allowed": _admin_manual_free_allowed(user),
+    }
+
+
+def _admin_manual_plan_options(user: Dict[str, Any]) -> List[Dict[str, Any]]:
+    free_allowed = _admin_manual_free_allowed(user)
+    options: List[Dict[str, Any]] = []
+    for key in [PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM]:
+        available = True
+        disabled_reason = None
+        if key == PLAN_FREE and not free_allowed:
+            available = False
+            disabled_reason = "Free manual solo aplica a usuarios Free cuyo trial ya expiró."
+        options.append({
+            "key": key,
+            "label": get_plan_name(key),
+            "available": available,
+            "disabled_reason": disabled_reason,
+        })
+    return options
+
+
+def build_admin_manual_plan_lookup_payload(target_user_id: int) -> Dict[str, Any]:
+    user = get_user_by_id(int(target_user_id))
+    if not user:
+        raise ValueError("user_not_found")
+    target = _serialize_admin_target_user(user)
+    return {
+        "target": target,
+        "plan_options": _admin_manual_plan_options(user),
+        "rules": {
+            "free_manual_summary": "Free manual solo aplica a usuarios Free con el trial vencido.",
+            "plus_premium_summary": "Plus y Premium permiten activación manual por la cantidad exacta de días que defina el admin.",
+        },
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+
+
+def apply_admin_manual_plan_activation(
+    *,
+    admin_user_id: int,
+    target_user_id: int,
+    plan: str,
+    days: int,
+) -> Dict[str, Any]:
+    user = get_user_by_id(int(target_user_id))
+    if not user:
+        raise ValueError("user_not_found")
+
+    plan_value = normalize_plan(plan)
+    if plan_value not in {PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM}:
+        raise ValueError("unsupported_plan")
+
+    day_value = validate_entitlement_days(days)
+
+    if plan_value == PLAN_FREE and not _admin_manual_free_allowed(user):
+        raise ValueError("free_manual_requires_expired_free")
+
+    before = _serialize_admin_target_user(user)
+    success = grant_plan_entitlement(
+        int(target_user_id),
+        target_plan=plan_value,
+        days=day_value,
+        source="miniapp_admin_manual",
+        reason="manual_activation",
+        metadata={
+            "admin_id": int(admin_user_id),
+            "manual_days": int(day_value),
+            "target_plan": plan_value,
+        },
+    )
+    if not success:
+        raise ValueError("activation_failed")
+
+    refreshed = get_user_by_id(int(target_user_id))
+    if not refreshed:
+        raise ValueError("user_not_found")
+
+    after = _serialize_admin_target_user(refreshed)
+    return {
+        "ok": True,
+        "requested_by": int(admin_user_id),
+        "activation": {
+            "plan": plan_value,
+            "plan_name": get_plan_name(plan_value),
+            "days": int(day_value),
+        },
+        "before": before,
+        "target": after,
+        "plan_options": _admin_manual_plan_options(refreshed),
+        "generated_at": datetime.utcnow().isoformat(),
+    }
 
 
 def _label_order_status(value: Any) -> str:
