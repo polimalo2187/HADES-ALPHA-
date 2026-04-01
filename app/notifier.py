@@ -6,7 +6,7 @@ from telegram import Bot
 from datetime import datetime
 
 from app.database import users_collection
-from app.plans import PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM
+from app.plans import PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM, normalize_plan, plan_status
 from app.config import is_admin
 from app.models import is_trial_active, is_plan_active
 
@@ -16,12 +16,33 @@ ALERT_AUTO_DELETE_SECONDS = 8
 MAX_PUSH_CONCURRENCY = 25
 
 
+def _accessible_alert_tiers_for_user(user: Dict[str, object]) -> set[str]:
+    effective_plan = normalize_plan((plan_status(user).get("plan") or user.get("plan")))
+    if effective_plan == PLAN_PREMIUM:
+        return {PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM}
+    if effective_plan == PLAN_PLUS:
+        return {PLAN_FREE, PLAN_PLUS}
+    return {PLAN_FREE}
+
+
+def _selected_alert_tiers_for_user(user: Dict[str, object]) -> set[str]:
+    settings = user.get("miniapp_settings") if isinstance(user.get("miniapp_settings"), dict) else {}
+    push_settings = settings.get("push_alerts") if isinstance(settings.get("push_alerts"), dict) else {}
+    if not bool(push_settings.get("enabled", True)):
+        return set()
+    tiers = push_settings.get("tiers") if isinstance(push_settings.get("tiers"), dict) else {}
+    accessible = _accessible_alert_tiers_for_user(user)
+    selected = {tier for tier in accessible if bool(tiers.get(tier, True))}
+    return selected
+
+
 def _eligible_users_for_alert(signal_visibility: str) -> List[int]:
     """
     Retorna usuarios que DEBEN recibir el push.
     Reglas:
-    - Cada usuario SOLO recibe push de su plan
-    - Admin SOLO recibe PREMIUM
+    - Respeta el plan efectivo del usuario
+    - Respeta preferencias de push configuradas desde la MiniApp
+    - Admin mantiene canal premium por defecto
     """
 
     users_col = users_collection()
@@ -29,18 +50,17 @@ def _eligible_users_for_alert(signal_visibility: str) -> List[int]:
 
     users = users_col.find(
         {},
-        {"user_id": 1, "plan": 1, "trial_end": 1, "plan_end": 1, "banned": 1}
+        {"user_id": 1, "plan": 1, "trial_end": 1, "plan_end": 1, "banned": 1, "miniapp_settings": 1}
     )
 
     now = datetime.utcnow()
+    requested_visibility = normalize_plan(signal_visibility)
 
     for user in users:
         if user.get("banned"):
             continue
 
         user_id = user.get("user_id")
-        user_plan = user.get("plan", PLAN_FREE)
-
         admin = is_admin(user_id)
         has_access = is_plan_active(user) or is_trial_active(user)
 
@@ -51,11 +71,12 @@ def _eligible_users_for_alert(signal_visibility: str) -> List[int]:
             continue
 
         if admin:
-            if signal_visibility == PLAN_PREMIUM:
+            if requested_visibility == PLAN_PREMIUM:
                 eligible_users.append(int(user_id))
             continue
 
-        if user_plan == signal_visibility:
+        selected_tiers = _selected_alert_tiers_for_user(user)
+        if requested_visibility in selected_tiers:
             eligible_users.append(int(user_id))
 
     return eligible_users
