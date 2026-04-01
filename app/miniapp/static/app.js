@@ -4,6 +4,13 @@ if (tg) {
   tg.expand();
 }
 
+const DEFAULT_MARKET_VIEW = {
+  gainersOffset: 0,
+  losersOffset: 0,
+  volumeOffset: 0,
+  chunkSize: 4,
+};
+
 const DEFAULT_RADAR_VIEW = {
   search: '',
   direction: 'all',
@@ -22,6 +29,7 @@ const state = {
   signalDetail: null,
   radarDetail: null,
   radarView: { ...DEFAULT_RADAR_VIEW },
+  marketView: { ...DEFAULT_MARKET_VIEW },
   accountNotice: null,
   adminPanel: {
     overview: null,
@@ -320,6 +328,56 @@ function normalizeTextLookup(value) {
 
 function radarFilterCount(items, predicate) {
   return items.filter(predicate).length;
+}
+
+function marketChunkSize(market) {
+  const configured = Number(market?.market_rotation?.chunk_size || state.marketView?.chunkSize || DEFAULT_MARKET_VIEW.chunkSize || 4);
+  return configured > 0 ? configured : 4;
+}
+
+function normalizeMarketOffset(total, offset, size) {
+  if (!total || total <= size) return 0;
+  const normalized = Number(offset || 0);
+  if (!Number.isFinite(normalized) || normalized < 0 || normalized >= total) return 0;
+  return normalized;
+}
+
+function marketWindow(items, offset, size) {
+  if (!Array.isArray(items) || !items.length) return [];
+  const safeOffset = normalizeMarketOffset(items.length, offset, size);
+  return items.slice(safeOffset, safeOffset + size);
+}
+
+function marketWindowLabel(total, offset, size) {
+  if (!total) return 'Sin datos';
+  const safeOffset = normalizeMarketOffset(total, offset, size);
+  const start = safeOffset + 1;
+  const end = Math.min(total, safeOffset + size);
+  return `Mostrando ${start}–${end} de ${total}`;
+}
+
+function rotateMarketSection(section) {
+  const market = state.payload?.market || {};
+  const chunkSize = marketChunkSize(market);
+  const sections = {
+    gainers: { key: 'gainersOffset', items: market.top_gainers_ranked || market.top_gainers || [] },
+    losers: { key: 'losersOffset', items: market.top_losers_ranked || market.top_losers || [] },
+    volume: { key: 'volumeOffset', items: market.top_volume_ranked || market.top_volume || [] },
+  };
+  const target = sections[section];
+  if (!target) return;
+  const total = Array.isArray(target.items) ? target.items.length : 0;
+  if (!total || total <= chunkSize) {
+    state.marketView[target.key] = 0;
+    renderMarket();
+    bindViewButtons();
+    return;
+  }
+  const current = normalizeMarketOffset(total, state.marketView[target.key], chunkSize);
+  const next = current + chunkSize >= total ? 0 : current + chunkSize;
+  state.marketView[target.key] = next;
+  renderMarket();
+  bindViewButtons();
 }
 
 function sortRadarItems(items, sortKey) {
@@ -1744,10 +1802,20 @@ function renderMarket() {
   const market = state.payload.market || {};
   const watchlist = state.payload.watchlist || [];
   const watchlistMeta = state.payload.watchlist_meta || { symbols: [], symbols_count: 0, max_symbols: 0, slots_left: 0, can_add_more: false };
-  const gainers = market.top_gainers || [];
-  const losers = market.top_losers || [];
+  const chunkSize = marketChunkSize(market);
+  const gainersRanked = market.top_gainers_ranked || market.top_gainers || [];
+  const losersRanked = market.top_losers_ranked || market.top_losers || [];
+  const volumeRanked = market.top_volume_ranked || market.top_volume || [];
+  const gainersOffset = normalizeMarketOffset(gainersRanked.length, state.marketView.gainersOffset, chunkSize);
+  const losersOffset = normalizeMarketOffset(losersRanked.length, state.marketView.losersOffset, chunkSize);
+  const volumeOffset = normalizeMarketOffset(volumeRanked.length, state.marketView.volumeOffset, chunkSize);
+  state.marketView.gainersOffset = gainersOffset;
+  state.marketView.losersOffset = losersOffset;
+  state.marketView.volumeOffset = volumeOffset;
+  const gainers = marketWindow(gainersRanked, gainersOffset, chunkSize);
+  const losers = marketWindow(losersRanked, losersOffset, chunkSize);
   const radar = market.radar || [];
-  const topVolume = market.top_volume || [];
+  const topVolume = marketWindow(volumeRanked, volumeOffset, chunkSize);
   const btc = market.btc || {};
   const eth = market.eth || {};
   const radarView = state.radarView || { ...DEFAULT_RADAR_VIEW };
@@ -1767,6 +1835,14 @@ function renderMarket() {
       </div>
     </div>
   `).join('') : `<div class="empty-state">Sin ${type} disponibles.</div>`;
+
+  const marketRotationMeta = market.market_rotation || {};
+  const marketPager = (section, total, offset) => `
+    <div class="action-row compact" style="margin-top:12px; justify-content:space-between; align-items:center;">
+      <span class="item-subtitle">${escapeHtml(marketWindowLabel(total, offset, chunkSize))}</span>
+      <button class="button button-secondary" data-market-rotate="${escapeHtml(section)}">Actualizar</button>
+    </div>
+  `;
 
   els.market.innerHTML = `
     <div class="section-grid">
@@ -1789,11 +1865,13 @@ function renderMarket() {
       <div class="card card-span-6">
         <h2>Mayores subidas</h2>
         <div class="list">${movementList(gainers, 'gainers')}</div>
+        ${marketPager('gainers', marketRotationMeta.gainers_total || gainersRanked.length, gainersOffset)}
       </div>
 
       <div class="card card-span-6">
         <h2>Mayores caídas</h2>
         <div class="list">${movementList(losers, 'losers')}</div>
+        ${marketPager('losers', marketRotationMeta.losers_total || losersRanked.length, losersOffset)}
       </div>
 
       <div class="card card-span-6">
@@ -1825,6 +1903,7 @@ function renderMarket() {
       <div class="card card-span-6">
         <h2>Top volumen</h2>
         <div class="list">${movementList(topVolume, 'volumen')}</div>
+        ${marketPager('volume', marketRotationMeta.volume_total || volumeRanked.length, volumeOffset)}
       </div>
 
       <div class="card card-span-12">
@@ -2942,6 +3021,9 @@ function bindViewButtons() {
         }
       }
     };
+  });
+  document.querySelectorAll('[data-market-rotate]').forEach(button => {
+    button.onclick = () => rotateMarketSection(button.dataset.marketRotate);
   });
   document.querySelectorAll('[data-open-performance-center]').forEach(button => {
     button.onclick = () => openPerformanceCenter({ days: button.dataset.performanceDays || 30 });
