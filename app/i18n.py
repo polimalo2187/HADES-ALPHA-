@@ -26,14 +26,34 @@ MESSAGES: Dict[str, Dict[str, Any]] = {
             "language_es": "🇪🇸 Español",
             "language_en": "🇺🇸 English",
             "access_revoked": "🚫 Tu acceso al bot ha sido revocado.",
-            "main_menu_short": "🏠 MENÚ PRINCIPAL — Selecciona una opción abajo",
+            "main_menu_short": "🚀 HADES MiniApp",
             "main_menu_full": (
-                "🏠 MENÚ PRINCIPAL | {bot_name}\n\n"
-                "Señales, análisis, rendimiento, mercado y herramientas del bot en un solo lugar. "
-                "Selecciona una opción abajo:"
+                "🔥 {bot_name}\n\n"
+                "Bienvenido a HADES, tu plataforma operativa de señales.\n\n"
+                "Desde la MiniApp puedes acceder a:\n"
+                "• señales en vivo\n"
+                "• radar y mercado\n"
+                "• watchlist profesional\n"
+                "• historial y rendimiento\n"
+                "• gestión de riesgo\n"
+                "• planes, pagos y cuenta\n\n"
+                "Telegram ahora funciona como canal de notificaciones y acceso rápido. "
+                "Toda la operativa principal vive dentro de la MiniApp.\n\n"
+                "Pulsa el botón de abajo para entrar."
             ),
-            "admin_menu_short": "🛠 PANEL ADMIN — Selecciona una opción abajo",
-            "admin_menu_full": "🛠 PANEL ADMIN — Selecciona una opción abajo",
+            "admin_menu_short": "🛠 HADES Admin",
+            "admin_menu_full": (
+                "🛠 {bot_name} | Acceso administrador\n\n"
+                "La operación del producto ya vive dentro de la MiniApp.\n\n"
+                "Dentro de la MiniApp tienes además:\n"
+                "• panel admin\n"
+                "• activación manual de planes\n"
+                "• métricas por tier\n"
+                "• salud operativa\n"
+                "• moderación de usuarios\n\n"
+                "Telegram queda solo como entrada rápida y canal de notificaciones.\n\n"
+                "Pulsa el botón de abajo para abrir la MiniApp."
+            ),
         },
         "menu": {
             "signals": "🚨 Señales",
@@ -48,7 +68,7 @@ MESSAGES: Dict[str, Dict[str, Any]] = {
             "referrals": "👥 Referidos",
             "account": "👤 Mi cuenta",
             "support": "📩 Soporte",
-            "open_app": "🚀 HADES App",
+            "open_app": "🚀 Abrir MiniApp",
             "admin_panel": "🛠 Panel Admin",
             "risk_menu": "⚙️ Gestión de riesgo",
             "admin_activate_plus": "➕ Activar plan PLUS",
@@ -137,14 +157,34 @@ MESSAGES: Dict[str, Dict[str, Any]] = {
             "language_es": "🇪🇸 Spanish",
             "language_en": "🇺🇸 English",
             "access_revoked": "🚫 Your access to the bot has been revoked.",
-            "main_menu_short": "🏠 MAIN MENU — Select an option below",
+            "main_menu_short": "🚀 HADES MiniApp",
             "main_menu_full": (
-                "🏠 MAIN MENU | {bot_name}\n\n"
-                "Signals, analysis, performance, market data, and bot tools in one place. "
-                "Select an option below:"
+                "🔥 {bot_name}\n\n"
+                "Welcome to HADES, your operational signals platform.\n\n"
+                "Inside the MiniApp you can access:\n"
+                "• live signals\n"
+                "• radar and market\n"
+                "• pro watchlist\n"
+                "• history and performance\n"
+                "• risk management\n"
+                "• plans, payments, and account\n\n"
+                "Telegram now works as your notification channel and quick entry point. "
+                "All core operations now live inside the MiniApp.\n\n"
+                "Tap the button below to enter."
             ),
-            "admin_menu_short": "🛠 ADMIN PANEL — Select an option below",
-            "admin_menu_full": "🛠 ADMIN PANEL — Select an option below",
+            "admin_menu_short": "🛠 HADES Admin",
+            "admin_menu_full": (
+                "🛠 {bot_name} | Admin access\n\n"
+                "The product now operates from the MiniApp.\n\n"
+                "Inside the MiniApp you also have:\n"
+                "• admin panel\n"
+                "• manual plan activation\n"
+                "• tier metrics\n"
+                "• operational health\n"
+                "• user moderation\n\n"
+                "Telegram remains only as a quick entry point and notification channel.\n\n"
+                "Tap the button below to open the MiniApp."
+            ),
         },
         "menu": {
             "signals": "🚨 Signals",
@@ -159,7 +199,7 @@ MESSAGES: Dict[str, Dict[str, Any]] = {
             "referrals": "👥 Referrals",
             "account": "👤 My account",
             "support": "📩 Support",
-            "open_app": "🚀 HADES App",
+            "open_app": "🚀 Open MiniApp",
             "admin_panel": "🛠 Admin Panel",
             "risk_menu": "⚙️ Risk management",
             "admin_activate_plus": "➕ Activate PLUS plan",
