@@ -5,6 +5,7 @@ from telegram.ext import ContextTypes
 from app.config import is_admin
 from app.menus import get_menu_text, main_menu
 from app.user_service import get_or_create_user
+from app.services.admin_service import is_effectively_banned
 from app.telegram_handlers.common import (
     _banned_message,
     _get_user_language,
@@ -34,7 +35,7 @@ async def handle_start(update, context: ContextTypes.DEFAULT_TYPE):
 
         language = _get_user_language(user)
 
-        if user.get("banned"):
+        if is_effectively_banned(user):
             await message.reply_text(_banned_message(language))
             return
 
