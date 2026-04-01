@@ -9,6 +9,7 @@ from app.database import audit_logs_collection, payment_orders_collection, signa
 from app.observability import build_runtime_health_report
 from app.models import utcnow
 from app.plans import normalize_plan, plan_status
+from app.services.admin_service import is_effectively_banned
 
 _RUNTIME_ROLES = ["web", "bot", "signal_worker", "scheduler"]
 _ALLOWED_AUDIT_STATUSES = {"info", "ok", "success", "warning", "error"}
@@ -72,7 +73,7 @@ def _build_user_overview(users_collection_handle) -> Dict[str, Any]:
 
     for user in cursor:
         summary["total"] += 1
-        if bool(user.get("banned")):
+        if is_effectively_banned(user):
             summary["banned"] += 1
             continue
 
