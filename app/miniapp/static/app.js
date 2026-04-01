@@ -49,6 +49,11 @@ const state = {
       days: 30,
     },
   },
+  settingsCenter: {
+    payload: null,
+    loading: false,
+    notice: null,
+  },
 };
 
 const els = {
@@ -65,6 +70,7 @@ const els = {
   account: document.getElementById('view-account'),
   performance: document.getElementById('view-performance'),
   risk: document.getElementById('view-risk'),
+  settings: document.getElementById('view-settings'),
   admin: document.getElementById('view-admin'),
   signalDetailModal: document.getElementById('signalDetailModal'),
   signalDetailTitle: document.getElementById('signalDetailTitle'),
@@ -80,6 +86,7 @@ const labels = {
   account: 'Cuenta',
   performance: 'Rendimiento',
   risk: 'Gestión de riesgo',
+  settings: 'Ajustes',
   admin: 'Panel admin',
 };
 
@@ -612,6 +619,173 @@ function setTopSummary() {
   const me = state.payload?.me || {};
   els.planBadge.textContent = String(me.plan_name || 'FREE').toUpperCase();
   els.daysBadge.textContent = `${Number(me.days_left || 0)} días`;
+}
+
+function setSettingsNotice(message, tone = 'warning') {
+  const normalized = String(message || '').trim();
+  state.settingsCenter.notice = normalized ? { message: normalized, tone: String(tone || 'warning') } : null;
+}
+
+function settingsNoticeCard(notice) {
+  if (!notice?.message) return '';
+  const toneClass = billingToneClass(notice.tone);
+  return `
+    <div class="card payment-focus-panel card-span-12 ${toneClass}">
+      <div class="payment-focus-card ${toneClass}">
+        <div class="payment-focus-copy">
+          <div class="payment-focus-kicker">Ajustes</div>
+          <div class="payment-focus-title">Estado de preferencias</div>
+          <div class="payment-focus-message">${escapeHtml(notice.message)}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function refreshSettingsCenter(force = false) {
+  if (state.settingsCenter.loading) return state.settingsCenter.payload;
+  if (!force && state.settingsCenter.payload) return state.settingsCenter.payload;
+  state.settingsCenter.loading = true;
+  renderSettings();
+  bindViewButtons();
+  try {
+    const payload = await api('/api/miniapp/settings');
+    state.settingsCenter.payload = payload;
+    return payload;
+  } catch (error) {
+    setSettingsNotice(`No se pudieron cargar los ajustes: ${error.message || 'error'}`, 'warning');
+    throw error;
+  } finally {
+    state.settingsCenter.loading = false;
+    renderSettings();
+    bindViewButtons();
+  }
+}
+
+async function openSettingsCenter(force = false) {
+  closeSignalDetailModal();
+  setView('settings');
+  renderSettings();
+  bindViewButtons();
+  try {
+    await refreshSettingsCenter(force);
+  } catch (_) {}
+}
+
+function collectSettingsPatch() {
+  const language = String(document.getElementById('settingsLanguageSelect')?.value || '').trim() || null;
+  const push_alerts_enabled = Boolean(document.getElementById('settingsPushEnabled')?.checked);
+  const push_tiers = {
+    free: Boolean(document.getElementById('settingsPushTierFree')?.checked),
+    plus: Boolean(document.getElementById('settingsPushTierPlus')?.checked),
+    premium: Boolean(document.getElementById('settingsPushTierPremium')?.checked),
+  };
+  return { language, push_alerts_enabled, push_tiers };
+}
+
+function settingsTierCard(item) {
+  const disabled = !item.available ? 'disabled' : '';
+  return `
+    <label class="card card-span-4" style="padding:12px;">
+      <div class="item-header">
+        <div>
+          <div class="item-title">${escapeHtml(item.label)}</div>
+          <div class="item-subtitle">${escapeHtml(item.available ? 'Disponible para tu plan actual' : (item.locked_reason || 'No disponible'))}</div>
+        </div>
+        <input type="checkbox" id="settingsPushTier${escapeHtml(item.label)}" ${item.selected ? 'checked' : ''} ${disabled}>
+      </div>
+    </label>
+  `;
+}
+
+function renderSettings() {
+  if (!els.settings) return;
+  const payload = state.settingsCenter.payload || {};
+  const overview = payload.overview || state.payload?.me || {};
+  const language = payload.language || { current: overview.language || 'es', options: [{ value: 'es', label: 'Español' }, { value: 'en', label: 'English' }] };
+  const pushAlerts = payload.push_alerts || { enabled: true, tiers: [], summary: 'Configura qué niveles quieres recibir como push.' };
+  const tierByKey = Object.fromEntries((pushAlerts.tiers || []).map(item => [String(item.key || '').toLowerCase(), item]));
+  const normalizedTiers = ['free', 'plus', 'premium'].map(key => tierByKey[key] || { key, label: key.toUpperCase(), available: false, selected: false, locked_reason: 'No disponible' });
+  const loadingBanner = state.settingsCenter.loading ? '<div class="card card-span-12"><div class="loading-inline">Cargando ajustes...</div></div>' : '';
+
+  if (!state.settingsCenter.payload && !state.settingsCenter.loading) {
+    els.settings.innerHTML = `
+      <div class="section-grid">
+        ${settingsNoticeCard(state.settingsCenter.notice)}
+        <div class="card card-span-12">
+          <h2>Centro de ajustes</h2>
+          <p>Configura idioma y preferencias de alertas push sin tocar el resto de la cuenta.</p>
+          <div class="action-row"><button class="button button-primary" data-open-settings-center="true">Abrir ajustes</button></div>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  els.settings.innerHTML = `
+    <div class="section-grid">
+      ${settingsNoticeCard(state.settingsCenter.notice)}
+      ${loadingBanner}
+      <div class="card card-span-12">
+        <div class="item-header">
+          <div>
+            <h2 style="margin:0;">Centro de ajustes</h2>
+            <div class="item-subtitle">Preferencias de idioma y alertas push del ecosistema HADES.</div>
+          </div>
+          <div class="action-row compact">
+            <button class="button button-secondary" data-goto="account">Volver a cuenta</button>
+            <button class="button button-secondary" data-settings-refresh="true">Refrescar</button>
+          </div>
+        </div>
+        <div class="pill-row compact-pill-row" style="margin-top:12px;">
+          <span class="pill">Plan actual: ${escapeHtml(overview.plan_name || 'FREE')}</span>
+          <span class="pill">Idioma: ${escapeHtml(language.current || 'es')}</span>
+          <span class="pill">Push: ${pushAlerts.enabled ? 'Activo' : 'Silenciado'}</span>
+        </div>
+      </div>
+
+      <div class="card card-span-6">
+        <h2>Idioma</h2>
+        <p>Este ajuste prepara la experiencia multilenguaje de la MiniApp y del bot.</p>
+        <label style="display:flex; flex-direction:column; gap:8px;">
+          <span class="metric-label">Idioma preferido</span>
+          <select id="settingsLanguageSelect" class="input">
+            ${(language.options || []).map(option => `<option value="${escapeHtml(option.value)}" ${option.value === language.current ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}
+          </select>
+        </label>
+      </div>
+
+      <div class="card card-span-6">
+        <h2>Push de señales</h2>
+        <p>${escapeHtml(pushAlerts.summary || 'Configura qué niveles quieres recibir como push.')}</p>
+        <label class="feature-item" style="margin-top:12px; display:flex; align-items:center; justify-content:space-between; gap:12px;">
+          <span>Activar avisos push</span>
+          <input type="checkbox" id="settingsPushEnabled" ${pushAlerts.enabled ? 'checked' : ''}>
+        </label>
+        <div class="detail-note" style="margin-top:12px;">Los pushes siguen siendo avisos simples en Telegram. El detalle completo vive dentro de la MiniApp.</div>
+      </div>
+
+      <div class="card card-span-12">
+        <h2>Niveles de señal que quieres recibir</h2>
+        <div class="section-grid" style="margin-top:12px;">
+          ${normalizedTiers.map(settingsTierCard).join('')}
+        </div>
+      </div>
+
+      <div class="card card-span-12">
+        <h2>Resumen operativo</h2>
+        <div class="feature-list">
+          <div class="feature-item">• Free solo puede recibir pushes Free.</div>
+          <div class="feature-item">• Plus puede elegir Free + Plus.</div>
+          <div class="feature-item">• Premium puede elegir Free + Plus + Premium.</div>
+          <div class="feature-item">• Silenciar push no afecta el acceso a las señales dentro de la MiniApp.</div>
+        </div>
+        <div class="action-row" style="margin-top:12px;">
+          <button class="button button-primary" data-settings-save="true">Guardar ajustes</button>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function setAdminNotice(message, tone = 'warning') {
@@ -2816,6 +2990,19 @@ function renderAccount() {
       </div>
 
       <div class="card card-span-6">
+        <h2>Ajustes y alertas push</h2>
+        <p>Configura idioma y qué niveles de señal quieres recibir como aviso push en Telegram.</p>
+        <div class="pill-row compact-pill-row">
+          <span class="pill">Idioma: ${escapeHtml(account.settings?.language || me.language || 'es')}</span>
+          <span class="pill">Push: ${account.settings?.push_alerts?.enabled === false ? 'Silenciado' : 'Activo'}</span>
+          <span class="pill">Preferencias: ${escapeHtml((account.settings?.push_alerts?.selected_tiers || []).map(item => String(item).toUpperCase()).join(' / ') || 'Default')}</span>
+        </div>
+        <div class="action-row compact" style="margin-top:12px;">
+          <button class="button button-secondary" data-open-settings-center="true">Abrir ajustes</button>
+        </div>
+      </div>
+
+      <div class="card card-span-6">
         <h2>Referidos</h2>
         <div class="pill-row">
           <span class="pill">Totales: ${escapeHtml(referrals.total_referred || 0)}</span>
@@ -2903,6 +3090,7 @@ function renderAll() {
   renderAccount();
   renderPerformance();
   renderRisk();
+  renderSettings();
   renderAdmin();
   bindViewButtons();
   els.loading.classList.add('hidden');
@@ -3006,6 +3194,52 @@ function bindViewButtons() {
         await refreshPerformanceCenter(true, state.performanceCenter.query || {});
         setPerformanceNotice('Rendimiento actualizado correctamente.', 'positive');
       } catch (_) {}
+    };
+  });
+  document.querySelectorAll('[data-open-settings-center]').forEach(button => {
+    button.onclick = () => openSettingsCenter(false);
+  });
+  document.querySelectorAll('[data-settings-refresh]').forEach(button => {
+    button.onclick = async () => {
+      setSettingsNotice('Actualizando ajustes...', 'accent');
+      renderSettings();
+      bindViewButtons();
+      try {
+        await refreshSettingsCenter(true);
+        setSettingsNotice('Ajustes actualizados correctamente.', 'positive');
+      } catch (_) {}
+    };
+  });
+  document.querySelectorAll('[data-settings-save]').forEach(button => {
+    button.onclick = async () => {
+      if (button.disabled) return;
+      const original = button.textContent;
+      button.disabled = true;
+      button.textContent = 'Guardando...';
+      try {
+        const patch = collectSettingsPatch();
+        setSettingsNotice('Guardando ajustes...', 'accent');
+        renderSettings();
+        bindViewButtons();
+        state.settingsCenter.payload = await api('/api/miniapp/settings', {
+          method: 'POST',
+          body: JSON.stringify(patch),
+        });
+        await refreshAccountState();
+        setSettingsNotice('Ajustes guardados correctamente.', 'positive');
+        renderAll();
+        setView('settings');
+      } catch (error) {
+        setSettingsNotice(`No se pudieron guardar los ajustes: ${error.message || 'error'}`, 'warning');
+        renderSettings();
+        bindViewButtons();
+        tg?.showAlert(`No se pudieron guardar los ajustes: ${error.message || 'error'}`);
+      } finally {
+        if (button.isConnected) {
+          button.disabled = false;
+          button.textContent = original;
+        }
+      }
     };
   });
   document.querySelectorAll('[data-open-risk-center]').forEach(button => {
