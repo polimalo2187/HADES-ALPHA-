@@ -108,6 +108,7 @@ class MarketRadarPayloadTests(unittest.TestCase):
 
         self.assertEqual(payload['bias'], 'Alcista')
         self.assertEqual(len(payload['radar']), 3)
+        self.assertEqual(payload['radar_summary']['sort_default'], 'ranking')
         self.assertEqual(payload['radar_summary']['total'], 3)
         self.assertEqual(payload['radar_summary']['longs'], 2)
         self.assertEqual(payload['radar_summary']['shorts'], 1)
