@@ -1,39 +1,8 @@
 const tg = window.Telegram?.WebApp;
-
-function showFatalBootError(message) {
-  const safe = String(message || 'No se pudo abrir la MiniApp.');
-  const loading = document.getElementById('loading');
-  const content = document.getElementById('content');
-  const bottomNav = document.getElementById('bottomNav');
-  const home = document.getElementById('view-home');
-  if (home) home.innerHTML = `<div class="error-banner">${safe.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')}</div>`;
-  if (loading) loading.classList.add('hidden');
-  if (content) content.classList.remove('hidden');
-  if (bottomNav) bottomNav.classList.remove('hidden');
-}
-
-window.addEventListener('error', (event) => {
-  const message = event?.error?.message || event?.message || 'No se pudo abrir la MiniApp.';
-  showFatalBootError(message);
-});
-
-window.addEventListener('unhandledrejection', (event) => {
-  const reason = event?.reason;
-  const message = reason?.message || String(reason || 'No se pudo abrir la MiniApp.');
-  showFatalBootError(message);
-});
-
 if (tg) {
   tg.ready();
   tg.expand();
 }
-
-const DEFAULT_MARKET_VIEW = {
-  gainersOffset: 0,
-  losersOffset: 0,
-  volumeOffset: 0,
-  chunkSize: 4,
-};
 
 const DEFAULT_RADAR_VIEW = {
   search: '',
@@ -44,6 +13,12 @@ const DEFAULT_RADAR_VIEW = {
   execution: 'all',
   alignment: 'all',
   sort: 'ranking',
+};
+
+const DEFAULT_MARKET_VIEW = {
+  gainersOffset: 0,
+  losersOffset: 0,
+  volumeOffset: 0,
 };
 
 const state = {
@@ -352,56 +327,6 @@ function normalizeTextLookup(value) {
 
 function radarFilterCount(items, predicate) {
   return items.filter(predicate).length;
-}
-
-function marketChunkSize(market) {
-  const configured = Number(market?.market_rotation?.chunk_size || state.marketView?.chunkSize || DEFAULT_MARKET_VIEW.chunkSize || 4);
-  return configured > 0 ? configured : 4;
-}
-
-function normalizeMarketOffset(total, offset, size) {
-  if (!total || total <= size) return 0;
-  const normalized = Number(offset || 0);
-  if (!Number.isFinite(normalized) || normalized < 0 || normalized >= total) return 0;
-  return normalized;
-}
-
-function marketWindow(items, offset, size) {
-  if (!Array.isArray(items) || !items.length) return [];
-  const safeOffset = normalizeMarketOffset(items.length, offset, size);
-  return items.slice(safeOffset, safeOffset + size);
-}
-
-function marketWindowLabel(total, offset, size) {
-  if (!total) return 'Sin datos';
-  const safeOffset = normalizeMarketOffset(total, offset, size);
-  const start = safeOffset + 1;
-  const end = Math.min(total, safeOffset + size);
-  return `Mostrando ${start}–${end} de ${total}`;
-}
-
-function rotateMarketSection(section) {
-  const market = state.payload?.market || {};
-  const chunkSize = marketChunkSize(market);
-  const sections = {
-    gainers: { key: 'gainersOffset', items: market.top_gainers_ranked || market.top_gainers || [] },
-    losers: { key: 'losersOffset', items: market.top_losers_ranked || market.top_losers || [] },
-    volume: { key: 'volumeOffset', items: market.top_volume_ranked || market.top_volume || [] },
-  };
-  const target = sections[section];
-  if (!target) return;
-  const total = Array.isArray(target.items) ? target.items.length : 0;
-  if (!total || total <= chunkSize) {
-    state.marketView[target.key] = 0;
-    renderMarket();
-    bindViewButtons();
-    return;
-  }
-  const current = normalizeMarketOffset(total, state.marketView[target.key], chunkSize);
-  const next = current + chunkSize >= total ? 0 : current + chunkSize;
-  state.marketView[target.key] = next;
-  renderMarket();
-  bindViewButtons();
 }
 
 function sortRadarItems(items, sortKey) {
@@ -1822,24 +1747,73 @@ function renderSignals() {
   `;
 }
 
+
+function getMarketRotationWindow(type, fallbackItems, visibleCount) {
+  const market = state.payload?.market || {};
+  const rotation = market.market_rotation || {};
+  const source = Array.isArray(rotation[type]) && rotation[type].length ? rotation[type] : (fallbackItems || []);
+  const count = Math.max(1, Number(visibleCount || 1));
+  const total = source.length;
+  const offsetKey = `${type}Offset`;
+  const currentOffset = Number(state.marketView?.[offsetKey] || 0);
+  const normalizedOffset = total > count ? ((currentOffset % total) + total) % total : 0;
+  const windowItems = total <= count
+    ? source.slice(0, count)
+    : source.slice(normalizedOffset, normalizedOffset + count);
+  const start = total ? normalizedOffset + 1 : 0;
+  const end = total ? normalizedOffset + windowItems.length : 0;
+  if (state.marketView) {
+    state.marketView[offsetKey] = normalizedOffset;
+  }
+  return {
+    items: windowItems,
+    total,
+    start,
+    end,
+    count,
+    canRotate: total > count,
+  };
+}
+
+function rotateMarketWindow(type, visibleCount) {
+  const market = state.payload?.market || {};
+  const rotation = market.market_rotation || {};
+  const source = Array.isArray(rotation[type]) ? rotation[type] : [];
+  const total = source.length;
+  const count = Math.max(1, Number(visibleCount || 1));
+  const offsetKey = `${type}Offset`;
+  if (!state.marketView) state.marketView = { ...DEFAULT_MARKET_VIEW };
+  if (total <= count) {
+    state.marketView[offsetKey] = 0;
+  } else {
+    const currentOffset = Number(state.marketView[offsetKey] || 0);
+    state.marketView[offsetKey] = currentOffset + count >= total ? 0 : currentOffset + count;
+  }
+  renderMarket();
+  bindViewButtons();
+}
+
+function marketRotationMeta(windowState, label) {
+  if (!windowState.total) {
+    return `Sin ${label} disponibles.`;
+  }
+  if (!windowState.canRotate) {
+    return `Mostrando ${windowState.total} de ${windowState.total}`;
+  }
+  return `Mostrando ${windowState.start}–${windowState.end} de ${windowState.total}`;
+}
+
 function renderMarket() {
   const market = state.payload.market || {};
   const watchlist = state.payload.watchlist || [];
   const watchlistMeta = state.payload.watchlist_meta || { symbols: [], symbols_count: 0, max_symbols: 0, slots_left: 0, can_add_more: false };
-  const chunkSize = marketChunkSize(market);
-  const gainersRanked = market.top_gainers_ranked || market.top_gainers || [];
-  const losersRanked = market.top_losers_ranked || market.top_losers || [];
-  const volumeRanked = market.top_volume_ranked || market.top_volume || [];
-  const gainersOffset = normalizeMarketOffset(gainersRanked.length, state.marketView.gainersOffset, chunkSize);
-  const losersOffset = normalizeMarketOffset(losersRanked.length, state.marketView.losersOffset, chunkSize);
-  const volumeOffset = normalizeMarketOffset(volumeRanked.length, state.marketView.volumeOffset, chunkSize);
-  state.marketView.gainersOffset = gainersOffset;
-  state.marketView.losersOffset = losersOffset;
-  state.marketView.volumeOffset = volumeOffset;
-  const gainers = marketWindow(gainersRanked, gainersOffset, chunkSize);
-  const losers = marketWindow(losersRanked, losersOffset, chunkSize);
+  const gainersWindow = getMarketRotationWindow('gainers', market.top_gainers || [], 4);
+  const losersWindow = getMarketRotationWindow('losers', market.top_losers || [], 4);
+  const volumeWindow = getMarketRotationWindow('volume', market.top_volume || [], 5);
+  const gainers = gainersWindow.items;
+  const losers = losersWindow.items;
   const radar = market.radar || [];
-  const topVolume = marketWindow(volumeRanked, volumeOffset, chunkSize);
+  const topVolume = volumeWindow.items;
   const btc = market.btc || {};
   const eth = market.eth || {};
   const radarView = state.radarView || { ...DEFAULT_RADAR_VIEW };
@@ -1859,14 +1833,6 @@ function renderMarket() {
       </div>
     </div>
   `).join('') : `<div class="empty-state">Sin ${type} disponibles.</div>`;
-
-  const marketRotationMeta = market.market_rotation || {};
-  const marketPager = (section, total, offset) => `
-    <div class="action-row compact" style="margin-top:12px; justify-content:space-between; align-items:center;">
-      <span class="item-subtitle">${escapeHtml(marketWindowLabel(total, offset, chunkSize))}</span>
-      <button class="button button-secondary" data-market-rotate="${escapeHtml(section)}">Actualizar</button>
-    </div>
-  `;
 
   els.market.innerHTML = `
     <div class="section-grid">
@@ -1888,14 +1854,20 @@ function renderMarket() {
 
       <div class="card card-span-6">
         <h2>Mayores subidas</h2>
+        <div class="item-subtitle">${escapeHtml(marketRotationMeta(gainersWindow, 'subidas'))}</div>
         <div class="list">${movementList(gainers, 'gainers')}</div>
-        ${marketPager('gainers', marketRotationMeta.gainers_total || gainersRanked.length, gainersOffset)}
+        <div class="action-row">
+          <button class="button button-secondary" data-market-rotate="gainers">Actualizar</button>
+        </div>
       </div>
 
       <div class="card card-span-6">
         <h2>Mayores caídas</h2>
+        <div class="item-subtitle">${escapeHtml(marketRotationMeta(losersWindow, 'caídas'))}</div>
         <div class="list">${movementList(losers, 'losers')}</div>
-        ${marketPager('losers', marketRotationMeta.losers_total || losersRanked.length, losersOffset)}
+        <div class="action-row">
+          <button class="button button-secondary" data-market-rotate="losers">Actualizar</button>
+        </div>
       </div>
 
       <div class="card card-span-6">
@@ -1926,8 +1898,11 @@ function renderMarket() {
 
       <div class="card card-span-6">
         <h2>Top volumen</h2>
+        <div class="item-subtitle">${escapeHtml(marketRotationMeta(volumeWindow, 'volumen'))}</div>
         <div class="list">${movementList(topVolume, 'volumen')}</div>
-        ${marketPager('volume', marketRotationMeta.volume_total || volumeRanked.length, volumeOffset)}
+        <div class="action-row">
+          <button class="button button-secondary" data-market-rotate="volume">Actualizar</button>
+        </div>
       </div>
 
       <div class="card card-span-12">
@@ -3046,9 +3021,6 @@ function bindViewButtons() {
       }
     };
   });
-  document.querySelectorAll('[data-market-rotate]').forEach(button => {
-    button.onclick = () => rotateMarketSection(button.dataset.marketRotate);
-  });
   document.querySelectorAll('[data-open-performance-center]').forEach(button => {
     button.onclick = () => openPerformanceCenter({ days: button.dataset.performanceDays || 30 });
   });
@@ -3205,6 +3177,13 @@ function bindViewButtons() {
           button.textContent = original;
         }
       }
+    };
+  });
+  document.querySelectorAll('[data-market-rotate]').forEach(button => {
+    button.onclick = () => {
+      const type = String(button.dataset.marketRotate || '').toLowerCase();
+      const visibleCount = type === 'volume' ? 5 : 4;
+      rotateMarketWindow(type, visibleCount);
     };
   });
   document.querySelectorAll('[data-goto]').forEach(button => {
