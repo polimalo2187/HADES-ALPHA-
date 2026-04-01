@@ -138,6 +138,50 @@ class MiniAppAdminEndpointTests(unittest.TestCase):
         self.assertEqual(body['summary']['deleted_results'], 10)
         self.assertTrue(any(call.kwargs.get('event_type') == 'miniapp_admin_results_reset' for call in mocked_audit.call_args_list))
 
+    def test_admin_user_lookup_returns_payload_for_admin(self):
+        payload = {
+            'target': {'user_id': 777, 'plan': 'free', 'plan_name': 'FREE', 'subscription_status': 'free'},
+            'plan_options': [{'key': 'free', 'available': True}],
+            'rules': {'free_manual_summary': 'Free manual solo aplica a usuarios Free con el trial vencido.'},
+        }
+        with patch('app.miniapp.app.initialize_database'),              patch('app.miniapp.app.start_background_heartbeat'),              patch('app.miniapp.app.get_mini_app_cors_origins', return_value=['https://hades.example.com']),              patch('app.miniapp.app.is_mini_app_dev_auth_enabled', return_value=False),              patch('app.miniapp.app.parse_session_token', return_value={'uid': 999}),              patch('app.miniapp.app.get_user_by_id', return_value={'user_id': 999, 'banned': False}),              patch('app.miniapp.app.is_admin', return_value=True),              patch('app.miniapp.app.build_admin_manual_plan_lookup_payload', return_value=payload):
+            with self._build_client() as client:
+                response = client.get('/api/miniapp/admin/user-lookup?user_id=777', headers={'Authorization': 'Bearer token'})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body['requested_by'], 999)
+        self.assertEqual(body['target']['user_id'], 777)
+        self.assertTrue(body['plan_options'][0]['available'])
+
+    def test_admin_manual_plan_activation_returns_payload_for_admin(self):
+        result = {
+            'ok': True,
+            'requested_by': 999,
+            'activation': {'plan': 'plus', 'plan_name': 'PLUS', 'days': 21},
+            'before': {'plan': 'free'},
+            'target': {'user_id': 777, 'plan': 'plus', 'plan_name': 'PLUS', 'subscription_status': 'active'},
+            'plan_options': [{'key': 'free', 'available': False}, {'key': 'plus', 'available': True}],
+        }
+        with patch('app.miniapp.app.initialize_database'),              patch('app.miniapp.app.start_background_heartbeat'),              patch('app.miniapp.app.get_mini_app_cors_origins', return_value=['https://hades.example.com']),              patch('app.miniapp.app.is_mini_app_dev_auth_enabled', return_value=False),              patch('app.miniapp.app.parse_session_token', return_value={'uid': 999}),              patch('app.miniapp.app.get_user_by_id', return_value={'user_id': 999, 'banned': False}),              patch('app.miniapp.app.is_admin', return_value=True),              patch('app.miniapp.app.apply_admin_manual_plan_activation', return_value=result),              patch('app.miniapp.app.record_audit_event') as mocked_audit:
+            with self._build_client() as client:
+                response = client.post('/api/miniapp/admin/manual-plan-activation', headers={'Authorization': 'Bearer token'}, json={'user_id': 777, 'plan': 'plus', 'days': 21})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body['ok'])
+        self.assertEqual(body['activation']['plan'], 'plus')
+        self.assertEqual(body['target']['plan'], 'plus')
+        self.assertTrue(any(call.kwargs.get('event_type') == 'miniapp_admin_manual_plan_activation' for call in mocked_audit.call_args_list))
+
+    def test_admin_manual_plan_activation_returns_400_on_invalid_free_activation(self):
+        with patch('app.miniapp.app.initialize_database'),              patch('app.miniapp.app.start_background_heartbeat'),              patch('app.miniapp.app.get_mini_app_cors_origins', return_value=['https://hades.example.com']),              patch('app.miniapp.app.is_mini_app_dev_auth_enabled', return_value=False),              patch('app.miniapp.app.parse_session_token', return_value={'uid': 999}),              patch('app.miniapp.app.get_user_by_id', return_value={'user_id': 999, 'banned': False}),              patch('app.miniapp.app.is_admin', return_value=True),              patch('app.miniapp.app.apply_admin_manual_plan_activation', side_effect=ValueError('free_manual_requires_expired_free')):
+            with self._build_client() as client:
+                response = client.post('/api/miniapp/admin/manual-plan-activation', headers={'Authorization': 'Bearer token'}, json={'user_id': 777, 'plan': 'free', 'days': 3})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()['detail'], 'free_manual_requires_expired_free')
+
 
 if __name__ == '__main__':
     unittest.main()
