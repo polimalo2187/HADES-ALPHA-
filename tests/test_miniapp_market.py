@@ -86,5 +86,29 @@ class MiniAppMarketEndpointTests(unittest.TestCase):
         self.assertEqual(response.json()['detail'], 'radar_symbol_not_found')
 
 
+
+
+    def test_market_endpoint_preserves_extended_radar_payload(self):
+        payload = {
+            'bias': 'Alcista',
+            'preferred_side': 'LONGS',
+            'radar_summary': {'total': 12, 'longs': 8, 'shorts': 4, 'hot': 3, 'immediate': 5, 'active_signals': 1, 'sort_default': 'ranking'},
+            'radar': [{'symbol': f'SYM{i}USDT', 'direction': 'LONG' if i % 2 == 0 else 'SHORT', 'final_score': 80.0 - i} for i in range(12)],
+            'top_gainers': [],
+            'top_losers': [],
+            'top_volume': [],
+            'top_open_interest': [],
+            'btc': {},
+            'eth': {},
+        }
+        with patch('app.miniapp.app.initialize_database'),              patch('app.miniapp.app.start_background_heartbeat'),              patch('app.miniapp.app.get_mini_app_cors_origins', return_value=['https://hades.example.com']),              patch('app.miniapp.app.is_mini_app_dev_auth_enabled', return_value=False),              patch('app.miniapp.app.parse_session_token', return_value={'uid': 10}),              patch('app.miniapp.app.get_user_by_id', return_value={'user_id': 10, 'banned': False, 'plan': 'plus'}),              patch('app.miniapp.app.build_market_payload', return_value=payload):
+            with self._build_client() as client:
+                response = client.get('/api/miniapp/market', headers={'Authorization': 'Bearer token'})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(len(body['radar']), 12)
+        self.assertEqual(body['radar_summary']['sort_default'], 'ranking')
+
 if __name__ == '__main__':
     unittest.main()
