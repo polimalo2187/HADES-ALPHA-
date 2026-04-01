@@ -42,8 +42,16 @@ from app.risk import (
     normalize_risk_profile,
     ensure_risk_profile_ready,
 )
-
-
+from app.services.admin_service import (
+    apply_permanent_ban,
+    apply_temporary_ban,
+    can_block_target,
+    can_delete_target,
+    clear_expired_ban,
+    delete_user_data,
+    remove_ban,
+    resolve_ban_state,
+)
 
 
 _RADAR_SCAN_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
@@ -216,23 +224,30 @@ def _admin_manual_free_allowed(user: Dict[str, Any]) -> bool:
 
 
 def _serialize_admin_target_user(user: Dict[str, Any]) -> Dict[str, Any]:
-    status = plan_status(user)
-    effective_plan = normalize_plan(status.get("plan") or user.get("plan"))
+    clear_expired_ban(int(user.get("user_id") or 0))
+    refreshed_user = get_user_by_id(int(user.get("user_id") or 0)) or user
+    status = plan_status(refreshed_user)
+    effective_plan = normalize_plan(status.get("plan") or refreshed_user.get("plan"))
+    ban_state = resolve_ban_state(refreshed_user)
     return {
-        "user_id": int(user.get("user_id") or 0),
-        "username": user.get("username"),
-        "language": normalize_language(user.get("language") or "es"),
-        "is_admin": bool(is_admin(int(user.get("user_id") or 0))),
-        "banned": bool(user.get("banned")),
+        "user_id": int(refreshed_user.get("user_id") or 0),
+        "username": refreshed_user.get("username"),
+        "language": normalize_language(refreshed_user.get("language") or "es"),
+        "is_admin": bool(is_admin(int(refreshed_user.get("user_id") or 0))),
+        "banned": bool(ban_state.get("active")),
+        "ban_active": bool(ban_state.get("active")),
+        "ban_mode": ban_state.get("mode"),
+        "ban_label": ban_state.get("label"),
+        "ban_until": ban_state.get("until"),
         "plan": effective_plan,
         "plan_name": get_plan_name(effective_plan),
         "subscription_status": str(status.get("status") or "free"),
         "subscription_status_label": _label_subscription_status(status.get("status") or "free"),
         "days_left": int(status.get("days_left") or 0),
         "expires_at": _iso(status.get("expires")),
-        "trial_end": _iso(user.get("trial_end")),
-        "plan_end": _iso(user.get("plan_end")),
-        "free_manual_allowed": _admin_manual_free_allowed(user),
+        "trial_end": _iso(refreshed_user.get("trial_end")),
+        "plan_end": _iso(refreshed_user.get("plan_end")),
+        "free_manual_allowed": _admin_manual_free_allowed(refreshed_user),
     }
 
 
@@ -253,6 +268,111 @@ def _admin_manual_plan_options(user: Dict[str, Any]) -> List[Dict[str, Any]]:
         })
     return options
 
+
+
+
+def _admin_moderation_actions(user: Dict[str, Any], *, admin_user_id: int) -> Dict[str, Any]:
+    target_user_id = int(user.get("user_id") or 0)
+    can_block, block_reason = can_block_target(int(admin_user_id), target_user_id)
+    can_delete, delete_reason = can_delete_target(int(admin_user_id), target_user_id)
+    state = resolve_ban_state(user)
+    return {
+        "can_temporary_ban": bool(can_block and not state.get("active")),
+        "can_permanent_ban": bool(can_block and not state.get("active")),
+        "can_unban": bool(can_block and state.get("active")),
+        "can_delete": bool(can_delete),
+        "block_restriction": block_reason,
+        "delete_restriction": delete_reason,
+        "supported_temp_units": ["hours", "days", "weeks"],
+    }
+
+
+def build_admin_user_lookup_payload(target_user_id: int, *, admin_user_id: int) -> Dict[str, Any]:
+    user = get_user_by_id(int(target_user_id))
+    if not user:
+        raise ValueError("user_not_found")
+    return {
+        **build_admin_manual_plan_lookup_payload(int(target_user_id)),
+        "moderation": _admin_moderation_actions(user, admin_user_id=int(admin_user_id)),
+    }
+
+
+def apply_admin_user_moderation_action(
+    *,
+    admin_user_id: int,
+    target_user_id: int,
+    action: str,
+    duration_value: Optional[int] = None,
+    duration_unit: Optional[str] = None,
+) -> Dict[str, Any]:
+    user = get_user_by_id(int(target_user_id))
+    if not user:
+        raise ValueError("user_not_found")
+
+    normalized_action = str(action or "").strip().lower()
+    if normalized_action not in {"ban_temporary", "ban_permanent", "unban", "delete"}:
+        raise ValueError("unsupported_action")
+
+    before = _serialize_admin_target_user(user)
+    if normalized_action in {"ban_temporary", "ban_permanent", "unban"}:
+        ok, reason = can_block_target(int(admin_user_id), int(target_user_id))
+        if not ok:
+            raise ValueError("cannot_target_self" if reason == "self" else "cannot_target_admin")
+    if normalized_action == "delete":
+        ok, reason = can_delete_target(int(admin_user_id), int(target_user_id))
+        if not ok:
+            raise ValueError("cannot_target_self" if reason == "self" else "cannot_target_admin")
+
+    action_summary: Dict[str, Any]
+    if normalized_action == "ban_temporary":
+        if duration_value is None:
+            raise ValueError("ban_duration_required")
+        action_summary = apply_temporary_ban(
+            target_user_id=int(target_user_id),
+            banned_by=int(admin_user_id),
+            duration_value=int(duration_value),
+            duration_unit=str(duration_unit or "days"),
+        )
+        refreshed = get_user_by_id(int(target_user_id))
+        if not refreshed:
+            raise ValueError("user_not_found")
+        after = _serialize_admin_target_user(refreshed)
+    elif normalized_action == "ban_permanent":
+        action_summary = apply_permanent_ban(target_user_id=int(target_user_id), banned_by=int(admin_user_id))
+        refreshed = get_user_by_id(int(target_user_id))
+        if not refreshed:
+            raise ValueError("user_not_found")
+        after = _serialize_admin_target_user(refreshed)
+    elif normalized_action == "unban":
+        action_summary = remove_ban(target_user_id=int(target_user_id), unbanned_by=int(admin_user_id))
+        refreshed = get_user_by_id(int(target_user_id))
+        if not refreshed:
+            raise ValueError("user_not_found")
+        after = _serialize_admin_target_user(refreshed)
+    else:
+        action_summary = delete_user_data(target_user_id=int(target_user_id), deleted_by=int(admin_user_id))
+        after = None
+
+    latest_user = get_user_by_id(int(target_user_id)) if normalized_action != "delete" else None
+    plan_options = _admin_manual_plan_options(latest_user) if latest_user else []
+    moderation = _admin_moderation_actions(latest_user, admin_user_id=int(admin_user_id)) if latest_user else {
+        "can_temporary_ban": False,
+        "can_permanent_ban": False,
+        "can_unban": False,
+        "can_delete": False,
+        "supported_temp_units": ["hours", "days", "weeks"],
+    }
+    return {
+        "ok": True,
+        "requested_by": int(admin_user_id),
+        "action": normalized_action,
+        "before": before,
+        "target": after,
+        "action_summary": action_summary,
+        "plan_options": plan_options,
+        "moderation": moderation,
+        "generated_at": datetime.utcnow().isoformat(),
+    }
 
 def build_admin_manual_plan_lookup_payload(target_user_id: int) -> Dict[str, Any]:
     user = get_user_by_id(int(target_user_id))
@@ -2220,33 +2340,36 @@ def ensure_mini_app_user(*, user_id: int, username: Optional[str], telegram_lang
 
 
 def build_me_payload(user: Dict[str, Any]) -> Dict[str, Any]:
-    status = plan_status(user)
-    raw_plan = normalize_plan(user.get("plan"))
+    clear_expired_ban(int(user.get("user_id") or 0))
+    refreshed_user = get_user_by_id(int(user.get("user_id") or 0)) or user
+    status = plan_status(refreshed_user)
+    raw_plan = normalize_plan(refreshed_user.get("plan"))
     effective_plan = normalize_plan(status.get("plan") or raw_plan)
-    subscription_status = str(status.get("status") or user.get("subscription_status") or "free").lower()
+    subscription_status = str(status.get("status") or refreshed_user.get("subscription_status") or "free").lower()
+    ban_state = resolve_ban_state(refreshed_user)
 
-    if bool(user.get("banned")):
+    if bool(ban_state.get("active")):
         effective_plan = raw_plan
         subscription_status = "banned"
 
     plan_for_display = raw_plan if raw_plan != "free" else effective_plan
-    expires_at = status.get("expires") or user.get("plan_end") or user.get("trial_end")
+    expires_at = status.get("expires") or refreshed_user.get("plan_end") or refreshed_user.get("trial_end")
 
     return {
-        "user_id": int(user.get("user_id") or 0),
-        "username": user.get("username"),
-        "language": user.get("language") or "es",
-        "is_admin": bool(is_admin(int(user.get("user_id") or 0))),
+        "user_id": int(refreshed_user.get("user_id") or 0),
+        "username": refreshed_user.get("username"),
+        "language": refreshed_user.get("language") or "es",
+        "is_admin": bool(is_admin(int(refreshed_user.get("user_id") or 0))),
         "plan": plan_for_display,
         "plan_name": get_plan_name(plan_for_display),
         "subscription_status": subscription_status,
         "subscription_status_label": _label_subscription_status(subscription_status),
         "days_left": int(status.get("days_left") or 0),
         "expires_at": _iso(expires_at),
-        "banned": bool(user.get("banned")),
-        "ref_code": user.get("ref_code"),
-        "valid_referrals_total": int(user.get("valid_referrals_total") or 0),
-        "reward_days_total": int(user.get("reward_days_total") or 0),
+        "banned": bool(ban_state.get("active")),
+        "ref_code": refreshed_user.get("ref_code"),
+        "valid_referrals_total": int(refreshed_user.get("valid_referrals_total") or 0),
+        "reward_days_total": int(refreshed_user.get("reward_days_total") or 0),
     }
 
 
@@ -2724,7 +2847,7 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         "is_admin": bool(is_admin(int(user.get("user_id") or 0))),
         "days_left": 0,
         "expires_at": None,
-        "banned": bool(user.get("banned")),
+        "banned": bool(resolve_ban_state(user).get("active")),
         "ref_code": user.get("ref_code"),
         "valid_referrals_total": int(user.get("valid_referrals_total") or 0),
         "reward_days_total": int(user.get("reward_days_total") or 0),
