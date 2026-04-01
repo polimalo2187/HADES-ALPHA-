@@ -22,6 +22,7 @@ from app.database import (
     signal_history_collection,
 )
 from app.history_service import upsert_signal_history_record
+from app.services.admin_service import is_effectively_banned
 
 logger = logging.getLogger(__name__)
 
@@ -236,7 +237,7 @@ def generate_user_signal_for_plan(base_signal: Dict):
     now = datetime.utcnow()
 
     for user in users_collection().find({}):
-        if user.get("banned"):
+        if is_effectively_banned(user):
             continue
 
         user_id = user.get("user_id")
