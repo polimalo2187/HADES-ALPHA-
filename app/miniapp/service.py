@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from app.binance_api import get_futures_24h_tickers, get_open_interest, get_premium_index, get_radar_opportunities
 from app.services.market_data_service import get_funding_rate_pct_map, get_open_interest_map
 from app.config import get_bot_username, get_payment_configuration_status, get_payment_min_confirmations, is_admin
+from app.i18n import normalize_language
 from app.database import payment_orders_collection, subscription_events_collection, users_collection, user_signals_collection, watchlists_collection
 from app.history_service import get_history_entries_for_user
 from app.market import get_market_state_snapshot
@@ -70,6 +71,131 @@ def _label_subscription_status(value: Any) -> str:
         "banned": "Bloqueado",
     }
     return mapping.get(normalized, normalized.title())
+
+
+def _settings_language_options() -> List[Dict[str, str]]:
+    return [
+        {"value": "es", "label": "Español"},
+        {"value": "en", "label": "English"},
+    ]
+
+
+def _effective_plan_for_preferences(user: Dict[str, Any]) -> str:
+    status = plan_status(user)
+    return normalize_plan(status.get("plan") or user.get("plan"))
+
+
+def _accessible_push_tiers(plan_value: Optional[str]) -> List[str]:
+    normalized = normalize_plan(plan_value)
+    if normalized == "premium":
+        return ["free", "plus", "premium"]
+    if normalized == "plus":
+        return ["free", "plus"]
+    return ["free"]
+
+
+def _push_tier_label(tier: str) -> str:
+    return {
+        "free": "Free",
+        "plus": "Plus",
+        "premium": "Premium",
+    }.get(str(tier or "").lower(), str(tier or "—").upper())
+
+
+def _load_user_settings(user: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    raw = (user or {}).get("miniapp_settings")
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _serialize_push_preferences(user: Dict[str, Any]) -> Dict[str, Any]:
+    effective_plan = _effective_plan_for_preferences(user)
+    accessible_tiers = _accessible_push_tiers(effective_plan)
+    settings = _load_user_settings(user)
+    push_settings = settings.get("push_alerts") if isinstance(settings.get("push_alerts"), dict) else {}
+    stored_tiers = push_settings.get("tiers") if isinstance(push_settings.get("tiers"), dict) else {}
+    enabled = bool(push_settings.get("enabled", True))
+
+    tiers: List[Dict[str, Any]] = []
+    selected_tiers: List[str] = []
+    for tier in ["free", "plus", "premium"]:
+        available = tier in accessible_tiers
+        selected = bool(stored_tiers.get(tier, available)) if available else False
+        if selected:
+            selected_tiers.append(tier)
+        tiers.append({
+            "key": tier,
+            "label": _push_tier_label(tier),
+            "available": available,
+            "selected": selected,
+            "locked_reason": None if available else f"Disponible desde {_push_tier_label(tier)}",
+        })
+
+    if not enabled:
+        summary = "Push silenciado. No recibirás avisos hasta volver a activarlos."
+    elif selected_tiers:
+        summary = f"Recibirás pushes para: {' / '.join(_push_tier_label(item) for item in selected_tiers)}."
+    else:
+        summary = "No hay niveles seleccionados. No recibirás avisos hasta activar al menos uno."
+
+    return {
+        "enabled": enabled,
+        "tiers": tiers,
+        "selected_tiers": selected_tiers,
+        "available_tiers": accessible_tiers,
+        "summary": summary,
+        "plan_scope_label": get_plan_name(effective_plan),
+    }
+
+
+def build_settings_center_payload(user: Dict[str, Any]) -> Dict[str, Any]:
+    me = build_me_payload(user)
+    push_preferences = _serialize_push_preferences(user)
+    return {
+        "overview": {
+            **me,
+            "effective_plan": _effective_plan_for_preferences(user),
+        },
+        "language": {
+            "current": normalize_language(user.get("language") or "es"),
+            "options": _settings_language_options(),
+        },
+        "push_alerts": push_preferences,
+        "support": {
+            "summary": "Configura idioma y qué niveles de señal quieres recibir como push en Telegram.",
+            "note": "Los pushes siguen siendo avisos simples y el detalle completo vive dentro de la MiniApp.",
+        },
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+
+
+def save_settings_center_payload(user_id: int, patch: Dict[str, Any]) -> Dict[str, Any]:
+    user = get_user_by_id(int(user_id))
+    if not user:
+        raise ValueError("user_not_found")
+
+    effective_plan = _effective_plan_for_preferences(user)
+    accessible_tiers = set(_accessible_push_tiers(effective_plan))
+    update_doc: Dict[str, Any] = {"updated_at": utcnow(), "last_activity": utcnow()}
+
+    if "language" in patch and patch.get("language") is not None:
+        update_doc["language"] = normalize_language(patch.get("language"))
+
+    if "push_alerts_enabled" in patch and patch.get("push_alerts_enabled") is not None:
+        update_doc["miniapp_settings.push_alerts.enabled"] = bool(patch.get("push_alerts_enabled"))
+
+    if "push_tiers" in patch and isinstance(patch.get("push_tiers"), dict):
+        requested_tiers = patch.get("push_tiers") or {}
+        for tier in ["free", "plus", "premium"]:
+            allowed = tier in accessible_tiers
+            selected = bool(requested_tiers.get(tier, allowed)) if allowed else False
+            update_doc[f"miniapp_settings.push_alerts.tiers.{tier}"] = selected
+
+    if len(update_doc) <= 2:
+        return build_settings_center_payload(user)
+
+    users_collection().update_one({"user_id": int(user_id)}, {"$set": update_doc})
+    refreshed = get_user_by_id(int(user_id)) or user
+    return build_settings_center_payload(refreshed)
 
 
 def _label_order_status(value: Any) -> str:
@@ -2321,6 +2447,10 @@ def build_account_center_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         "support": {
             "url": "https://chat.whatsapp.com/JXxSGjaKtqRH9c0jTlGv2l?mode=gi_t",
             "label": "Soporte HADES",
+        },
+        "settings": {
+            "language": normalize_language(user.get("language") or "es"),
+            "push_alerts": _serialize_push_preferences(user),
         },
         "generated_at": datetime.utcnow().isoformat(),
     }
