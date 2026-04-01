@@ -13,6 +13,7 @@ const DEFAULT_RADAR_VIEW = {
   execution: 'all',
   alignment: 'all',
   sort: 'ranking',
+  offset: 0,
 };
 
 const state = {
@@ -390,6 +391,45 @@ function radarSortLabel(value) {
     change: 'Movimiento 24h',
   };
   return map[String(value || '').toLowerCase()] || 'Ranking';
+}
+
+const RADAR_VISIBLE_COUNT = 6;
+
+function getRadarWindow(items, offset = 0, visibleCount = RADAR_VISIBLE_COUNT) {
+  const source = Array.isArray(items) ? items : [];
+  const total = source.length;
+  const count = Math.max(1, Number(visibleCount || RADAR_VISIBLE_COUNT));
+  const normalizedOffset = total > count ? (((Number(offset || 0) % total) + total) % total) : 0;
+  const windowItems = total <= count ? source.slice(0, count) : source.slice(normalizedOffset, normalizedOffset + count);
+  return {
+    items: windowItems,
+    total,
+    count,
+    start: total ? normalizedOffset + 1 : 0,
+    end: total ? normalizedOffset + windowItems.length : 0,
+    canRotate: total > count,
+    offset: normalizedOffset,
+  };
+}
+
+function rotateRadarWindow(items, visibleCount = RADAR_VISIBLE_COUNT) {
+  const total = Array.isArray(items) ? items.length : 0;
+  const count = Math.max(1, Number(visibleCount || RADAR_VISIBLE_COUNT));
+  const currentOffset = Number(state.radarView?.offset || 0);
+  const nextOffset = total <= count || currentOffset + count >= total ? 0 : currentOffset + count;
+  state.radarView = { ...state.radarView, offset: nextOffset };
+}
+
+function resetRadarView(patch = {}) {
+  state.radarView = { ...DEFAULT_RADAR_VIEW, ...patch, offset: 0 };
+}
+
+function radarWindowMeta(windowState, totalUniverse) {
+  if (!windowState.total) return `Mostrando 0 de ${Number(totalUniverse || 0)}`;
+  const suffix = totalUniverse > windowState.total
+    ? ` · filtrados de ${Number(totalUniverse || 0)}`
+    : ` de ${Number(totalUniverse || 0)}`;
+  return `Mostrando ${windowState.start}–${windowState.end}${suffix}`;
 }
 
 
@@ -1752,7 +1792,12 @@ function renderMarket() {
   const eth = market.eth || {};
   const radarView = state.radarView || { ...DEFAULT_RADAR_VIEW };
   const visibleRadar = getRadarPresentation(radar, radarView);
+  const radarWindow = getRadarWindow(visibleRadar, radarView.offset, RADAR_VISIBLE_COUNT);
+  const radarCards = radarWindow.items;
   const radarSummary = market.radar_summary || {};
+  if (radarWindow.offset !== Number(radarView.offset || 0)) {
+    state.radarView = { ...radarView, offset: radarWindow.offset };
+  }
   const watchlistSymbols = new Set((watchlistMeta.symbols || []).map(item => String(item || '').toUpperCase()));
 
   const movementList = (items, type) => items.length ? items.map(item => `
@@ -1935,16 +1980,19 @@ function renderMarket() {
           </div>
           <div class="radar-toolbar-footer">
             <div class="pill-row compact-pill-row radar-results-row">
-              <span class="pill">Mostrando: ${escapeHtml(visibleRadar.length)} / ${escapeHtml(radar.length)}</span>
+              <span class="pill">${escapeHtml(radarWindowMeta(radarWindow, radar.length))}</span>
               <span class="pill">Orden: ${escapeHtml(radarSortLabel(radarView.sort))}</span>
               ${radarView.search ? `<span class="pill">Búsqueda: ${escapeHtml(radarView.search)}</span>` : ''}
             </div>
-            <button class="button button-secondary radar-reset-button" data-radar-reset>Reset filtros</button>
+            <div class="action-row compact">
+              <button class="button button-secondary" data-radar-rotate ${radarWindow.canRotate ? '' : 'disabled'}>Actualizar radar</button>
+              <button class="button button-secondary radar-reset-button" data-radar-reset>Reset filtros</button>
+            </div>
           </div>
         </div>
 
         <div class="radar-card-grid">
-          ${visibleRadar.length ? visibleRadar.map(item => {
+          ${radarCards.length ? radarCards.map(item => {
             const inWatchlist = watchlistSymbols.has(String(item.symbol || '').toUpperCase());
             return `
             <div class="item compact-item watchlist-item-card radar-item-card">
@@ -3181,7 +3229,7 @@ function bindViewButtons() {
   const radarSearchInput = document.getElementById('radarSearchInput');
   if (radarSearchInput) {
     radarSearchInput.oninput = () => {
-      state.radarView = { ...state.radarView, search: radarSearchInput.value || '' };
+      state.radarView = { ...state.radarView, search: radarSearchInput.value || '', offset: 0 };
       renderMarket();
       bindViewButtons();
     };
@@ -3189,7 +3237,7 @@ function bindViewButtons() {
   const radarDirectionFilter = document.getElementById('radarDirectionFilter');
   if (radarDirectionFilter) {
     radarDirectionFilter.onchange = () => {
-      state.radarView = { ...state.radarView, direction: radarDirectionFilter.value || 'all' };
+      state.radarView = { ...state.radarView, direction: radarDirectionFilter.value || 'all', offset: 0 };
       renderMarket();
       bindViewButtons();
     };
@@ -3197,7 +3245,7 @@ function bindViewButtons() {
   const radarPriorityFilter = document.getElementById('radarPriorityFilter');
   if (radarPriorityFilter) {
     radarPriorityFilter.onchange = () => {
-      state.radarView = { ...state.radarView, priority: radarPriorityFilter.value || 'all' };
+      state.radarView = { ...state.radarView, priority: radarPriorityFilter.value || 'all', offset: 0 };
       renderMarket();
       bindViewButtons();
     };
@@ -3205,7 +3253,7 @@ function bindViewButtons() {
   const radarProximityFilter = document.getElementById('radarProximityFilter');
   if (radarProximityFilter) {
     radarProximityFilter.onchange = () => {
-      state.radarView = { ...state.radarView, proximity: radarProximityFilter.value || 'all' };
+      state.radarView = { ...state.radarView, proximity: radarProximityFilter.value || 'all', offset: 0 };
       renderMarket();
       bindViewButtons();
     };
@@ -3213,7 +3261,7 @@ function bindViewButtons() {
   const radarSignalFilter = document.getElementById('radarSignalFilter');
   if (radarSignalFilter) {
     radarSignalFilter.onchange = () => {
-      state.radarView = { ...state.radarView, signal: radarSignalFilter.value || 'all' };
+      state.radarView = { ...state.radarView, signal: radarSignalFilter.value || 'all', offset: 0 };
       renderMarket();
       bindViewButtons();
     };
@@ -3221,7 +3269,7 @@ function bindViewButtons() {
   const radarExecutionFilter = document.getElementById('radarExecutionFilter');
   if (radarExecutionFilter) {
     radarExecutionFilter.onchange = () => {
-      state.radarView = { ...state.radarView, execution: radarExecutionFilter.value || 'all' };
+      state.radarView = { ...state.radarView, execution: radarExecutionFilter.value || 'all', offset: 0 };
       renderMarket();
       bindViewButtons();
     };
@@ -3229,7 +3277,7 @@ function bindViewButtons() {
   const radarAlignmentFilter = document.getElementById('radarAlignmentFilter');
   if (radarAlignmentFilter) {
     radarAlignmentFilter.onchange = () => {
-      state.radarView = { ...state.radarView, alignment: radarAlignmentFilter.value || 'all' };
+      state.radarView = { ...state.radarView, alignment: radarAlignmentFilter.value || 'all', offset: 0 };
       renderMarket();
       bindViewButtons();
     };
@@ -3237,14 +3285,23 @@ function bindViewButtons() {
   const radarSortFilter = document.getElementById('radarSortFilter');
   if (radarSortFilter) {
     radarSortFilter.onchange = () => {
-      state.radarView = { ...state.radarView, sort: radarSortFilter.value || 'ranking' };
+      state.radarView = { ...state.radarView, sort: radarSortFilter.value || 'ranking', offset: 0 };
       renderMarket();
       bindViewButtons();
     };
   }
   document.querySelectorAll('[data-radar-reset]').forEach(button => {
     button.onclick = () => {
-      state.radarView = { ...DEFAULT_RADAR_VIEW };
+      resetRadarView();
+      renderMarket();
+      bindViewButtons();
+    };
+  });
+  document.querySelectorAll('[data-radar-rotate]').forEach(button => {
+    button.onclick = () => {
+      const market = state.payload?.market || {};
+      const radarItems = getRadarPresentation(market.radar || [], state.radarView || DEFAULT_RADAR_VIEW);
+      rotateRadarWindow(radarItems, RADAR_VISIBLE_COUNT);
       renderMarket();
       bindViewButtons();
     };
