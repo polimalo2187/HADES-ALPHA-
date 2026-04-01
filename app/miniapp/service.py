@@ -2407,15 +2407,10 @@ def build_market_payload(user: Optional[Dict[str, Any]] = None) -> Dict[str, Any
     radar_items, radar_summary = _serialize_radar(user_id, limit=12, market_snapshot=snapshot)
     snapshot["radar"] = radar_items
     snapshot["radar_summary"] = radar_summary
-    snapshot["top_gainers"] = list(snapshot.get("top_gainers") or [])[:4]
-    snapshot["top_losers"] = list(snapshot.get("top_losers") or [])[:4]
+    snapshot["top_gainers"] = list(snapshot.get("top_gainers") or [])[:5]
+    snapshot["top_losers"] = list(snapshot.get("top_losers") or [])[:5]
     snapshot["top_volume"] = list(snapshot.get("top_volume") or [])[:5]
     snapshot["top_open_interest"] = list(snapshot.get("top_open_interest") or [])[:4]
-    snapshot["market_rotation"] = {
-        "gainers": list(snapshot.get("top_gainers_ranked") or snapshot.get("top_gainers") or [])[:24],
-        "losers": list(snapshot.get("top_losers_ranked") or snapshot.get("top_losers") or [])[:24],
-        "volume": list(snapshot.get("top_volume_ranked") or snapshot.get("top_volume") or [])[:24],
-    }
     return snapshot
 
 
