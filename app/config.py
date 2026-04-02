@@ -240,6 +240,14 @@ def get_payment_order_ttl_minutes() -> int:
         return 30
 
 
+def get_payment_unique_max_delta() -> float:
+    try:
+        value = float(os.getenv("PAYMENT_UNIQUE_MAX_DELTA", "0.150"))
+    except Exception:
+        return 0.150
+    return max(0.001, min(value, 0.150))
+
+
 
 def get_payment_token_decimals() -> int:
     try:
