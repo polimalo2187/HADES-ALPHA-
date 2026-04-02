@@ -46,5 +46,29 @@ class NotifierPreferencesTests(unittest.TestCase):
         self.assertEqual(plus_recipients, [2])
 
 
+    def test_admin_receives_all_visible_tiers(self):
+        users = MagicMock()
+        users.find.return_value = [
+            {
+                'user_id': 99,
+                'plan': 'premium',
+                'banned': False,
+                'miniapp_settings': {'push_alerts': {'enabled': True, 'tiers': {'free': True, 'plus': True, 'premium': True}}},
+            },
+        ]
+        with patch('app.notifier.users_collection', return_value=users), \
+             patch('app.notifier.is_plan_active', return_value=True), \
+             patch('app.notifier.is_trial_active', return_value=False), \
+             patch('app.notifier.is_admin', return_value=True), \
+             patch('app.notifier.plan_status', side_effect=lambda user: {'plan': user.get('plan')}):
+            free_recipients = _eligible_users_for_alert('free')
+            plus_recipients = _eligible_users_for_alert('plus')
+            premium_recipients = _eligible_users_for_alert('premium')
+
+        self.assertEqual(free_recipients, [99])
+        self.assertEqual(plus_recipients, [99])
+        self.assertEqual(premium_recipients, [99])
+
+
 if __name__ == '__main__':
     unittest.main()
