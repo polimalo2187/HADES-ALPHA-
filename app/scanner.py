@@ -73,7 +73,10 @@ def get_klines(symbol: str, interval: str, limit: int = 220) -> pd.DataFrame:
             "ignore",
         ],
     )
-    return df[["open", "high", "low", "close", "volume"]].astype(float)
+    df[["open", "high", "low", "close", "volume"]] = df[["open", "high", "low", "close", "volume"]].astype(float)
+    df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
+    df["close_time"] = pd.to_datetime(df["close_time"], unit="ms", utc=True)
+    return df[["open_time", "close_time", "open", "high", "low", "close", "volume"]]
 
 
 def get_active_futures_symbols() -> List[str]:
@@ -200,21 +203,16 @@ def _setup_group(signal: Dict) -> str:
 # ------------------------------------------------------
 # CLASIFICACIÓN MUTUAMENTE EXCLUSIVA POR PLAN
 # ------------------------------------------------------
-# PREMIUM: capa alta del universo shared.
-# PLUS: capa intermedia real del universo shared.
-# FREE: solo universo free. No compite con shared.
+# PREMIUM / PLUS / FREE salen directamente del perfil nativo de liquidez.
+# No existe promoción posterior entre tiers. La jerarquía la maneja el routing al usuario.
 # ------------------------------------------------------
 
 def _qualifies_for_premium(signal: Dict) -> bool:
-    setup_group = _setup_group(signal)
-    if setup_group == "premium":
-        return True
-    return setup_group == "shared" and _raw_score(signal) >= PREMIUM_RAW_SCORE_MIN
+    return _setup_group(signal) == "premium" and _raw_score(signal) >= PREMIUM_RAW_SCORE_MIN
 
 
 def _qualifies_for_plus(signal: Dict) -> bool:
-    score = _raw_score(signal)
-    return _setup_group(signal) == "shared" and PLUS_RAW_SCORE_MIN <= score < PREMIUM_RAW_SCORE_MIN
+    return _setup_group(signal) == "plus" and _raw_score(signal) >= PLUS_RAW_SCORE_MIN
 
 
 def _qualifies_for_free(signal: Dict) -> bool:
