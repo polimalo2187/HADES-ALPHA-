@@ -2214,6 +2214,7 @@ function historyCard(item) {
         <span>Resolución: ${escapeHtml(item.resolution_minutes ?? '—')} min</span>
         <span>R múltiple: ${escapeHtml(item.r_multiple ?? '—')}</span>
       </div>
+      ${item.expiry_label ? `<div class="inline-meta"><span>${escapeHtml(item.expiry_label)}</span>${item.tp1_progress_max_pct !== null && item.tp1_progress_max_pct !== undefined ? `<span>Avance TP1 máx: ${escapeHtml(formatNumber(item.tp1_progress_max_pct, 0))}%</span>` : ''}</div>` : ''}
       <div class="action-row compact">
         <button class="button button-secondary" data-signal-detail="${escapeHtml(item.signal_id)}" data-signal-source="history">Ver inteligencia</button>
         <button class="button button-secondary" data-open-risk-signal="${escapeHtml(item.signal_id)}">Calcular riesgo</button>
