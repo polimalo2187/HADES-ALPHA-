@@ -782,7 +782,38 @@ def _serialize_signal(doc: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _history_expiry_type(doc: Dict[str, Any]) -> Optional[str]:
+    resolution = str(doc.get("resolution") or "").lower().strip()
+    expiry_type = str(doc.get("expiry_type") or "").lower().strip()
+    entry_touched = doc.get("entry_touched")
+
+    if resolution == "expired_no_fill":
+        return "no_fill"
+    if resolution == "expired_after_entry":
+        return "after_entry_no_followthrough"
+    if expiry_type:
+        return expiry_type
+    if str(doc.get("result") or "").lower().strip() == "expired":
+        if entry_touched is False:
+            return "no_fill"
+        if entry_touched is True:
+            return "after_entry_no_followthrough"
+    return None
+
+
+
+def _history_expiry_label(doc: Dict[str, Any]) -> Optional[str]:
+    expiry_type = _history_expiry_type(doc)
+    if expiry_type == "no_fill":
+        return "Expirada: no llegó al entry"
+    if expiry_type == "after_entry_no_followthrough":
+        return "Expirada: tocó entry pero no desarrolló"
+    return None
+
+
+
 def _serialize_history(doc: Dict[str, Any]) -> Dict[str, Any]:
+    expiry_type = _history_expiry_type(doc)
     return {
         "signal_id": str(doc.get("signal_id") or doc.get("_id") or ""),
         "symbol": doc.get("symbol"),
@@ -795,6 +826,13 @@ def _serialize_history(doc: Dict[str, Any]) -> Dict[str, Any]:
         "entry_price": doc.get("entry_price"),
         "r_multiple": doc.get("r_multiple"),
         "resolution_minutes": doc.get("resolution_minutes"),
+        "entry_touched": doc.get("entry_touched"),
+        "entry_touched_at": _iso(doc.get("entry_touched_at")),
+        "expiry_type": expiry_type,
+        "expiry_label": _history_expiry_label(doc),
+        "tp1_progress_max_pct": doc.get("tp1_progress_max_pct"),
+        "max_favorable_excursion_r": doc.get("max_favorable_excursion_r"),
+        "max_adverse_excursion_r": doc.get("max_adverse_excursion_r"),
         "signal_created_at": _iso(doc.get("signal_created_at") or doc.get("created_at")),
         "evaluated_at": _iso(doc.get("evaluated_at")),
     }
@@ -1738,13 +1776,22 @@ def _empty_summary() -> Dict[str, Any]:
     return {
         "total": 0,
         "resolved": 0,
+        "filled_total": 0,
         "won": 0,
         "lost": 0,
         "expired": 0,
+        "expired_no_fill": 0,
+        "expired_after_entry": 0,
         "tp1": 0,
         "tp2": 0,
         "sl": 0,
         "winrate": 0.0,
+        "loss_rate": 0.0,
+        "expiry_rate": 0.0,
+        "fill_rate": 0.0,
+        "no_fill_rate": 0.0,
+        "post_fill_expiry_rate": 0.0,
+        "after_entry_failure_rate": 0.0,
         "profit_factor": 0.0,
         "expectancy_r": 0.0,
         "max_drawdown_r": 0.0,
@@ -2393,15 +2440,22 @@ def _serialize_performance_summary(summary: Optional[Dict[str, Any]]) -> Dict[st
     return {
         "total": int(base.get("total") or 0),
         "resolved": int(base.get("resolved") or 0),
+        "filled_total": int(base.get("filled_total") or 0),
         "won": int(base.get("won") or 0),
         "lost": int(base.get("lost") or 0),
         "expired": int(base.get("expired") or 0),
+        "expired_no_fill": int(base.get("expired_no_fill") or 0),
+        "expired_after_entry": int(base.get("expired_after_entry") or 0),
         "tp1": int(base.get("tp1") or 0),
         "tp2": int(base.get("tp2") or 0),
         "sl": int(base.get("sl") or 0),
         "winrate": _finite_metric(base.get("winrate"), 2) or 0.0,
         "loss_rate": _finite_metric(base.get("loss_rate"), 2) or 0.0,
         "expiry_rate": _finite_metric(base.get("expiry_rate"), 2) or 0.0,
+        "fill_rate": _finite_metric(base.get("fill_rate"), 2) or 0.0,
+        "no_fill_rate": _finite_metric(base.get("no_fill_rate"), 2) or 0.0,
+        "post_fill_expiry_rate": _finite_metric(base.get("post_fill_expiry_rate"), 2) or 0.0,
+        "after_entry_failure_rate": _finite_metric(base.get("after_entry_failure_rate"), 2) or 0.0,
         "gross_profit_r": _finite_metric(base.get("gross_profit_r"), 4) or 0.0,
         "gross_loss_r": _finite_metric(base.get("gross_loss_r"), 4) or 0.0,
         "net_r": _finite_metric(base.get("net_r"), 4) or 0.0,
@@ -2455,6 +2509,8 @@ def _serialize_performance_direction_row(row: Optional[Dict[str, Any]]) -> Dict[
         "won": int(item.get("won") or 0),
         "lost": int(item.get("lost") or 0),
         "expired": int(item.get("expired") or 0),
+        "expired_no_fill": int(item.get("expired_no_fill") or 0),
+        "expired_after_entry": int(item.get("expired_after_entry") or 0),
         "winrate": _finite_metric(item.get("winrate"), 2) or 0.0,
         "profit_factor": _finite_metric(profit_factor_raw, 2),
         "profit_factor_infinite": bool(profit_factor_raw == float("inf")),
@@ -2471,6 +2527,8 @@ def _serialize_performance_setup_row(row: Optional[Dict[str, Any]]) -> Dict[str,
         "won": int(item.get("won") or 0),
         "lost": int(item.get("lost") or 0),
         "expired": int(item.get("expired") or 0),
+        "expired_no_fill": int(item.get("expired_no_fill") or 0),
+        "expired_after_entry": int(item.get("expired_after_entry") or 0),
         "winrate": _finite_metric(item.get("winrate"), 2) or 0.0,
         "profit_factor": _finite_metric(profit_factor_raw, 2),
         "profit_factor_infinite": bool(profit_factor_raw == float("inf")),
@@ -2487,6 +2545,8 @@ def _serialize_performance_symbol_row(row: Optional[Dict[str, Any]]) -> Dict[str
         "won": int(item.get("won") or 0),
         "lost": int(item.get("lost") or 0),
         "expired": int(item.get("expired") or 0),
+        "expired_no_fill": int(item.get("expired_no_fill") or 0),
+        "expired_after_entry": int(item.get("expired_after_entry") or 0),
         "winrate": _finite_metric(item.get("winrate"), 2) or 0.0,
         "loss_rate": _finite_metric(item.get("loss_rate"), 2) or 0.0,
         "profit_factor": _finite_metric(profit_factor_raw, 2),
@@ -2516,11 +2576,18 @@ def _serialize_performance_diagnostics(payload: Optional[Dict[str, Any]]) -> Dic
         "won": int(base.get("won") or 0),
         "lost": int(base.get("lost") or 0),
         "expired": int(base.get("expired") or 0),
+        "expired_no_fill": int(base.get("expired_no_fill") or 0),
+        "expired_after_entry": int(base.get("expired_after_entry") or 0),
+        "filled_total": int(base.get("filled_total") or 0),
         "scanner_signals_total": int(base.get("scanner_signals_total") or 0),
         "pending_to_evaluate": int(base.get("pending_to_evaluate") or 0),
         "winrate": _finite_metric(base.get("winrate"), 2) or 0.0,
         "loss_rate": _finite_metric(base.get("loss_rate"), 2) or 0.0,
         "expiry_rate": _finite_metric(base.get("expiry_rate"), 2) or 0.0,
+        "fill_rate": _finite_metric(base.get("fill_rate"), 2) or 0.0,
+        "no_fill_rate": _finite_metric(base.get("no_fill_rate"), 2) or 0.0,
+        "post_fill_expiry_rate": _finite_metric(base.get("post_fill_expiry_rate"), 2) or 0.0,
+        "after_entry_failure_rate": _finite_metric(base.get("after_entry_failure_rate"), 2) or 0.0,
         "avg_result_score": _finite_metric(base.get("avg_result_score"), 2),
         "profit_factor": _finite_metric(profit_factor_raw, 2),
         "profit_factor_infinite": bool(profit_factor_raw == float("inf")),
