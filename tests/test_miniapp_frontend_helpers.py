@@ -106,5 +106,18 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
         self.assertIn('visibilitychange', text)
         self.assertIn('window-focus', text)
 
+
+    def test_performance_expiry_split_labels_are_present(self):
+        app_js = Path(__file__).resolve().parents[1] / 'app' / 'miniapp' / 'static' / 'app.js'
+        text = app_js.read_text(encoding='utf-8')
+        self.assertIn("performanceMetricCard('Exp no fill'", text)
+        self.assertIn("performanceMetricCard('Exp tras entry'", text)
+        self.assertIn("performanceMetricCard('Fill rate'", text)
+        self.assertIn("resolutionCard('Exp no fill'", text)
+        self.assertIn("resolutionCard('Exp tras entry'", text)
+        self.assertIn("Fallo tras fill", text)
+        self.assertIn("Exp no fill ${escapeHtml(summary.expired_no_fill ?? 0)}", text)
+        self.assertIn("Exp tras entry ${escapeHtml(summary.expired_after_entry ?? 0)}", text)
+
 if __name__ == '__main__':
     unittest.main()
