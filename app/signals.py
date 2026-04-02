@@ -914,12 +914,78 @@ def _fetch_klines_between(symbol: str, start_dt: datetime, end_dt: datetime, int
     return all_rows
 
 
+def _ms_to_dt(value: Any) -> Optional[datetime]:
+    try:
+        return datetime.utcfromtimestamp(int(value) / 1000.0)
+    except Exception:
+        return None
+
+
+def _entry_touched_in_candle(direction: str, entry_price: float, high: float, low: float) -> bool:
+    if direction == "LONG":
+        return low <= entry_price
+    if direction == "SHORT":
+        return high >= entry_price
+    return False
+
+
+def _tp1_progress_pct(direction: str, entry_price: float, tp1: float, high: float, low: float) -> Optional[float]:
+    distance = abs(tp1 - entry_price)
+    if distance <= 0:
+        return None
+    if direction == "LONG":
+        favorable_move = max(0.0, high - entry_price)
+    else:
+        favorable_move = max(0.0, entry_price - low)
+    return round((favorable_move / distance) * 100.0, 2)
+
+
+def _excursions_after_entry_r(direction: str, entry_price: float, stop_loss: float, high: float, low: float) -> Dict[str, float]:
+    risk_distance = abs(entry_price - stop_loss)
+    if risk_distance <= 0:
+        return {"favorable_r": 0.0, "adverse_r": 0.0}
+
+    if direction == "LONG":
+        favorable_move = max(0.0, high - entry_price)
+        adverse_move = max(0.0, entry_price - low)
+    else:
+        favorable_move = max(0.0, entry_price - low)
+        adverse_move = max(0.0, high - entry_price)
+
+    return {
+        "favorable_r": round(favorable_move / risk_distance, 4),
+        "adverse_r": round(adverse_move / risk_distance, 4),
+    }
+
+
+def _evaluation_observability_payload(
+    *,
+    entry_touched: bool,
+    entry_touched_at: Optional[datetime],
+    expiry_type: Optional[str],
+    expiry_reason: Optional[str],
+    tp1_progress_max_pct: Optional[float],
+    max_favorable_excursion_r: Optional[float],
+    max_adverse_excursion_r: Optional[float],
+) -> Dict[str, Any]:
+    return {
+        "entry_touched": bool(entry_touched),
+        "entry_touched_at": entry_touched_at,
+        "expiry_type": expiry_type,
+        "expiry_reason": expiry_reason,
+        "tp1_progress_max_pct": round(float(tp1_progress_max_pct), 2) if tp1_progress_max_pct is not None else None,
+        "max_favorable_excursion_r": round(float(max_favorable_excursion_r), 4) if max_favorable_excursion_r is not None else None,
+        "max_adverse_excursion_r": round(float(max_adverse_excursion_r), 4) if max_adverse_excursion_r is not None else None,
+    }
+
+
 def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
     direction = str(signal_doc.get("direction", "")).upper()
     symbol = signal_doc.get("symbol")
 
     stop_loss = signal_doc.get("stop_loss")
     take_profits = list(signal_doc.get("take_profits") or [])
+    entry_price = signal_doc.get("entry_price")
 
     # Fallback por compatibilidad si existe estructura por perfiles
     if (stop_loss is None or not take_profits) and signal_doc.get("profiles"):
@@ -932,29 +998,59 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
     created_at = signal_doc.get("created_at")
     valid_until = _get_evaluation_valid_until(signal_doc)
 
-    expired_clean = {
+    expired_no_fill = {
         "result": "expired",
-        "resolution": "expired_clean",
+        "resolution": "expired_no_fill",
         "completed": False,
         "tp_used": None,
         "sl_used": stop_loss,
+        **_evaluation_observability_payload(
+            entry_touched=False,
+            entry_touched_at=None,
+            expiry_type="no_fill",
+            expiry_reason="entry_not_reached",
+            tp1_progress_max_pct=0.0,
+            max_favorable_excursion_r=0.0,
+            max_adverse_excursion_r=0.0,
+        ),
     }
 
-    if not symbol or not direction or stop_loss is None or tp1 is None or not created_at or not valid_until:
-        return expired_clean
+    if not symbol or not direction or stop_loss is None or tp1 is None or entry_price is None or not created_at or not valid_until:
+        return expired_no_fill
 
     try:
+        entry_price = float(entry_price)
         stop_loss = float(stop_loss)
         tp1 = float(tp1)
         tp2 = float(tp2) if tp2 is not None else None
     except Exception:
-        return expired_clean
+        return expired_no_fill
 
     try:
         klines = _fetch_klines_between(symbol, created_at, valid_until, interval="1m")
     except Exception as e:
         logger.error(f"❌ Error descargando velas para evaluar {symbol}: {e}")
-        return expired_clean
+        return expired_no_fill
+
+    entry_touched = False
+    entry_touched_at: Optional[datetime] = None
+    tp1_progress_max_pct = 0.0
+    max_favorable_excursion_r = 0.0
+    max_adverse_excursion_r = 0.0
+
+    def _merge_observability(payload: Dict[str, Any], *, expiry_type: Optional[str], expiry_reason: Optional[str]) -> Dict[str, Any]:
+        payload.update(
+            _evaluation_observability_payload(
+                entry_touched=entry_touched,
+                entry_touched_at=entry_touched_at,
+                expiry_type=expiry_type,
+                expiry_reason=expiry_reason,
+                tp1_progress_max_pct=tp1_progress_max_pct,
+                max_favorable_excursion_r=max_favorable_excursion_r,
+                max_adverse_excursion_r=max_adverse_excursion_r,
+            )
+        )
+        return payload
 
     for row in klines:
         try:
@@ -963,77 +1059,140 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
         except Exception:
             continue
 
+        if not entry_touched and _entry_touched_in_candle(direction, entry_price, high, low):
+            entry_touched = True
+            entry_touched_at = _ms_to_dt(row[0])
+
+        if not entry_touched:
+            continue
+
+        excursions = _excursions_after_entry_r(direction, entry_price, stop_loss, high, low)
+        max_favorable_excursion_r = max(max_favorable_excursion_r, float(excursions.get("favorable_r") or 0.0))
+        max_adverse_excursion_r = max(max_adverse_excursion_r, float(excursions.get("adverse_r") or 0.0))
+        progress = _tp1_progress_pct(direction, entry_price, tp1, high, low)
+        if progress is not None:
+            tp1_progress_max_pct = max(tp1_progress_max_pct, float(progress))
+
         if direction == "LONG":
-            tp_hit = (tp2 is not None and high >= tp2) or high >= tp1
-            if low <= stop_loss and tp_hit:
-                return {
-                    "result": "lost",
-                    "resolution": "sl",
-                    "completed": True,
-                    "tp_used": None,
-                    "sl_used": stop_loss,
-                }
-            if tp2 is not None and high >= tp2:
-                return {
-                    "result": "won",
-                    "resolution": "tp2",
-                    "completed": True,
-                    "tp_used": tp2,
-                    "sl_used": stop_loss,
-                }
-            if high >= tp1:
-                return {
-                    "result": "won",
-                    "resolution": "tp1",
-                    "completed": True,
-                    "tp_used": tp1,
-                    "sl_used": stop_loss,
-                }
-            if low <= stop_loss:
-                return {
-                    "result": "lost",
-                    "resolution": "sl",
-                    "completed": True,
-                    "tp_used": None,
-                    "sl_used": stop_loss,
-                }
+            tp1_hit = high >= tp1
+            tp2_hit = tp2 is not None and high >= tp2
+            sl_hit = low <= stop_loss
+            if sl_hit and (tp2_hit or tp1_hit):
+                return _merge_observability(
+                    {
+                        "result": "lost",
+                        "resolution": "sl",
+                        "completed": True,
+                        "tp_used": None,
+                        "sl_used": stop_loss,
+                    },
+                    expiry_type=None,
+                    expiry_reason=None,
+                )
+            if tp2_hit:
+                return _merge_observability(
+                    {
+                        "result": "won",
+                        "resolution": "tp2",
+                        "completed": True,
+                        "tp_used": tp2,
+                        "sl_used": stop_loss,
+                    },
+                    expiry_type=None,
+                    expiry_reason=None,
+                )
+            if tp1_hit:
+                return _merge_observability(
+                    {
+                        "result": "won",
+                        "resolution": "tp1",
+                        "completed": True,
+                        "tp_used": tp1,
+                        "sl_used": stop_loss,
+                    },
+                    expiry_type=None,
+                    expiry_reason=None,
+                )
+            if sl_hit:
+                return _merge_observability(
+                    {
+                        "result": "lost",
+                        "resolution": "sl",
+                        "completed": True,
+                        "tp_used": None,
+                        "sl_used": stop_loss,
+                    },
+                    expiry_type=None,
+                    expiry_reason=None,
+                )
 
         elif direction == "SHORT":
-            tp_hit = (tp2 is not None and low <= tp2) or low <= tp1
-            if high >= stop_loss and tp_hit:
-                return {
-                    "result": "lost",
-                    "resolution": "sl",
-                    "completed": True,
-                    "tp_used": None,
-                    "sl_used": stop_loss,
-                }
-            if tp2 is not None and low <= tp2:
-                return {
-                    "result": "won",
-                    "resolution": "tp2",
-                    "completed": True,
-                    "tp_used": tp2,
-                    "sl_used": stop_loss,
-                }
-            if low <= tp1:
-                return {
-                    "result": "won",
-                    "resolution": "tp1",
-                    "completed": True,
-                    "tp_used": tp1,
-                    "sl_used": stop_loss,
-                }
-            if high >= stop_loss:
-                return {
-                    "result": "lost",
-                    "resolution": "sl",
-                    "completed": True,
-                    "tp_used": None,
-                    "sl_used": stop_loss,
-                }
+            tp1_hit = low <= tp1
+            tp2_hit = tp2 is not None and low <= tp2
+            sl_hit = high >= stop_loss
+            if sl_hit and (tp2_hit or tp1_hit):
+                return _merge_observability(
+                    {
+                        "result": "lost",
+                        "resolution": "sl",
+                        "completed": True,
+                        "tp_used": None,
+                        "sl_used": stop_loss,
+                    },
+                    expiry_type=None,
+                    expiry_reason=None,
+                )
+            if tp2_hit:
+                return _merge_observability(
+                    {
+                        "result": "won",
+                        "resolution": "tp2",
+                        "completed": True,
+                        "tp_used": tp2,
+                        "sl_used": stop_loss,
+                    },
+                    expiry_type=None,
+                    expiry_reason=None,
+                )
+            if tp1_hit:
+                return _merge_observability(
+                    {
+                        "result": "won",
+                        "resolution": "tp1",
+                        "completed": True,
+                        "tp_used": tp1,
+                        "sl_used": stop_loss,
+                    },
+                    expiry_type=None,
+                    expiry_reason=None,
+                )
+            if sl_hit:
+                return _merge_observability(
+                    {
+                        "result": "lost",
+                        "resolution": "sl",
+                        "completed": True,
+                        "tp_used": None,
+                        "sl_used": stop_loss,
+                    },
+                    expiry_type=None,
+                    expiry_reason=None,
+                )
 
-    return expired_clean
+    if entry_touched:
+        return _merge_observability(
+            {
+                "result": "expired",
+                "resolution": "expired_after_entry",
+                "completed": False,
+                "tp_used": None,
+                "sl_used": stop_loss,
+            },
+            expiry_type="after_entry_no_followthrough",
+            expiry_reason="touched_entry_no_followthrough",
+        )
+
+    return expired_no_fill
 
 
 def _result_r_metrics(signal_doc: Dict, evaluation: Dict[str, Any]) -> Dict[str, Optional[float]]:
@@ -1148,6 +1307,13 @@ def evaluate_expired_signals(limit: int = 100) -> int:
                 evaluation_valid_until=evaluation_valid_until,
                 telegram_valid_until=s.get("telegram_valid_until"),
                 market_validity_minutes=s.get("market_validity_minutes", s.get("validity_minutes")),
+                entry_touched=evaluation.get("entry_touched"),
+                entry_touched_at=evaluation.get("entry_touched_at"),
+                expiry_type=evaluation.get("expiry_type"),
+                expiry_reason=evaluation.get("expiry_reason"),
+                tp1_progress_max_pct=evaluation.get("tp1_progress_max_pct"),
+                max_favorable_excursion_r=evaluation.get("max_favorable_excursion_r"),
+                max_adverse_excursion_r=evaluation.get("max_adverse_excursion_r"),
             )
             result_doc["evaluated_at"] = evaluated_at
 
@@ -1155,6 +1321,13 @@ def evaluate_expired_signals(limit: int = 100) -> int:
             result_doc["resolution"] = evaluation.get("resolution")
             result_doc["completed"] = bool(evaluation.get("completed"))
             result_doc["completed_at_level"] = evaluation.get("resolution")
+            result_doc["entry_touched"] = evaluation.get("entry_touched")
+            result_doc["entry_touched_at"] = evaluation.get("entry_touched_at")
+            result_doc["expiry_type"] = evaluation.get("expiry_type")
+            result_doc["expiry_reason"] = evaluation.get("expiry_reason")
+            result_doc["tp1_progress_max_pct"] = evaluation.get("tp1_progress_max_pct")
+            result_doc["max_favorable_excursion_r"] = evaluation.get("max_favorable_excursion_r")
+            result_doc["max_adverse_excursion_r"] = evaluation.get("max_adverse_excursion_r")
             result_doc["_id"] = insert_result.inserted_id
 
             signal_results_collection().update_one(
@@ -1163,6 +1336,13 @@ def evaluate_expired_signals(limit: int = 100) -> int:
                     "resolution": result_doc["resolution"],
                     "completed": result_doc["completed"],
                     "completed_at_level": result_doc["completed_at_level"],
+                    "entry_touched": result_doc.get("entry_touched"),
+                    "entry_touched_at": result_doc.get("entry_touched_at"),
+                    "expiry_type": result_doc.get("expiry_type"),
+                    "expiry_reason": result_doc.get("expiry_reason"),
+                    "tp1_progress_max_pct": result_doc.get("tp1_progress_max_pct"),
+                    "max_favorable_excursion_r": result_doc.get("max_favorable_excursion_r"),
+                    "max_adverse_excursion_r": result_doc.get("max_adverse_excursion_r"),
                 }}
             )
 
@@ -1177,6 +1357,13 @@ def evaluate_expired_signals(limit: int = 100) -> int:
                         "evaluated_at": evaluated_at,
                         "evaluated_profile": "conservador",
                         "evaluation_scope_version": s.get("evaluation_scope_version", MARKET_EVALUATION_VERSION),
+                        "entry_touched": evaluation.get("entry_touched"),
+                        "entry_touched_at": evaluation.get("entry_touched_at"),
+                        "expiry_type": evaluation.get("expiry_type"),
+                        "expiry_reason": evaluation.get("expiry_reason"),
+                        "tp1_progress_max_pct": evaluation.get("tp1_progress_max_pct"),
+                        "max_favorable_excursion_r": evaluation.get("max_favorable_excursion_r"),
+                        "max_adverse_excursion_r": evaluation.get("max_adverse_excursion_r"),
                     }
                 }
             )
