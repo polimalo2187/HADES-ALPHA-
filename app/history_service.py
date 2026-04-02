@@ -57,6 +57,13 @@ def build_signal_history_record(base_signal: Dict, result_doc: Dict) -> Dict:
         evaluation_valid_until=result_doc.get("evaluation_valid_until") or base_signal.get("evaluation_valid_until"),
         telegram_valid_until=result_doc.get("telegram_valid_until") or base_signal.get("telegram_valid_until"),
         timeframes=base_signal.get("timeframes") or [],
+        entry_touched=result_doc.get("entry_touched"),
+        entry_touched_at=result_doc.get("entry_touched_at"),
+        expiry_type=result_doc.get("expiry_type"),
+        expiry_reason=result_doc.get("expiry_reason"),
+        tp1_progress_max_pct=result_doc.get("tp1_progress_max_pct"),
+        max_favorable_excursion_r=result_doc.get("max_favorable_excursion_r"),
+        max_adverse_excursion_r=result_doc.get("max_adverse_excursion_r"),
     )
     if isinstance(result_doc.get("evaluated_at"), datetime):
         record["evaluated_at"] = result_doc.get("evaluated_at")
@@ -148,6 +155,13 @@ def _enrich_user_signal_history_rows(rows: List[Dict]) -> List[Dict]:
             doc["reward_pct"] = result_doc.get("reward_pct")
             doc["r_multiple"] = result_doc.get("r_multiple")
             doc["resolution_minutes"] = result_doc.get("resolution_minutes")
+            doc["entry_touched"] = result_doc.get("entry_touched")
+            doc["entry_touched_at"] = result_doc.get("entry_touched_at")
+            doc["expiry_type"] = result_doc.get("expiry_type")
+            doc["expiry_reason"] = result_doc.get("expiry_reason")
+            doc["tp1_progress_max_pct"] = result_doc.get("tp1_progress_max_pct")
+            doc["max_favorable_excursion_r"] = result_doc.get("max_favorable_excursion_r")
+            doc["max_adverse_excursion_r"] = result_doc.get("max_adverse_excursion_r")
         elif doc.get("evaluated") and doc.get("result"):
             doc["evaluated_at"] = doc.get("updated_at") or doc.get("created_at")
 
