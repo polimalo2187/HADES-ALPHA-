@@ -12,7 +12,7 @@ import pytz
 from bson import ObjectId
 
 from app.models import new_signal, new_signal_result, new_user_signal
-from app.plans import PLAN_FREE, PLAN_PREMIUM
+from app.plans import PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM, normalize_plan
 from app.config import is_admin
 from app.database import (
     signals_collection,
@@ -228,6 +228,18 @@ def _get_evaluation_valid_until(signal_doc: Dict) -> Optional[datetime]:
 def _telegram_visibility_until(now: datetime) -> datetime:
     return now + timedelta(minutes=TELEGRAM_SIGNAL_COOLDOWN_MINUTES)
 
+
+
+def _visible_tiers_for_plan(plan: Optional[str], *, admin: bool = False) -> List[str]:
+    if admin:
+        return [PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM]
+    plan_value = normalize_plan(plan)
+    if plan_value == PLAN_PREMIUM:
+        return [PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM]
+    if plan_value == PLAN_PLUS:
+        return [PLAN_FREE, PLAN_PLUS]
+    return [PLAN_FREE]
+
 # ======================================================
 # GENERAR SEÑALES POR PLAN
 # ======================================================
@@ -248,7 +260,7 @@ def generate_user_signal_for_plan(base_signal: Dict):
         if plan_end and plan_end < now:
             continue
 
-        if admin or user_plan == visibility:
+        if visibility in _visible_tiers_for_plan(user_plan, admin=admin):
             existing = user_signals_collection().find_one({
                 "user_id": user_id,
                 "symbol": base_signal["symbol"],
@@ -281,6 +293,15 @@ def create_base_signal(
     setup_group: Optional[str] = None,
     score_profile: Optional[str] = None,
     score_calibration: Optional[str] = None,
+    send_mode: Optional[str] = None,
+    entry_model_price: Optional[float] = None,
+    entry_sent_price: Optional[float] = None,
+    tp1_progress_at_send_pct: Optional[float] = None,
+    r_progress_at_send: Optional[float] = None,
+    setup_stage: Optional[str] = None,
+    candidate_tier: Optional[str] = None,
+    final_tier: Optional[str] = None,
+    entry_model: Optional[str] = None,
 ) -> Dict:
 
     if telegram_signal_blocked(symbol):
@@ -351,6 +372,15 @@ def create_base_signal(
             "setup_group": setup_group,
             "score_profile": score_profile,
             "score_calibration": score_calibration,
+            "send_mode": send_mode,
+            "entry_model_price": entry_model_price,
+            "entry_sent_price": entry_sent_price,
+            "tp1_progress_at_send_pct": tp1_progress_at_send_pct,
+            "r_progress_at_send": r_progress_at_send,
+            "setup_stage": setup_stage,
+            "candidate_tier": candidate_tier,
+            "final_tier": final_tier,
+            "entry_model": entry_model,
             "evaluated": False,
             "evaluation_scope_version": MARKET_EVALUATION_VERSION,
         }}
@@ -375,6 +405,15 @@ def create_base_signal(
     signal["setup_group"] = setup_group
     signal["score_profile"] = score_profile
     signal["score_calibration"] = score_calibration
+    signal["send_mode"] = send_mode
+    signal["entry_model_price"] = entry_model_price
+    signal["entry_sent_price"] = entry_sent_price
+    signal["tp1_progress_at_send_pct"] = tp1_progress_at_send_pct
+    signal["r_progress_at_send"] = r_progress_at_send
+    signal["setup_stage"] = setup_stage
+    signal["candidate_tier"] = candidate_tier
+    signal["final_tier"] = final_tier
+    signal["entry_model"] = entry_model
     signal["evaluation_scope_version"] = MARKET_EVALUATION_VERSION
     signal["schema_version"] = signal.get("schema_version", 1)
     signal["updated_at"] = now
@@ -435,7 +474,7 @@ def build_user_signal_document(base_signal: Dict, user_id: int) -> Dict:
             "leverage": LEVERAGE_PROFILES[profile_name],
         }
 
-    return new_user_signal(
+    user_signal = new_user_signal(
         user_id=user_id,
         signal_id=str(base_signal["_id"]),
         symbol=base_signal["symbol"],
@@ -463,6 +502,16 @@ def build_user_signal_document(base_signal: Dict, user_id: int) -> Dict:
         telegram_visibility_minutes=base_signal.get("telegram_visibility_minutes", TELEGRAM_SIGNAL_COOLDOWN_MINUTES),
         evaluation_scope_version=base_signal.get("evaluation_scope_version", MARKET_EVALUATION_VERSION),
     )
+    user_signal["send_mode"] = base_signal.get("send_mode")
+    user_signal["entry_model_price"] = base_signal.get("entry_model_price")
+    user_signal["entry_sent_price"] = base_signal.get("entry_sent_price")
+    user_signal["tp1_progress_at_send_pct"] = base_signal.get("tp1_progress_at_send_pct")
+    user_signal["r_progress_at_send"] = base_signal.get("r_progress_at_send")
+    user_signal["setup_stage"] = base_signal.get("setup_stage")
+    user_signal["candidate_tier"] = base_signal.get("candidate_tier")
+    user_signal["final_tier"] = base_signal.get("final_tier")
+    user_signal["entry_model"] = base_signal.get("entry_model")
+    return user_signal
 
 
 def generate_user_signal(base_signal: Dict, user_id: int) -> Dict:
@@ -529,14 +578,15 @@ def get_latest_base_signal_for_plan(user_id: int, user_plan: Optional[str] = Non
     Esto controla lo que el usuario VE en Telegram.
     Debe usar telegram_valid_until, no valid_until interno.
     """
-    visibility = PLAN_PREMIUM if is_admin(user_id) else (user_plan or PLAN_FREE)
+    admin = is_admin(user_id)
+    visible_tiers = _visible_tiers_for_plan(user_plan, admin=admin)
     now = datetime.utcnow()
 
     return list(
         user_signals_collection()
         .find({
             "user_id": user_id,
-            "visibility": visibility,
+            "visibility": {"$in": visible_tiers},
             "telegram_valid_until": {"$gt": now}
         })
         .sort("created_at", -1)
