@@ -23,6 +23,12 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
             'closeSignalDetailModal',
             'renderSignalDetailModal',
             'openSignalDetail',
+            'getPayloadCacheKey',
+            'loadCachedPayload',
+            'persistPayloadCache',
+            'primePayloadShell',
+            'applyBootstrapPayload',
+            'restoreCachedPayload',
             'ensurePayloadShell',
             'applyPaymentOrderPreview',
             'refreshAccountState',
@@ -93,6 +99,10 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
         self.assertIn('data-admin-moderation-action', text)
         self.assertIn('data-admin-moderation-confirm', text)
         self.assertIn('/api/miniapp/live-signals', text)
+        self.assertIn("PAYLOAD_CACHE_PREFIX", text)
+        self.assertIn("primePayloadShell();", text)
+        self.assertIn("restoreCachedPayload()", text)
+        self.assertIn("Promise.resolve(bootstrap())", text)
         self.assertIn('visibilitychange', text)
         self.assertIn('window-focus', text)
 
