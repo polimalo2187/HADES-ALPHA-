@@ -15,9 +15,8 @@ def _fake_ta_module():
 
 
 def _load_scanner():
+    sys.modules.setdefault("telegram", types.SimpleNamespace(Bot=object))
     sys.modules.setdefault("ta", _fake_ta_module())
-    telegram = types.SimpleNamespace(Bot=object)
-    sys.modules.setdefault("telegram", telegram)
     sys.modules.setdefault("app.realtime_pipeline", types.SimpleNamespace(enqueue_signal_dispatch=lambda *_args, **_kwargs: None))
     sys.modules.setdefault("app.database", types.SimpleNamespace(signals_collection=lambda: None))
     sys.modules.setdefault("app.signals", types.SimpleNamespace(create_base_signal=lambda **kwargs: kwargs))
@@ -27,9 +26,15 @@ def _load_scanner():
     return importlib.import_module("app.scanner")
 
 
-def test_scanner_treats_premium_setup_group_as_premium_candidate():
+def test_scanner_routes_only_native_profile_candidates():
     scanner = _load_scanner()
 
-    assert scanner._qualifies_for_premium({"setup_group": "premium", "raw_score": 82.0}) is True
-    assert scanner._qualifies_for_premium({"setup_group": "shared", "raw_score": 80.0}) is True
-    assert scanner._qualifies_for_premium({"setup_group": "shared", "raw_score": 75.0}) is False
+    assert scanner._qualifies_for_premium({"setup_group": "premium", "raw_score": 90.0}) is True
+    assert scanner._qualifies_for_premium({"setup_group": "plus", "raw_score": 90.0}) is False
+    assert scanner._qualifies_for_premium({"setup_group": "free", "raw_score": 90.0}) is False
+
+    assert scanner._qualifies_for_plus({"setup_group": "plus", "raw_score": 82.0}) is True
+    assert scanner._qualifies_for_plus({"setup_group": "premium", "raw_score": 82.0}) is False
+
+    assert scanner._qualifies_for_free({"setup_group": "free", "raw_score": 74.0}) is True
+    assert scanner._qualifies_for_free({"setup_group": "plus", "raw_score": 74.0}) is False
