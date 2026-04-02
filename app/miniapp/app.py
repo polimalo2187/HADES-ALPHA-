@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from bson import ObjectId
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -166,6 +167,7 @@ def _sanitize_json_payload(value: Any) -> Any:
 def create_mini_app() -> FastAPI:
     app = FastAPI(title="HADES Mini App", version="1.0.1")
     cors_origins = get_mini_app_cors_origins()
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
@@ -209,6 +211,8 @@ def create_mini_app() -> FastAPI:
                 },
             )
         response.headers["X-Request-ID"] = request_id
+        if str(request.url.path).startswith("/miniapp/static/") and not response.headers.get("Cache-Control"):
+            response.headers["Cache-Control"] = "public, max-age=86400"
         return response
 
     @app.on_event("startup")
