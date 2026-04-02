@@ -47,3 +47,18 @@ def test_adaptive_entry_blend_stays_patient_when_retest_is_clean():
 
     assert math.isclose(blend, strategy.FREE_PROFILE["entry_blend_min"], rel_tol=0.0, abs_tol=0.06)
     assert blend < 0.35
+
+
+def test_short_adaptive_entry_blend_is_more_aggressive_than_long_for_same_quality():
+    strategy = _load_strategy()
+    quality = {
+        "retest_distance_atr": 0.32,
+        "continuation_body_ratio": 0.42,
+        "close_extension_atr": 0.74,
+    }
+
+    long_blend = strategy._adaptive_entry_blend(quality, strategy.SHARED_PROFILE, direction="LONG")
+    short_blend = strategy._adaptive_entry_blend(quality, strategy.SHARED_PROFILE, direction="SHORT")
+
+    assert short_blend > long_blend
+    assert short_blend >= strategy.SHARED_PROFILE["short_entry_blend_min"]
