@@ -72,7 +72,8 @@ def _eligible_users_for_alert(signal_visibility: str) -> List[int]:
             continue
 
         if admin:
-            if requested_visibility == PLAN_PREMIUM:
+            selected_tiers = _selected_alert_tiers_for_user({**user, "plan": PLAN_PREMIUM}) or {PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM}
+            if requested_visibility in selected_tiers:
                 eligible_users.append(int(user_id))
             continue
 
