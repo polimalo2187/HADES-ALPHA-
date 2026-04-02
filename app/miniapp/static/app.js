@@ -78,6 +78,15 @@ const state = {
     feedVersion: null,
     lastSyncedAt: null,
   },
+  lazyLoads: {
+    bootstrapReady: false,
+    dashboardLoaded: false,
+    signalsLoaded: false,
+    historyLoaded: false,
+    marketLoaded: false,
+    watchlistLoaded: false,
+    accountLoaded: false,
+  },
 };
 
 const LIVE_SIGNALS_POLL_INTERVAL_MS = 7000;
@@ -553,12 +562,80 @@ async function authenticate() {
     body: JSON.stringify({ init_data: initData, dev_user_id: devUserId ? Number(devUserId) : null }),
   });
   state.token = auth.session_token;
+  return auth;
+}
+
+function createBootstrapShell(me = {}) {
+  return {
+    me: { ...(me || {}) },
+    dashboard: {
+      summary_7d: {},
+      summary_30d: {},
+      recent_signals: [],
+      recent_history: [],
+      active_signals_count: 0,
+      active_payment_order: null,
+      watchlist_count: 0,
+      watchlist_limit: null,
+      signal_mix: { free: 0, plus: 0, premium: 0 },
+      active_mix: { free: 0, plus: 0, premium: 0 },
+    },
+    signals: [],
+    history: [],
+    market: {
+      top_gainers: [],
+      top_losers: [],
+      top_volume: [],
+      radar: [],
+      radar_summary: { total: 0 },
+      radar_context: {
+        bias: 'neutral',
+        regime: 'neutral',
+        environment: '—',
+        recommendation: 'Cargando lectura de mercado...',
+      },
+    },
+    watchlist: [],
+    watchlist_meta: {
+      symbols: [],
+      symbols_count: 0,
+      max_symbols: null,
+      slots_left: null,
+      can_add_more: true,
+    },
+    plans: { plus: [], premium: [] },
+    account: {},
+    support_url: '#',
+    bot_username: '',
+    payment_config_status: null,
+    payment_config_ready: false,
+    generated_at: null,
+    bootstrap_mode: 'shell',
+  };
+}
+
+function applyBootstrapPayload(payload = {}) {
+  const current = state.payload || createBootstrapShell();
+  state.payload = {
+    ...current,
+    ...payload,
+    me: {
+      ...(current.me || {}),
+      ...(payload.me || {}),
+    },
+    dashboard: {
+      ...(current.dashboard || {}),
+      ...(payload.dashboard || {}),
+    },
+  };
+  state.lazyLoads.bootstrapReady = true;
 }
 
 async function bootstrap() {
-  state.payload = await api('/api/miniapp/bootstrap');
+  const payload = await api('/api/miniapp/bootstrap');
+  applyBootstrapPayload(payload);
   state.liveSignals.feedVersion = null;
-  renderAll();
+  return payload;
 }
 
 function ensureDashboardShell() {
@@ -658,15 +735,69 @@ function applyPaymentOrderPreview(order) {
   billing.summary = summary;
 }
 
-async function refreshAccountState() {
+async function refreshDashboardState(force = false) {
+  if (!force && state.lazyLoads.dashboardLoaded) return state.payload?.dashboard || {};
+  const payload = await api('/api/miniapp/dashboard');
+  ensurePayloadShell();
+  state.payload.dashboard = payload || {};
+  state.lazyLoads.dashboardLoaded = true;
+  renderHome();
+  renderAccount();
+  bindViewButtons();
+  return payload;
+}
+
+async function refreshSignalsState(force = false) {
+  if (!force && state.lazyLoads.signalsLoaded) return state.payload?.signals || [];
+  const payload = await api('/api/miniapp/signals');
+  ensurePayloadShell();
+  state.payload.signals = Array.isArray(payload?.items) ? payload.items : [];
+  state.lazyLoads.signalsLoaded = true;
+  renderSignals();
+  bindViewButtons();
+  return state.payload.signals;
+}
+
+async function refreshHistoryState(force = false) {
+  if (!force && state.lazyLoads.historyLoaded) return state.payload?.history || [];
+  const payload = await api('/api/miniapp/history');
+  ensurePayloadShell();
+  state.payload.history = Array.isArray(payload?.items) ? payload.items : [];
+  state.lazyLoads.historyLoaded = true;
+  renderHistory();
+  renderHome();
+  bindViewButtons();
+  return state.payload.history;
+}
+
+async function refreshMarketState(force = false) {
+  if (!force && state.lazyLoads.marketLoaded) return state.payload?.market || {};
+  const payload = await api('/api/miniapp/market');
+  ensurePayloadShell();
+  state.payload.market = payload || {};
+  state.lazyLoads.marketLoaded = true;
+  renderMarket();
+  renderHome();
+  bindViewButtons();
+  return payload;
+}
+
+async function refreshAccountState(force = false) {
+  if (!force && state.lazyLoads.accountLoaded) return state.payload?.account || {};
   const [account, me] = await Promise.all([
     api('/api/miniapp/account'),
     api('/api/miniapp/me'),
   ]);
   ensurePayloadShell();
-  if (me && typeof me === 'object') state.payload.me = me;
+  if (me && typeof me === 'object') state.payload.me = { ...(state.payload.me || {}), ...me };
   if (account && typeof account === 'object') state.payload.account = account;
-  renderAll();
+  if (account?.plans) state.payload.plans = account.plans;
+  state.lazyLoads.accountLoaded = true;
+  setTopSummary();
+  renderHome();
+  renderAccount();
+  bindViewButtons();
+  return account;
 }
 
 function focusPaymentCard() {
@@ -2088,9 +2219,11 @@ function renderHome() {
   const recentHistory = dashboard.recent_history || [];
   const generatedAt = state.payload.generated_at;
   const diagnosis = summaryDiagnosis(summary);
+  const dashboardLoading = !state.lazyLoads.dashboardLoaded;
 
   els.home.innerHTML = `
     <div class="section-grid">
+      ${dashboardLoading ? '<div class="card card-span-12"><div class="loading-inline">Cargando resumen operativo...</div></div>' : ''}
       <div class="card card-span-12 hero-card">
         <div class="hero-topline">HADES MINI APP</div>
         <div class="hero-grid">
@@ -2205,6 +2338,7 @@ function renderHome() {
 
 function renderSignals() {
   const signals = state.payload.signals || [];
+  const loading = !state.lazyLoads.signalsLoaded && !signals.length;
   const counts = signals.reduce((acc, item) => {
     const visibility = String(item.visibility || '').toLowerCase();
     if (visibility === 'premium') acc.premium += 1;
@@ -2217,6 +2351,7 @@ function renderSignals() {
 
   els.signals.innerHTML = `
     <div class="section-grid">
+      ${loading ? '<div class="card card-span-12"><div class="loading-inline">Cargando señales...</div></div>' : ''}
       ${metricCard('Total recientes', signals.length, 'Últimas señales visibles')}
       ${metricCard('Activas', counts.active, 'Pendientes o en curso')}
       ${metricCard('Premium', counts.premium, 'Tier premium')}
@@ -2244,6 +2379,7 @@ function renderSignals() {
 function renderMarket() {
   const market = state.payload.market || {};
   const watchlist = state.payload.watchlist || [];
+  const marketLoading = !state.lazyLoads.marketLoaded;
   const watchlistMeta = state.payload.watchlist_meta || { symbols: [], symbols_count: 0, max_symbols: 0, slots_left: 0, can_add_more: false };
   const gainers = market.top_gainers || [];
   const losers = market.top_losers || [];
@@ -2276,6 +2412,7 @@ function renderMarket() {
 
   els.market.innerHTML = `
     <div class="section-grid">
+      ${marketLoading ? '<div class="card card-span-12"><div class="loading-inline">Cargando mercado y radar...</div></div>' : ''}
       <div class="card card-span-12 market-hero-card">
         <div class="hero-topline">PULSO DEL MERCADO</div>
         <div class="hero-grid">
@@ -2666,6 +2803,133 @@ async function mutateWatchlist(path, body, successMessage) {
 function renderHistory() {
   const items = state.payload.history || [];
   els.history.innerHTML = `
+    <div class="card"><h2>Historial verificable</h2><p>Señales cerradas y resultados persistidos desde HADES.</p></div>
+    <div class="list" style="margin-top:12px;">
+      ${items.length ? items.map(historyCard).join('') : '<div class="empty-state">No hay historial disponible por ahora.</div>'}
+    </div>
+  `;
+}
+
+
+function accountMetricCard(label, value, toneClass = '') {
+  return `
+    <div class="account-metric-card ${escapeHtml(toneClass)}">
+      <div class="account-metric-label">${escapeHtml(label)}</div>
+      <div class="account-metric-value">${escapeHtml(value ?? '—')}</div>
+    </div>
+  `;
+}
+
+function billingFocusCard(focus = {}, billing = {}) {
+  if (!focus || !Object.keys(focus).length) return '';
+  const toneClass = billingToneClass(focus.tone);
+  const steps = Array.isArray(focus.steps) ? focus.steps : [];
+  const supportUrl = billing?.support_url || '#';
+  const primaryCta = String(focus.primary_cta || '').trim();
+  const primaryCtaLower = primaryCta.toLowerCase();
+  let primaryAction = '';
+  if (primaryCta) {
+    if (primaryCtaLower === 'soporte') {
+      primaryAction = `<a class="button button-secondary" target="_blank" rel="noopener" href="${escapeHtml(supportUrl)}">${escapeHtml(primaryCta)}</a>`;
+    } else if (primaryCtaLower === 'generar orden' || primaryCtaLower === 'renovar') {
+      primaryAction = `<button type="button" class="button button-secondary" data-billing-focus-action="open-plans">${escapeHtml(primaryCta)}</button>`;
+    } else if (primaryCtaLower === 'confirmar pago' || primaryCtaLower === 'revisar de nuevo') {
+      primaryAction = `<button type="button" class="button button-secondary" data-billing-focus-action="focus-order">${escapeHtml(primaryCta)}</button>`;
+    } else if (primaryCtaLower === 'refrescar cuenta' || primaryCtaLower === 'esperando verificación') {
+      primaryAction = `<button type="button" class="button button-secondary" data-billing-focus-action="refresh-account">${escapeHtml(primaryCta)}</button>`;
+    } else {
+      primaryAction = `<span class="button button-secondary" aria-disabled="true">${escapeHtml(primaryCta)}</span>`;
+    }
+  }
+  const diagnostics = !billing?.payment_config_ready ? paymentConfigDiagnosticsInline(billing) : '';
+  return `
+    <div class="card payment-focus-panel card-span-12 ${toneClass}">
+      <div class="payment-focus-card ${toneClass}">
+        <div class="payment-focus-copy">
+          <div class="payment-focus-kicker">Billing Overview</div>
+          <div class="payment-focus-title">${escapeHtml(focus.title || 'Billing')}</div>
+          <div class="payment-focus-headline">${escapeHtml(focus.headline || focus.message || 'Estado comercial disponible.')}</div>
+          ${focus.message ? `<div class="payment-focus-message">${escapeHtml(focus.message)}</div>` : ''}
+          ${focus.hint ? `<div class="payment-focus-hint">${escapeHtml(focus.hint)}</div>` : ''}
+          ${primaryAction ? `<div class="action-row compact" style="margin-top:12px;">${primaryAction}</div>` : ''}
+          ${diagnostics}
+        </div>
+      </div>
+      ${steps.length ? `<div class="billing-step-row">${steps.map(step => `<div class="billing-step ${billingStepClass(step.state)}"><span class="billing-step-dot"></span><span>${escapeHtml(step.label)}</span></div>`).join('')}</div>` : ''}
+    </div>
+  `;
+}
+
+function paymentConfigDiagnosticsInline(billing = {}) {
+  const status = billing?.payment_config_status || {};
+  const checks = Array.isArray(status.checks) ? status.checks : [];
+  const missingKeys = Array.isArray(status.missing_keys) ? status.missing_keys : [];
+  if (!checks.length && !missingKeys.length) return '';
+  return `
+    <div class="payment-focus-diagnostics">
+      <div class="payment-focus-diagnostics-title">Diagnóstico de configuración</div>
+      <div class="payment-focus-diagnostics-list">
+        ${checks.length ? checks.map(check => `<span class="pill ${check.value_present ? '' : 'pill-warning'}">${escapeHtml(check.label || check.key)}: ${check.value_present ? 'OK' : 'Falta'}</span>`).join('') : missingKeys.map(key => `<span class="pill pill-warning">${escapeHtml(key)}: Falta</span>`).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function paymentConfigDiagnosticsCard(billing = {}) {
+  const status = billing?.payment_config_status || {};
+  const checks = Array.isArray(status.checks) ? status.checks : [];
+  const missingKeys = Array.isArray(status.missing_keys) ? status.missing_keys : [];
+  if (billing?.payment_config_ready || (!checks.length && !missingKeys.length)) return '';
+  return `
+    <div class="card config-diagnostics-card card-span-12">
+      <h2>Diagnóstico de pago</h2>
+      <div class="config-check-grid">
+        ${(checks.length ? checks : missingKeys.map(key => ({ key, label: key, value_present: false }))).map(check => `
+          <div class="config-check-item ${check.value_present ? 'is-positive' : 'is-warning'}">
+            <div class="item-title">${escapeHtml(check.label || check.key)}</div>
+            <div class="item-subtitle">${check.value_present ? 'Configuración detectada' : 'Falta en el proceso web'}</div>
+            <code>${escapeHtml(check.key || '—')}</code>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function watchlistLimitText(meta) {
+  if (!meta) return '—';
+  if (meta.max_symbols === null || meta.max_symbols === undefined) return 'Sin límite';
+  return `${meta.symbols_count || 0} / ${meta.max_symbols}`;
+}
+
+async function refreshWatchlist(force = false) {
+  if (!force && state.lazyLoads.watchlistLoaded) return state.payload?.watchlist || [];
+  const payload = await api('/api/miniapp/watchlist');
+  state.payload.watchlist = payload.items || [];
+  state.payload.watchlist_meta = payload.meta || { symbols: [], symbols_count: 0, max_symbols: 0, slots_left: 0, can_add_more: false };
+  state.lazyLoads.watchlistLoaded = true;
+  return state.payload.watchlist;
+}
+
+async function mutateWatchlist(path, body, successMessage) {
+  const payload = await api(path, {
+    method: 'POST',
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  state.payload.watchlist = payload.items || [];
+  state.payload.watchlist_meta = payload.meta || { symbols: [], symbols_count: 0, max_symbols: 0, slots_left: 0, can_add_more: false };
+  state.payload.dashboard.watchlist_count = payload.meta?.symbols_count || 0;
+  renderMarket();
+  renderHome();
+  bindViewButtons();
+  if (successMessage || payload.message) tg?.showAlert(successMessage || payload.message);
+}
+
+function renderHistory() {
+  const items = state.payload.history || [];
+  const loading = !state.lazyLoads.historyLoaded && !items.length;
+  els.history.innerHTML = `
+    ${loading ? '<div class="card"><div class="loading-inline">Cargando historial...</div></div>' : ''}
     <div class="card"><h2>Historial verificable</h2><p>Señales cerradas y resultados persistidos desde HADES.</p></div>
     <div class="list" style="margin-top:12px;">
       ${items.length ? items.map(historyCard).join('') : '<div class="empty-state">No hay historial disponible por ahora.</div>'}
@@ -3385,6 +3649,32 @@ function renderAll() {
   els.bottomNav.classList.remove('hidden');
 }
 
+async function ensureViewData(view) {
+  try {
+    if (view === 'home') {
+      await Promise.allSettled([refreshDashboardState(false), refreshHistoryState(false)]);
+      return;
+    }
+    if (view === 'signals') {
+      await Promise.allSettled([refreshSignalsState(false), refreshLiveSignalsState(true, 'signals-view')]);
+      return;
+    }
+    if (view === 'market') {
+      await Promise.allSettled([refreshMarketState(false), refreshWatchlist(false)]);
+      return;
+    }
+    if (view === 'history') {
+      await refreshHistoryState(false);
+      return;
+    }
+    if (view === 'account') {
+      await refreshAccountState(false);
+    }
+  } catch (error) {
+    console.warn(`MiniApp lazy load failed for ${view}`, error);
+  }
+}
+
 function setView(view) {
   state.currentView = view;
   document.querySelectorAll('.view').forEach(node => node.classList.remove('active'));
@@ -3394,6 +3684,7 @@ function setView(view) {
   if (view === 'home' || view === 'signals') {
     queueLiveSignalsRefresh('view-change');
   }
+  Promise.resolve(ensureViewData(view));
 }
 
 async function copyValue(value, successMessage = 'Copiado correctamente.') {
@@ -4176,10 +4467,30 @@ document.querySelectorAll('.nav-item').forEach(button => {
 
 (async () => {
   try {
-    await authenticate();
-    await bootstrap();
+    const auth = await authenticate();
+    state.payload = createBootstrapShell(auth?.me || {});
+    renderAll();
     setView('home');
     startLiveSignalsPolling();
+
+    Promise.resolve(bootstrap())
+      .then(() => {
+        renderAll();
+        setView(state.currentView || 'home');
+      })
+      .catch(error => {
+        console.warn('MiniApp lightweight bootstrap failed', error);
+      });
+
+    Promise.allSettled([
+      refreshDashboardState(true),
+      refreshLiveSignalsState(true, 'startup'),
+    ]).then(() => {
+      renderHome();
+      renderSignals();
+      bindViewButtons();
+    });
+
     setTimeout(() => {
       queueLiveSignalsRefresh('startup');
     }, LIVE_SIGNALS_FOCUS_DEBOUNCE_MS);
