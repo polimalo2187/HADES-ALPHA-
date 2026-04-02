@@ -19,6 +19,8 @@ const DEFAULT_RADAR_VIEW = {
 const state = {
   token: null,
   payload: null,
+  authMe: null,
+  bootstrapRequestInFlight: false,
   currentView: 'home',
   signalDetail: null,
   radarDetail: null,
@@ -89,6 +91,8 @@ const state = {
 
 const LIVE_SIGNALS_POLL_INTERVAL_MS = 7000;
 const LIVE_SIGNALS_FOCUS_DEBOUNCE_MS = 2500;
+const PAYLOAD_CACHE_TTL_MS = 10 * 60 * 1000;
+const PAYLOAD_CACHE_PREFIX = 'hades-miniapp-payload-v3';
 
 const els = {
   loading: document.getElementById('loading'),
@@ -123,6 +127,79 @@ const labels = {
   settings: 'Ajustes',
   admin: 'Panel admin',
 };
+
+function getPayloadCacheKey(userId) {
+  const normalized = Number(userId || 0);
+  return `${PAYLOAD_CACHE_PREFIX}:${normalized}`;
+}
+
+function loadCachedPayload(userId) {
+  const normalized = Number(userId || 0);
+  if (!normalized) return null;
+  try {
+    const raw = window.localStorage.getItem(getPayloadCacheKey(normalized));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const cachedAt = Number(parsed?.cached_at || 0);
+    if (!cachedAt || (Date.now() - cachedAt) > PAYLOAD_CACHE_TTL_MS) {
+      window.localStorage.removeItem(getPayloadCacheKey(normalized));
+      return null;
+    }
+    const payload = parsed?.payload;
+    return payload && typeof payload === 'object' ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistPayloadCache() {
+  const userId = Number(state.payload?.me?.user_id || state.authMe?.user_id || 0);
+  if (!userId || !state.payload || typeof state.payload !== 'object') return;
+  try {
+    window.localStorage.setItem(getPayloadCacheKey(userId), JSON.stringify({
+      cached_at: Date.now(),
+      payload: state.payload,
+    }));
+  } catch {}
+}
+
+function primePayloadShell(me = {}) {
+  ensurePayloadShell();
+  state.payload.bootstrap_mode = 'light';
+  state.payload.me = { ...(state.payload.me || {}), ...(me || {}) };
+  if (!state.payload.market || typeof state.payload.market !== 'object') state.payload.market = {};
+  if (!state.payload.market.recommendation) state.payload.market.recommendation = 'Cargando lectura de mercado...';
+  if (!state.payload.market.radar_context || typeof state.payload.market.radar_context !== 'object') {
+    state.payload.market.radar_context = {
+      bias: 'neutral',
+      regime: 'neutral',
+      environment: '—',
+      recommendation: 'Cargando lectura de mercado...',
+    };
+  }
+  markLazyStateFromBootstrap();
+}
+
+function applyBootstrapPayload(payload, { persist = true } = {}) {
+  state.payload = payload && typeof payload === 'object' ? payload : {};
+  ensurePayloadShell();
+  if (state.authMe && typeof state.authMe === 'object') {
+    state.payload.me = { ...(state.payload.me || {}), ...state.authMe };
+  }
+  markLazyStateFromBootstrap();
+  state.liveSignals.feedVersion = null;
+  if (persist) persistPayloadCache();
+  renderAll();
+}
+
+function restoreCachedPayload() {
+  const userId = Number(state.authMe?.user_id || 0);
+  if (!userId) return false;
+  const cachedPayload = loadCachedPayload(userId);
+  if (!cachedPayload) return false;
+  applyBootstrapPayload(cachedPayload, { persist: false });
+  return true;
+}
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -560,14 +637,20 @@ async function authenticate() {
     body: JSON.stringify({ init_data: initData, dev_user_id: devUserId ? Number(devUserId) : null }),
   });
   state.token = auth.session_token;
+  state.authMe = auth?.me && typeof auth.me === 'object' ? auth.me : null;
+  return auth;
 }
 
 async function bootstrap() {
-  state.payload = await api('/api/miniapp/bootstrap');
-  ensurePayloadShell();
-  markLazyStateFromBootstrap();
-  state.liveSignals.feedVersion = null;
-  renderAll();
+  if (!state.token || state.bootstrapRequestInFlight) return state.payload;
+  state.bootstrapRequestInFlight = true;
+  try {
+    const payload = await api('/api/miniapp/bootstrap');
+    applyBootstrapPayload(payload);
+    return state.payload;
+  } finally {
+    state.bootstrapRequestInFlight = false;
+  }
 }
 
 function ensureDashboardShell() {
@@ -582,6 +665,7 @@ function applyLiveSignalsPayload(payload = {}) {
   state.payload.dashboard.recent_signals = Array.isArray(payload.recent_signals) ? payload.recent_signals : [];
   state.payload.signals = Array.isArray(payload.signals) ? payload.signals : [];
   if (payload.generated_at) state.payload.generated_at = payload.generated_at;
+  persistPayloadCache();
   state.liveSignals.feedVersion = String(payload.feed_version || '');
   state.liveSignals.lastSyncedAt = payload.generated_at || null;
   state.lazy.signals.loaded = true;
@@ -681,6 +765,7 @@ async function refreshDashboardState(force = false) {
     ensurePayloadShell();
     state.payload.dashboard = payload && typeof payload === 'object' ? payload : {};
     state.lazy.dashboard.loaded = true;
+    persistPayloadCache();
     setTopSummary();
     if (state.currentView === 'home') {
       renderHome();
@@ -701,6 +786,7 @@ async function refreshSignalsState(force = false) {
     ensurePayloadShell();
     state.payload.signals = Array.isArray(payload?.items) ? payload.items : [];
     state.lazy.signals.loaded = true;
+    persistPayloadCache();
     if (state.currentView === 'signals') {
       renderSignals();
       bindViewButtons();
@@ -720,6 +806,7 @@ async function refreshHistoryState(force = false) {
     ensurePayloadShell();
     state.payload.history = Array.isArray(payload?.items) ? payload.items : [];
     state.lazy.history.loaded = true;
+    persistPayloadCache();
     if (state.currentView === 'history') {
       renderHistory();
       bindViewButtons();
@@ -744,6 +831,7 @@ async function refreshMarketState(force = false) {
     state.payload.watchlist = Array.isArray(watchlist?.items) ? watchlist.items : [];
     state.payload.watchlist_meta = watchlist?.meta && typeof watchlist.meta === 'object' ? watchlist.meta : {};
     state.lazy.market.loaded = true;
+    persistPayloadCache();
     if (state.currentView === 'market') {
       renderMarket();
       bindViewButtons();
@@ -4337,13 +4425,30 @@ document.querySelectorAll('.nav-item').forEach(button => {
 });
 
 (async () => {
+  let restoredFromCache = false;
   try {
-    await authenticate();
-    await bootstrap();
-    ensureViewData('home');
+    primePayloadShell();
+    renderAll();
+    const auth = await authenticate();
+    primePayloadShell(auth?.me || {});
+    renderAll();
+    restoredFromCache = restoreCachedPayload();
+
+    if (!restoredFromCache) {
+      Promise.resolve(refreshDashboardState(true)).catch(error => console.warn('MiniApp startup dashboard refresh failed', error));
+      queueLiveSignalsRefresh('startup-shell');
+    } else {
+      queueLiveSignalsRefresh('startup-cache');
+    }
+
+    Promise.resolve(bootstrap()).catch(error => {
+      console.warn('MiniApp bootstrap refresh failed', error);
+      if (!restoredFromCache) showError(error.message || 'No se pudo abrir la mini-app.');
+    });
+
     startLiveSignalsPolling();
     setTimeout(() => {
-      queueLiveSignalsRefresh('startup');
+      queueLiveSignalsRefresh(restoredFromCache ? 'startup-cached-focus' : 'startup-focus');
     }, LIVE_SIGNALS_FOCUS_DEBOUNCE_MS);
   } catch (error) {
     showError(error.message || 'No se pudo abrir la mini-app.');
