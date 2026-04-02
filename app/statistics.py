@@ -92,8 +92,27 @@ def _is_loss_result(result_doc: Dict[str, Any]) -> bool:
 
 
 
+def _expired_bucket(result_doc: Dict[str, Any]) -> Optional[str]:
+    resolution = _resolution_key(result_doc)
+    expiry_type = str(result_doc.get("expiry_type") or "").lower().strip()
+    entry_touched = result_doc.get("entry_touched")
+
+    if resolution == "expired_no_fill":
+        return "no_fill"
+    if resolution == "expired_after_entry":
+        return "after_entry"
+    if resolution in {"expired", "expired_clean"}:
+        if expiry_type == "no_fill" or entry_touched is False:
+            return "no_fill"
+        if expiry_type == "after_entry_no_followthrough" or entry_touched is True:
+            return "after_entry"
+        return "clean"
+    return None
+
+
+
 def _is_expired_clean(result_doc: Dict[str, Any]) -> bool:
-    return _resolution_key(result_doc) in {"expired", "expired_clean"}
+    return _expired_bucket(result_doc) is not None
 
 
 
@@ -120,7 +139,7 @@ def _r_multiple_value(result_doc: Dict[str, Any]) -> Optional[float]:
         return 2.0
     if resolution == "sl":
         return -1.0
-    if resolution in {"expired", "expired_clean"}:
+    if resolution in {"expired", "expired_clean", "expired_no_fill", "expired_after_entry"}:
         return None
 
     outcome = str(result_doc.get("result") or "").lower().strip()
@@ -183,6 +202,8 @@ def _calculate_stats_from_results(results: Iterable[Dict[str, Any]]) -> Dict[str
     won = 0
     lost = 0
     expired = 0
+    expired_no_fill = 0
+    expired_after_entry = 0
     tp1_hits = 0
     tp2_hits = 0
     sl_hits = 0
@@ -205,8 +226,14 @@ def _calculate_stats_from_results(results: Iterable[Dict[str, Any]]) -> Dict[str
         elif _is_loss_result(row):
             lost += 1
             sl_hits += 1
-        elif _is_expired_clean(row):
-            expired += 1
+        else:
+            expired_bucket = _expired_bucket(row)
+            if expired_bucket is not None:
+                expired += 1
+                if expired_bucket == "no_fill":
+                    expired_no_fill += 1
+                elif expired_bucket == "after_entry":
+                    expired_after_entry += 1
 
         r_multiple = _r_multiple_value(row)
         if (_is_win_result(row) or _is_loss_result(row)) and r_multiple is not None:
@@ -223,9 +250,14 @@ def _calculate_stats_from_results(results: Iterable[Dict[str, Any]]) -> Dict[str
             resolution_minutes_count += 1
 
     resolved = won + lost
+    filled_total = resolved + expired_after_entry
     winrate = round((won / resolved) * 100, 2) if resolved > 0 else 0.0
     loss_rate = round((lost / resolved) * 100, 2) if resolved > 0 else 0.0
     expiry_rate = round((expired / total) * 100, 2) if total > 0 else 0.0
+    fill_rate = round((filled_total / total) * 100, 2) if total > 0 else 0.0
+    no_fill_rate = round((expired_no_fill / total) * 100, 2) if total > 0 else 0.0
+    post_fill_expiry_rate = round((expired_after_entry / total) * 100, 2) if total > 0 else 0.0
+    after_entry_failure_rate = round((expired_after_entry / filled_total) * 100, 2) if filled_total > 0 else 0.0
 
     if gross_loss_r > 0:
         profit_factor = round(gross_profit_r / gross_loss_r, 2)
@@ -243,13 +275,20 @@ def _calculate_stats_from_results(results: Iterable[Dict[str, Any]]) -> Dict[str
         "won": won,
         "lost": lost,
         "expired": expired,
+        "expired_no_fill": expired_no_fill,
+        "expired_after_entry": expired_after_entry,
         "resolved": resolved,
+        "filled_total": filled_total,
         "tp1": tp1_hits,
         "tp2": tp2_hits,
         "sl": sl_hits,
         "winrate": winrate,
         "loss_rate": loss_rate,
         "expiry_rate": expiry_rate,
+        "fill_rate": fill_rate,
+        "no_fill_rate": no_fill_rate,
+        "post_fill_expiry_rate": post_fill_expiry_rate,
+        "after_entry_failure_rate": after_entry_failure_rate,
         "gross_profit_r": round(gross_profit_r, 4),
         "gross_loss_r": round(gross_loss_r, 4),
         "net_r": round(total_r, 4),
@@ -355,6 +394,8 @@ def _build_direction_stats(results: Iterable[Dict[str, Any]]) -> List[Dict[str, 
                 "won": stats["won"],
                 "lost": stats["lost"],
                 "expired": stats["expired"],
+                "expired_no_fill": stats["expired_no_fill"],
+                "expired_after_entry": stats["expired_after_entry"],
                 "winrate": stats["winrate"],
                 "profit_factor": stats["profit_factor"],
                 "expectancy_r": stats["expectancy_r"],
@@ -389,6 +430,8 @@ def _build_symbol_diagnostics(
                 "won": stats["won"],
                 "lost": stats["lost"],
                 "expired": stats["expired"],
+                "expired_no_fill": stats["expired_no_fill"],
+                "expired_after_entry": stats["expired_after_entry"],
                 "winrate": stats["winrate"],
                 "loss_rate": stats["loss_rate"],
                 "profit_factor": stats["profit_factor"],
@@ -424,6 +467,8 @@ def _build_setup_group_stats(results: Iterable[Dict[str, Any]], signals: Iterabl
                 "won": stats["won"],
                 "lost": stats["lost"],
                 "expired": stats["expired"],
+                "expired_no_fill": stats["expired_no_fill"],
+                "expired_after_entry": stats["expired_after_entry"],
                 "winrate": stats["winrate"],
                 "profit_factor": stats["profit_factor"],
                 "expectancy_r": stats["expectancy_r"],
@@ -449,9 +494,16 @@ def _build_diagnostics_summary(results: List[Dict[str, Any]], signals: List[Dict
         "won": stats["won"],
         "lost": stats["lost"],
         "expired": stats["expired"],
+        "expired_no_fill": stats["expired_no_fill"],
+        "expired_after_entry": stats["expired_after_entry"],
+        "filled_total": stats["filled_total"],
         "winrate": stats["winrate"],
         "loss_rate": stats["loss_rate"],
         "expiry_rate": stats["expiry_rate"],
+        "fill_rate": stats["fill_rate"],
+        "no_fill_rate": stats["no_fill_rate"],
+        "post_fill_expiry_rate": stats["post_fill_expiry_rate"],
+        "after_entry_failure_rate": stats["after_entry_failure_rate"],
         "scanner_signals_total": len(signals),
         "pending_to_evaluate": pending_to_evaluate,
         "avg_result_score": avg_result_score,
