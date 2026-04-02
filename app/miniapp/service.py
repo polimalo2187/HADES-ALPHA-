@@ -2896,11 +2896,6 @@ def build_plans_payload(current_plan: Optional[str] = None) -> Dict[str, Any]:
 
 
 def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
-    """Return a lightweight shell payload for fast MiniApp startup.
-
-    Heavy sections (history, market, signals, account, plans, watchlist) are
-    loaded lazily by dedicated endpoints after the shell is already visible.
-    """
     me_payload = _safe_call(lambda: build_me_payload(user), {
         "user_id": int(user.get("user_id") or 0),
         "username": user.get("username"),
@@ -2917,8 +2912,52 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         "valid_referrals_total": int(user.get("valid_referrals_total") or 0),
         "reward_days_total": int(user.get("reward_days_total") or 0),
     })
+    dashboard_payload = _safe_call(lambda: build_dashboard_payload(user), {
+        "summary_7d": _empty_summary(),
+        "summary_30d": _empty_summary(),
+        "active_signals": [],
+        "latest_signals": [],
+        "active_payment_order": None,
+        "watchlist_symbols": 0,
+        "watchlist_limit": 2,
+        "signal_mix": {"free": 0, "plus": 0, "premium": 0},
+        "active_mix": {"free": 0, "plus": 0, "premium": 0},
+        "history_preview": [],
+    })
+    signals_payload = _safe_call(lambda: build_signals_payload(user), [])
+    history_payload = _safe_call(lambda: build_history_payload(user), [])
+    market_payload = _safe_call(lambda: build_market_payload(user), {
+        "fear_greed": 0,
+        "btc_dominance": 0,
+        "top_gainers": [],
+        "top_losers": [],
+        "top_volume": [],
+        "radar": [],
+        "radar_summary": {"total": 0},
+        "radar_context": {
+            "bias": "neutral",
+            "regime": "neutral",
+            "environment": "—",
+            "recommendation": "Sin datos de mercado por ahora.",
+        },
+    })
+    watchlist_payload = _safe_call(lambda: build_watchlist_payload(user), [])
     me_plan = normalize_plan(me_payload.get("plan"))
     watchlist_limit_default = get_watchlist_limit_for_plan(me_plan)
+    watchlist_slots_default = watchlist_limit_default
+    watchlist_meta_payload = _safe_call(
+        lambda: build_watchlist_context(user)["meta"],
+        {
+            "symbols": [],
+            "symbols_count": 0,
+            "max_symbols": watchlist_limit_default,
+            "slots_left": watchlist_slots_default,
+            "plan": me_plan,
+            "plan_name": get_plan_name(me_plan),
+            "can_add_more": True,
+        },
+    )
+    plans_payload = _safe_call(lambda: build_plans_payload(me_plan), {"plus": [], "premium": []})
     payment_config_status = _safe_call(get_payment_configuration_status, {
         "ready": False,
         "checks": [
@@ -2929,53 +2968,79 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         "missing_keys": ["BSC_RPC_HTTP_URL", "PAYMENT_TOKEN_CONTRACT", "PAYMENT_RECEIVER_ADDRESS"],
     })
 
-    return {
-        "me": me_payload,
-        "dashboard": {
-            "summary_7d": _empty_summary(),
-            "summary_30d": _empty_summary(),
-            "recent_signals": [],
-            "recent_history": [],
-            "active_signals_count": 0,
-            "active_payment_order": None,
-            "watchlist_count": 0,
-            "watchlist_limit": watchlist_limit_default,
-            "signal_mix": {"free": 0, "plus": 0, "premium": 0},
-            "active_mix": {"free": 0, "plus": 0, "premium": 0},
+    account_payload = _safe_call(lambda: build_account_center_payload(user), {
+        "overview": {
+            **me_payload,
+            "watchlist_symbols": int(watchlist_meta_payload.get("symbols_count") or 0),
+            "watchlist_limit": watchlist_meta_payload.get("max_symbols"),
+            "watchlist_slots_left": watchlist_meta_payload.get("slots_left"),
         },
-        "signals": [],
-        "history": [],
-        "market": {
-            "top_gainers": [],
-            "top_losers": [],
-            "top_volume": [],
-            "radar": [],
-            "radar_summary": {"total": 0},
-            "radar_context": {
-                "bias": "neutral",
-                "regime": "neutral",
-                "environment": "—",
-                "recommendation": "Cargando lectura de mercado...",
-            },
-        },
-        "watchlist": [],
-        "watchlist_meta": {
-            "symbols": [],
-            "symbols_count": 0,
-            "max_symbols": watchlist_limit_default,
-            "slots_left": watchlist_limit_default,
+        "subscription": {
             "plan": me_plan,
             "plan_name": get_plan_name(me_plan),
-            "can_add_more": True,
+            "status": me_payload.get("subscription_status"),
+            "status_label": me_payload.get("subscription_status_label"),
+            "days_left": int(me_payload.get("days_left") or 0),
+            "expires_at": me_payload.get("expires_at"),
+            "features": _plan_features(me_plan),
+            "watchlist": watchlist_meta_payload,
         },
-        "plans": {"plus": [], "premium": []},
-        "account": {},
+        "billing": {
+            "payment_config_ready": bool(payment_config_status.get("ready")),
+            "payment_config_status": payment_config_status,
+            "active_order": dashboard_payload.get("active_payment_order"),
+            "recent_orders": [],
+            "summary": {"open": 0, "completed": 0, "expired": 0, "cancelled": 0, "total": 0},
+            "latest_completed_at": None,
+            "focus": _build_billing_focus(
+                payment_config_ready=bool(payment_config_status.get("ready")),
+                active_order=dashboard_payload.get("active_payment_order"),
+                billing_summary={"open": 0, "completed": 0, "expired": 0, "cancelled": 0, "total": 0},
+                subscription={
+                    "plan": me_plan,
+                    "plan_name": get_plan_name(me_plan),
+                    "status": me_payload.get("subscription_status"),
+                    "status_label": me_payload.get("subscription_status_label"),
+                    "days_left": int(me_payload.get("days_left") or 0),
+                    "expires_at": me_payload.get("expires_at"),
+                },
+                payment_config_status=payment_config_status,
+            ),
+        },
+        "referrals": {
+            "ref_code": me_payload.get("ref_code"),
+            "referral_link": None,
+            "share_text": None,
+            "total_referred": 0,
+            "plus_referred": 0,
+            "premium_referred": 0,
+            "current_plus": 0,
+            "current_premium": 0,
+            "valid_referrals_total": int(me_payload.get("valid_referrals_total") or 0),
+            "reward_days_total": int(me_payload.get("reward_days_total") or 0),
+            "reward_rules": get_referral_reward_rules(),
+            "recent_rewards": [],
+        },
+        "plans": plans_payload,
+        "timeline": [],
+        "support": {"url": "https://chat.whatsapp.com/JXxSGjaKtqRH9c0jTlGv2l?mode=gi_t", "label": "Soporte HADES"},
+    })
+
+    return {
+        "me": me_payload,
+        "dashboard": dashboard_payload,
+        "signals": signals_payload,
+        "history": history_payload,
+        "market": market_payload,
+        "watchlist": watchlist_payload,
+        "watchlist_meta": watchlist_meta_payload,
+        "plans": plans_payload,
+        "account": account_payload,
         "support_url": "https://chat.whatsapp.com/JXxSGjaKtqRH9c0jTlGv2l?mode=gi_t",
         "payment_config_status": payment_config_status,
         "payment_config_ready": bool(payment_config_status.get("ready")),
         "bot_username": get_bot_username(),
         "generated_at": datetime.utcnow().isoformat(),
-        "bootstrap_mode": "light",
     }
 
 
