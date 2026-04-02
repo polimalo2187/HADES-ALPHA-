@@ -34,6 +34,14 @@ SHARED_PROFILE = {
     "retest_tol_atr": 0.48,
     "min_body_ratio_breakout": 0.30,
     "min_body_ratio_continuation": 0.22,
+    "min_rel_volume": 1.00,
+    "max_close_extension_atr": 0.96,
+    # SHORT necesita más intención real porque hoy concentra demasiadas
+    # expiradas y demasiado follow-through flojo.
+    "short_min_body_ratio_breakout": 0.34,
+    "short_min_body_ratio_continuation": 0.27,
+    "short_min_rel_volume": 1.16,
+    "short_max_close_extension_atr": 0.76,
     # Entrada adaptativa: si el retest queda superficial y la continuación
     # sale con desplazamiento, acercamos la entrada al precio actual para no
     # dejar demasiadas señales sin fill por retroceso flojo.
@@ -41,6 +49,8 @@ SHARED_PROFILE = {
     "entry_blend_max": 0.74,
     "entry_blend_neutral_atr": 0.18,
     "entry_blend_ramp_atr": 0.92,
+    "short_entry_blend_min": 0.36,
+    "short_entry_blend_max": 0.82,
 }
 
 FREE_PROFILE = {
@@ -51,10 +61,18 @@ FREE_PROFILE = {
     "retest_tol_atr": 0.62,
     "min_body_ratio_breakout": 0.22,
     "min_body_ratio_continuation": 0.16,
+    "min_rel_volume": 0.95,
+    "max_close_extension_atr": 1.02,
+    "short_min_body_ratio_breakout": 0.26,
+    "short_min_body_ratio_continuation": 0.20,
+    "short_min_rel_volume": 1.08,
+    "short_max_close_extension_atr": 0.72,
     "entry_blend_min": 0.24,
     "entry_blend_max": 0.68,
     "entry_blend_neutral_atr": 0.22,
     "entry_blend_ramp_atr": 1.05,
+    "short_entry_blend_min": 0.32,
+    "short_entry_blend_max": 0.76,
 }
 
 # =======================================
@@ -171,6 +189,18 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
+
+
+def _profile_value(profile: Dict, key: str, direction: str, default: Optional[float] = None) -> float:
+    direction_prefix = str(direction or "").lower()
+    directional_key = f"{direction_prefix}_{key}"
+    if directional_key in profile:
+        return float(profile[directional_key])
+    if key in profile:
+        return float(profile[key])
+    if default is None:
+        raise KeyError(key)
+    return float(default)
 
 
 def breakout_level(df: pd.DataFrame, direction: str) -> float:
@@ -331,6 +361,7 @@ def _confirm_breakout_retest(df: pd.DataFrame, direction: str, profile: Dict) ->
     level = breakout_level(df, direction)
     atr = float(last["atr"])
     tol_atr = float(profile["retest_tol_atr"])
+    min_breakout_body_ratio = _profile_value(profile, "min_body_ratio_breakout", direction)
 
     if atr <= 0:
         return False, {}
@@ -339,7 +370,7 @@ def _confirm_breakout_retest(df: pd.DataFrame, direction: str, profile: Dict) ->
         breakout_ok = (
             float(prev["close"]) > level
             and float(prev["high"]) > level
-            and float(prev["body_ratio"]) >= float(profile["min_body_ratio_breakout"])
+            and float(prev["body_ratio"]) >= min_breakout_body_ratio
         )
         retest_distance = max(0.0, float(last["low"]) - level)
         retest_ok = (
@@ -351,7 +382,7 @@ def _confirm_breakout_retest(df: pd.DataFrame, direction: str, profile: Dict) ->
         breakout_ok = (
             float(prev["close"]) < level
             and float(prev["low"]) < level
-            and float(prev["body_ratio"]) >= float(profile["min_body_ratio_breakout"])
+            and float(prev["body_ratio"]) >= min_breakout_body_ratio
         )
         retest_distance = max(0.0, level - float(last["high"]))
         retest_ok = (
@@ -385,7 +416,12 @@ def _continuation_ok(last: pd.Series, direction: str, profile: Dict) -> bool:
         if float(last["close"]) >= float(last["open"]):
             return False
 
-    if float(last["body_ratio"]) < float(profile["min_body_ratio_continuation"]):
+    min_body_ratio = _profile_value(profile, "min_body_ratio_continuation", direction)
+    if float(last["body_ratio"]) < min_body_ratio:
+        return False
+
+    min_rel_volume = _profile_value(profile, "min_rel_volume", direction, default=0.0)
+    if float(last.get("rel_volume", 0.0) or 0.0) < min_rel_volume:
         return False
 
     return True
@@ -439,7 +475,7 @@ def _entry_freshness_score(level: float, close_price: float, atr: float) -> floa
     return _clamp(quality * 10.0, 0.0, 10.0)
 
 
-def _adaptive_entry_blend(quality: Dict[str, float], profile: Dict) -> float:
+def _adaptive_entry_blend(quality: Dict[str, float], profile: Dict, direction: str = "LONG") -> float:
     """
     Determina qué tan cerca del cierre dejamos la entrada.
 
@@ -452,7 +488,7 @@ def _adaptive_entry_blend(quality: Dict[str, float], profile: Dict) -> float:
     retest_tol = max(float(profile.get("retest_tol_atr", 0.5)), 1e-9)
     retest_distance = float(quality.get("retest_distance_atr", 0.0))
     continuation_body = float(quality.get("continuation_body_ratio", 0.0))
-    min_cont_body = float(profile.get("min_body_ratio_continuation", 0.15))
+    min_cont_body = _profile_value(profile, "min_body_ratio_continuation", direction, default=0.15)
     extension_atr = float(quality.get("close_extension_atr", 0.0))
 
     # Si el retest queda lejos del nivel, el pullback fue flojo.
@@ -469,8 +505,8 @@ def _adaptive_entry_blend(quality: Dict[str, float], profile: Dict) -> float:
     # Si el cierre ya se alejó varios ATR del nivel, perseguir una entrada muy
     # baja vuelve demasiadas señales no ejecutables.
     extension_pressure = _clamp(
-        (extension_atr - float(profile.get("entry_blend_neutral_atr", 0.20)))
-        / max(float(profile.get("entry_blend_ramp_atr", 1.0)), 1e-9),
+        (extension_atr - _profile_value(profile, "entry_blend_neutral_atr", direction, default=0.20))
+        / max(_profile_value(profile, "entry_blend_ramp_atr", direction, default=1.0), 1e-9),
         0.0,
         1.0,
     )
@@ -483,8 +519,8 @@ def _adaptive_entry_blend(quality: Dict[str, float], profile: Dict) -> float:
         1.0,
     )
 
-    blend_min = float(profile.get("entry_blend_min", 0.25))
-    blend_max = float(profile.get("entry_blend_max", 0.70))
+    blend_min = _profile_value(profile, "entry_blend_min", direction, default=0.25)
+    blend_max = _profile_value(profile, "entry_blend_max", direction, default=0.70)
     return round(blend_min + ((blend_max - blend_min) * aggressiveness), 4)
 
 
@@ -622,6 +658,10 @@ def _evaluate_profile(
     if not breakout_ok:
         return None
 
+    max_close_extension_atr = _profile_value(profile, "max_close_extension_atr", direction, default=10.0)
+    if float(quality.get("close_extension_atr", 0.0) or 0.0) > max_close_extension_atr:
+        return None
+
     if not _continuation_ok(last, direction, profile):
         return None
 
@@ -631,7 +671,7 @@ def _evaluate_profile(
     # Entrada adaptativa: si el retroceso posterior suele quedarse corto,
     # acercamos la entrada al cierre de continuidad. Si el retest fue limpio,
     # mantenemos una entrada más paciente cerca del nivel.
-    entry_blend = _adaptive_entry_blend(quality, profile)
+    entry_blend = _adaptive_entry_blend(quality, profile, direction=direction)
     entry_price = level + ((close_price - level) * entry_blend)
     trade_profiles = _build_trade_profiles(entry_price, direction)
 
