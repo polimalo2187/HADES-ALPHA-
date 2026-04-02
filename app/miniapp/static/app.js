@@ -1743,10 +1743,15 @@ function performancePlanCard(item) {
         ${accountMetricCard('Expectancy', formatNumber(summary.expectancy_r || 0), 'R por resuelta', metricToneClass('expectancy', summary.expectancy_r || 0))}
       </div>
       <div class="pill-row compact-pill-row" style="margin-top:12px;">
+        <span class="pill">Fill ${escapeHtml(summary.filled_total ?? 0)}</span>
+        <span class="pill">Exp no fill ${escapeHtml(summary.expired_no_fill ?? 0)}</span>
+        <span class="pill">Exp tras entry ${escapeHtml(summary.expired_after_entry ?? 0)}</span>
+        <span class="pill">Exp total ${escapeHtml(summary.expired ?? 0)}</span>
+      </div>
+      <div class="pill-row compact-pill-row" style="margin-top:8px;">
         <span class="pill">TP1 ${escapeHtml(summary.tp1 ?? 0)}</span>
         <span class="pill">TP2 ${escapeHtml(summary.tp2 ?? 0)}</span>
         <span class="pill">SL ${escapeHtml(summary.sl ?? 0)}</span>
-        <span class="pill">Exp ${escapeHtml(summary.expired ?? 0)}</span>
       </div>
     </div>
   `;
@@ -1766,6 +1771,8 @@ function performanceDirectionItem(item) {
         <span>PF ${escapeHtml(formatRatioValue(item.profit_factor, item.profit_factor_infinite))}</span>
         <span>Expectancy ${escapeHtml(formatNumber(item.expectancy_r || 0, 4))}R</span>
         <span>Loss ${escapeHtml(item.lost ?? 0)}</span>
+        <span>No fill ${escapeHtml(item.expired_no_fill ?? 0)}</span>
+        <span>Tras entry ${escapeHtml(item.expired_after_entry ?? 0)}</span>
       </div>
     </div>
   `;
@@ -1784,6 +1791,8 @@ function performanceSetupItem(item) {
       <div class="inline-meta">
         <span>PF ${escapeHtml(formatRatioValue(item.profit_factor, item.profit_factor_infinite))}</span>
         <span>Expectancy ${escapeHtml(formatNumber(item.expectancy_r || 0, 4))}R</span>
+        <span>No fill ${escapeHtml(item.expired_no_fill ?? 0)}</span>
+        <span>Tras entry ${escapeHtml(item.expired_after_entry ?? 0)}</span>
       </div>
     </div>
   `;
@@ -1802,6 +1811,8 @@ function performanceWeakSymbolItem(item) {
       <div class="inline-meta">
         <span>PF ${escapeHtml(formatRatioValue(item.profit_factor, item.profit_factor_infinite))}</span>
         <span>Expectancy ${escapeHtml(formatNumber(item.expectancy_r || 0, 4))}R</span>
+        <span>No fill ${escapeHtml(item.expired_no_fill ?? 0)}</span>
+        <span>Tras entry ${escapeHtml(item.expired_after_entry ?? 0)}</span>
       </div>
     </div>
   `;
@@ -1890,6 +1901,9 @@ function renderPerformance() {
       ${performanceMetricCard('Expectancy R', formatNumber(summary.expectancy_r || 0, 4), 'Promedio por resuelta', metricToneClass('expectancy', summary.expectancy_r || 0))}
       ${performanceMetricCard('Net R', formatNumber(summary.net_r || 0, 4), 'Resultado neto del periodo', metricToneClass('expectancy', summary.net_r || 0))}
       ${performanceMetricCard('Max DD (R)', formatNumber(summary.max_drawdown_r || 0, 4), 'Peor racha en R', metricToneClass('drawdown', summary.max_drawdown_r || 0))}
+      ${performanceMetricCard('Fill rate', `${formatNumber(summary.fill_rate || 0)}%`, 'Señales que tocaron entry', metricToneClass('winrate', summary.fill_rate || 0))}
+      ${performanceMetricCard('Exp no fill', summary.expired_no_fill ?? 0, `${formatNumber(summary.no_fill_rate || 0)}% del total`, metricToneClass('drawdown', -(summary.no_fill_rate || 0)))}
+      ${performanceMetricCard('Exp tras entry', summary.expired_after_entry ?? 0, `${formatNumber(summary.after_entry_failure_rate || 0)}% de fills`, metricToneClass('drawdown', -(summary.after_entry_failure_rate || 0)))}
 
       <div class="card card-span-12">
         <h2>Modelo R</h2>
@@ -1897,10 +1911,16 @@ function renderPerformance() {
           ${resolutionCard('TP1', summary.tp1 ?? 0, '+1R por señal resuelta', 'metric-positive')}
           ${resolutionCard('TP2', summary.tp2 ?? 0, '+2R por señal resuelta', 'metric-positive')}
           ${resolutionCard('SL', summary.sl ?? 0, '-1R por señal resuelta', 'metric-negative')}
-          ${resolutionCard('Exp limpias', summary.expired ?? 0, 'Fuera del PF y la expectancy', 'metric-neutral')}
+          ${resolutionCard('Exp totales', summary.expired ?? 0, 'Todas las expiradas del periodo', 'metric-neutral')}
+          ${resolutionCard('Exp no fill', summary.expired_no_fill ?? 0, 'No llegó al entry', 'metric-warning')}
+          ${resolutionCard('Exp tras entry', summary.expired_after_entry ?? 0, 'Tocó entry y no desarrolló', 'metric-warning')}
         </div>
         <div class="pill-row compact-pill-row" style="margin-top:12px;">
           <span class="pill">Resueltas ${escapeHtml(summary.resolved ?? 0)}</span>
+          <span class="pill">Fill ${escapeHtml(summary.filled_total ?? 0)}</span>
+          <span class="pill">Fill rate ${escapeHtml(formatNumber(summary.fill_rate || 0))}%</span>
+          <span class="pill">No fill rate ${escapeHtml(formatNumber(summary.no_fill_rate || 0))}%</span>
+          <span class="pill">Fallo tras fill ${escapeHtml(formatNumber(summary.after_entry_failure_rate || 0))}%</span>
           <span class="pill">Gross +${escapeHtml(formatNumber(summary.gross_profit_r || 0, 4))}R</span>
           <span class="pill">Gross -${escapeHtml(formatNumber(summary.gross_loss_r || 0, 4))}R</span>
           <span class="pill">Tiempo medio ${escapeHtml(summary.avg_resolution_minutes === null ? '—' : formatNumber(summary.avg_resolution_minutes, 2))} min</span>
@@ -1913,6 +1933,9 @@ function renderPerformance() {
           ${accountMetricCard('Pendientes', diagnostics.pending_to_evaluate ?? 0)}
           ${accountMetricCard('Loss rate', `${formatNumber(diagnostics.loss_rate || 0)}%`, '', metricToneClass('drawdown', -(diagnostics.loss_rate || 0)))}
           ${accountMetricCard('Expiry rate', `${formatNumber(diagnostics.expiry_rate || 0)}%`)}
+          ${accountMetricCard('Exp no fill', diagnostics.expired_no_fill ?? 0, `${formatNumber(diagnostics.no_fill_rate || 0)}% del total`, metricToneClass('drawdown', -(diagnostics.no_fill_rate || 0)))}
+          ${accountMetricCard('Exp tras entry', diagnostics.expired_after_entry ?? 0, `${formatNumber(diagnostics.after_entry_failure_rate || 0)}% de fills`, metricToneClass('drawdown', -(diagnostics.after_entry_failure_rate || 0)))}
+          ${accountMetricCard('Fill rate', `${formatNumber(diagnostics.fill_rate || 0)}%`, 'Señales que tocaron entry', metricToneClass('winrate', diagnostics.fill_rate || 0))}
           ${accountMetricCard('Score resultados', diagnostics.avg_result_score === null ? '—' : formatNumber(diagnostics.avg_result_score, 2))}
           ${accountMetricCard('PF 30D', formatRatioValue(diagnostics.profit_factor, diagnostics.profit_factor_infinite), '', metricToneClass('pf', diagnostics.profit_factor_infinite ? 999 : diagnostics.profit_factor || 0))}
           ${accountMetricCard('DD 30D', formatNumber(diagnostics.max_drawdown_r || 0, 4), 'R', metricToneClass('drawdown', diagnostics.max_drawdown_r || 0))}
