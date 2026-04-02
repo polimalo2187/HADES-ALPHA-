@@ -78,6 +78,13 @@ const state = {
     feedVersion: null,
     lastSyncedAt: null,
   },
+  lazy: {
+    dashboard: { loaded: false, loading: false },
+    signals: { loaded: false, loading: false },
+    history: { loaded: false, loading: false },
+    market: { loaded: false, loading: false },
+    account: { loaded: false, loading: false },
+  },
 };
 
 const LIVE_SIGNALS_POLL_INTERVAL_MS = 7000;
@@ -557,6 +564,8 @@ async function authenticate() {
 
 async function bootstrap() {
   state.payload = await api('/api/miniapp/bootstrap');
+  ensurePayloadShell();
+  markLazyStateFromBootstrap();
   state.liveSignals.feedVersion = null;
   renderAll();
 }
@@ -575,6 +584,7 @@ function applyLiveSignalsPayload(payload = {}) {
   if (payload.generated_at) state.payload.generated_at = payload.generated_at;
   state.liveSignals.feedVersion = String(payload.feed_version || '');
   state.liveSignals.lastSyncedAt = payload.generated_at || null;
+  state.lazy.signals.loaded = true;
 }
 
 function stopLiveSignalsPolling() {
@@ -632,8 +642,116 @@ function queueLiveSignalsRefresh(reason = 'focus') {
 
 function ensurePayloadShell() {
   if (!state.payload || typeof state.payload !== 'object') state.payload = {};
+  if (!state.payload.me || typeof state.payload.me !== 'object') state.payload.me = {};
+  if (!state.payload.dashboard || typeof state.payload.dashboard !== 'object') state.payload.dashboard = {};
+  if (!Array.isArray(state.payload.dashboard.recent_signals)) state.payload.dashboard.recent_signals = [];
+  if (!Array.isArray(state.payload.dashboard.recent_history)) state.payload.dashboard.recent_history = [];
+  if (!Array.isArray(state.payload.signals)) state.payload.signals = [];
+  if (!Array.isArray(state.payload.history)) state.payload.history = [];
+  if (!state.payload.market || typeof state.payload.market !== 'object') state.payload.market = {};
+  if (!Array.isArray(state.payload.watchlist)) state.payload.watchlist = [];
+  if (!state.payload.watchlist_meta || typeof state.payload.watchlist_meta !== 'object') state.payload.watchlist_meta = {};
+  if (!state.payload.plans || typeof state.payload.plans !== 'object') state.payload.plans = { plus: [], premium: [] };
+  if (!Array.isArray(state.payload.plans.plus)) state.payload.plans.plus = [];
+  if (!Array.isArray(state.payload.plans.premium)) state.payload.plans.premium = [];
   if (!state.payload.account || typeof state.payload.account !== 'object') state.payload.account = {};
   if (!state.payload.account.billing || typeof state.payload.account.billing !== 'object') state.payload.account.billing = {};
+}
+
+function markLazyStateFromBootstrap() {
+  const isLightBootstrap = String(state.payload?.bootstrap_mode || '').toLowerCase() === 'light';
+  state.lazy.dashboard.loaded = !isLightBootstrap;
+  state.lazy.dashboard.loading = false;
+  state.lazy.signals.loaded = !isLightBootstrap;
+  state.lazy.signals.loading = false;
+  state.lazy.history.loaded = !isLightBootstrap;
+  state.lazy.history.loading = false;
+  state.lazy.market.loaded = !isLightBootstrap;
+  state.lazy.market.loading = false;
+  state.lazy.account.loaded = !isLightBootstrap;
+  state.lazy.account.loading = false;
+}
+
+async function refreshDashboardState(force = false) {
+  if (state.lazy.dashboard.loading) return state.payload?.dashboard || null;
+  if (!force && state.lazy.dashboard.loaded) return state.payload?.dashboard || null;
+  state.lazy.dashboard.loading = true;
+  try {
+    const payload = await api('/api/miniapp/dashboard');
+    ensurePayloadShell();
+    state.payload.dashboard = payload && typeof payload === 'object' ? payload : {};
+    state.lazy.dashboard.loaded = true;
+    setTopSummary();
+    if (state.currentView === 'home') {
+      renderHome();
+      bindViewButtons();
+    }
+    return state.payload.dashboard;
+  } finally {
+    state.lazy.dashboard.loading = false;
+  }
+}
+
+async function refreshSignalsState(force = false) {
+  if (state.lazy.signals.loading) return state.payload?.signals || [];
+  if (!force && state.lazy.signals.loaded && Array.isArray(state.payload?.signals) && state.payload.signals.length) return state.payload.signals;
+  state.lazy.signals.loading = true;
+  try {
+    const payload = await api('/api/miniapp/signals');
+    ensurePayloadShell();
+    state.payload.signals = Array.isArray(payload?.items) ? payload.items : [];
+    state.lazy.signals.loaded = true;
+    if (state.currentView === 'signals') {
+      renderSignals();
+      bindViewButtons();
+    }
+    return state.payload.signals;
+  } finally {
+    state.lazy.signals.loading = false;
+  }
+}
+
+async function refreshHistoryState(force = false) {
+  if (state.lazy.history.loading) return state.payload?.history || [];
+  if (!force && state.lazy.history.loaded) return state.payload?.history || [];
+  state.lazy.history.loading = true;
+  try {
+    const payload = await api('/api/miniapp/history');
+    ensurePayloadShell();
+    state.payload.history = Array.isArray(payload?.items) ? payload.items : [];
+    state.lazy.history.loaded = true;
+    if (state.currentView === 'history') {
+      renderHistory();
+      bindViewButtons();
+    }
+    return state.payload.history;
+  } finally {
+    state.lazy.history.loading = false;
+  }
+}
+
+async function refreshMarketState(force = false) {
+  if (state.lazy.market.loading) return state.payload?.market || {};
+  if (!force && state.lazy.market.loaded) return state.payload?.market || {};
+  state.lazy.market.loading = true;
+  try {
+    const [market, watchlist] = await Promise.all([
+      api('/api/miniapp/market'),
+      api('/api/miniapp/watchlist'),
+    ]);
+    ensurePayloadShell();
+    state.payload.market = market && typeof market === 'object' ? market : {};
+    state.payload.watchlist = Array.isArray(watchlist?.items) ? watchlist.items : [];
+    state.payload.watchlist_meta = watchlist?.meta && typeof watchlist.meta === 'object' ? watchlist.meta : {};
+    state.lazy.market.loaded = true;
+    if (state.currentView === 'market') {
+      renderMarket();
+      bindViewButtons();
+    }
+    return state.payload.market;
+  } finally {
+    state.lazy.market.loading = false;
+  }
 }
 
 function applyPaymentOrderPreview(order) {
@@ -658,15 +776,28 @@ function applyPaymentOrderPreview(order) {
   billing.summary = summary;
 }
 
-async function refreshAccountState() {
-  const [account, me] = await Promise.all([
-    api('/api/miniapp/account'),
-    api('/api/miniapp/me'),
-  ]);
-  ensurePayloadShell();
-  if (me && typeof me === 'object') state.payload.me = me;
-  if (account && typeof account === 'object') state.payload.account = account;
-  renderAll();
+async function refreshAccountState(force = false) {
+  if (state.lazy.account.loading) return state.payload?.account || null;
+  if (!force && state.lazy.account.loaded && state.payload?.account && Object.keys(state.payload.account).length) return state.payload.account;
+  state.lazy.account.loading = true;
+  try {
+    const [account, me] = await Promise.all([
+      api('/api/miniapp/account'),
+      api('/api/miniapp/me'),
+    ]);
+    ensurePayloadShell();
+    if (me && typeof me === 'object') state.payload.me = me;
+    if (account && typeof account === 'object') state.payload.account = account;
+    state.lazy.account.loaded = true;
+    setTopSummary();
+    if (state.currentView === 'account') {
+      renderAccount();
+      bindViewButtons();
+    }
+    return state.payload.account;
+  } finally {
+    state.lazy.account.loading = false;
+  }
 }
 
 function focusPaymentCard() {
@@ -3368,17 +3499,48 @@ function renderAccount() {
   `;
 }
 
+function renderView(view) {
+  if (view === 'signals') return renderSignals();
+  if (view === 'market') return renderMarket();
+  if (view === 'history') return renderHistory();
+  if (view === 'account') return renderAccount();
+  if (view === 'performance') return renderPerformance();
+  if (view === 'risk') return renderRisk();
+  if (view === 'settings') return renderSettings();
+  if (view === 'admin') return renderAdmin();
+  return renderHome();
+}
+
+function ensureViewData(view, options = {}) {
+  const force = Boolean(options.force);
+  if (!state.token) return;
+  if (view === 'home') {
+    Promise.resolve(refreshDashboardState(force)).catch(error => console.warn('MiniApp dashboard refresh failed', error));
+    queueLiveSignalsRefresh(force ? 'home-bootstrap' : 'home-view');
+    return;
+  }
+  if (view === 'signals') {
+    Promise.resolve(refreshSignalsState(force)).catch(error => console.warn('MiniApp signals refresh failed', error));
+    queueLiveSignalsRefresh(force ? 'signals-bootstrap' : 'signals-view');
+    return;
+  }
+  if (view === 'market') {
+    Promise.resolve(refreshMarketState(force)).catch(error => console.warn('MiniApp market refresh failed', error));
+    return;
+  }
+  if (view === 'history') {
+    Promise.resolve(refreshHistoryState(force)).catch(error => console.warn('MiniApp history refresh failed', error));
+    return;
+  }
+  if (view === 'account') {
+    Promise.resolve(refreshAccountState(force)).catch(error => console.warn('MiniApp account refresh failed', error));
+  }
+}
+
 function renderAll() {
+  ensurePayloadShell();
   setTopSummary();
-  renderHome();
-  renderSignals();
-  renderMarket();
-  renderHistory();
-  renderAccount();
-  renderPerformance();
-  renderRisk();
-  renderSettings();
-  renderAdmin();
+  renderView(state.currentView || 'home');
   bindViewButtons();
   els.loading.classList.add('hidden');
   els.content.classList.remove('hidden');
@@ -3391,9 +3553,9 @@ function setView(view) {
   document.getElementById(`view-${view}`).classList.add('active');
   document.querySelectorAll('.nav-item').forEach(node => node.classList.toggle('active', node.dataset.view === view));
   els.titleMain.textContent = labels[view] || 'HADES';
-  if (view === 'home' || view === 'signals') {
-    queueLiveSignalsRefresh('view-change');
-  }
+  renderView(view);
+  bindViewButtons();
+  ensureViewData(view);
 }
 
 async function copyValue(value, successMessage = 'Copiado correctamente.') {
@@ -4178,7 +4340,7 @@ document.querySelectorAll('.nav-item').forEach(button => {
   try {
     await authenticate();
     await bootstrap();
-    setView('home');
+    ensureViewData('home');
     startLiveSignalsPolling();
     setTimeout(() => {
       queueLiveSignalsRefresh('startup');
