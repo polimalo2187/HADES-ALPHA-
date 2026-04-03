@@ -16,7 +16,7 @@ from app.realtime_pipeline import enqueue_signal_dispatch
 from app.plans import PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM
 from app.signals import create_base_signal
 from app.observability import heartbeat
-from app.strategy import mtf_strategy
+from app import strategy as strategy_engine
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,184 @@ REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "15"))
 PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "78"))
 PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "72"))
 FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "64"))
+
+
+MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT = float(os.getenv("MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT", "15"))
+MAX_CLOSE_MARKET_R_PROGRESS = float(os.getenv("MAX_CLOSE_MARKET_R_PROGRESS", "0.15"))
+SCORE_CALIBRATION_VERSION = "v6_liquidity_original_close_market"
+ENTRY_MODEL_NAME = "liquidity_zone_offset_v1"
+SETUP_STAGE_CLOSED_CONFIRMED = "closed_confirmed"
+
+_PROFILE_CONFIGS = {
+    "premium": dict(strategy_engine.PREMIUM_PROFILE),
+    "plus": dict(strategy_engine.PLUS_PROFILE),
+    "free": dict(strategy_engine.FREE_PROFILE),
+}
+_PROFILE_SCORE_MAP = {
+    round(float(cfg.get("score", 0.0)), 2): name for name, cfg in _PROFILE_CONFIGS.items()
+}
+
+
+def _closed_15m_frame(df_15m: pd.DataFrame) -> pd.DataFrame:
+    if df_15m.empty or "close_time" not in df_15m.columns:
+        return df_15m.copy()
+    now_utc = pd.Timestamp.now(tz="UTC")
+    closed = df_15m[df_15m["close_time"] <= now_utc].copy()
+    if not closed.empty:
+        return closed
+    if len(df_15m) > 1:
+        return df_15m.iloc[:-1].copy()
+    return df_15m.copy()
+
+
+def _infer_setup_group(signal: Dict) -> str:
+    explicit = str(signal.get("setup_group") or signal.get("score_profile") or signal.get("candidate_tier") or "").strip().lower()
+    if explicit in _PROFILE_CONFIGS:
+        return explicit
+    try:
+        score = round(float(signal.get("score", signal.get("raw_score", 0.0))), 2)
+    except Exception:
+        score = 0.0
+    return _PROFILE_SCORE_MAP.get(score, "free")
+
+
+def _profile_config_for_signal(signal: Dict) -> Dict:
+    return dict(_PROFILE_CONFIGS.get(_infer_setup_group(signal), _PROFILE_CONFIGS["free"]))
+
+
+def _safe_rr(entry_price: float, stop_loss: float, target_price: float) -> float:
+    risk = abs(stop_loss - entry_price)
+    if risk <= 1e-9:
+        return 0.0
+    return abs(target_price - entry_price) / risk
+
+
+def _progress_from_model_to_tp1_pct(model_entry: float, model_tp1: float, sent_entry: float, direction: str) -> float:
+    denominator = abs(model_tp1 - model_entry)
+    if denominator <= 1e-9:
+        return 0.0
+    if direction == "LONG":
+        moved = max(0.0, sent_entry - model_entry)
+    else:
+        moved = max(0.0, model_entry - sent_entry)
+    return round((moved / denominator) * 100.0, 2)
+
+
+def _r_progress_from_model_entry(model_entry: float, stop_loss: float, sent_entry: float, direction: str) -> float:
+    denominator = abs(model_entry - stop_loss)
+    if denominator <= 1e-9:
+        return 0.0
+    if direction == "LONG":
+        moved = sent_entry - model_entry
+    else:
+        moved = model_entry - sent_entry
+    return round(moved / denominator, 4)
+
+
+def _reprice_profiles(model_profiles: Dict[str, Dict], model_entry: float, stop_loss: float, market_entry: float, direction: str) -> Dict[str, Dict]:
+    repriced: Dict[str, Dict] = {}
+    market_risk = abs(stop_loss - market_entry)
+    for profile_name, payload in (model_profiles or {}).items():
+        take_profits = list(payload.get("take_profits") or [])
+        tp1 = take_profits[0] if len(take_profits) > 0 else None
+        tp2 = take_profits[1] if len(take_profits) > 1 else None
+        tp1_rr = _safe_rr(model_entry, stop_loss, float(tp1)) if tp1 is not None else 0.0
+        tp2_rr = _safe_rr(model_entry, stop_loss, float(tp2)) if tp2 is not None else 0.0
+        if direction == "LONG":
+            new_tps = [
+                round(market_entry + (market_risk * tp1_rr), 8),
+                round(market_entry + (market_risk * tp2_rr), 8),
+            ]
+        else:
+            new_tps = [
+                round(market_entry - (market_risk * tp1_rr), 8),
+                round(market_entry - (market_risk * tp2_rr), 8),
+            ]
+        repriced[profile_name] = {
+            "stop_loss": round(float(payload.get("stop_loss", stop_loss)), 8),
+            "take_profits": new_tps,
+            "leverage": payload.get("leverage"),
+        }
+    return repriced
+
+
+def _apply_close_market_execution(result: Dict, current_price: float) -> Optional[Dict]:
+    if not result:
+        return None
+
+    enriched = dict(result)
+    direction = str(enriched.get("direction") or "").upper().strip()
+    if direction not in {"LONG", "SHORT"}:
+        return None
+
+    model_entry = float(enriched.get("entry_price") or 0.0)
+    stop_loss = float(enriched.get("stop_loss") or 0.0)
+    market_entry = float(current_price or 0.0)
+    if market_entry <= 0 or stop_loss <= 0 or model_entry <= 0:
+        return None
+
+    if direction == "LONG" and market_entry <= stop_loss:
+        return None
+    if direction == "SHORT" and market_entry >= stop_loss:
+        return None
+
+    setup_group = _infer_setup_group(enriched)
+    profile_cfg = _profile_config_for_signal(enriched)
+    risk_pct = abs(stop_loss - market_entry) / max(market_entry, 1e-9)
+    if risk_pct > float(profile_cfg.get("max_risk_pct", 1.0)):
+        return None
+
+    model_profiles = dict(enriched.get("profiles") or {})
+    conservative = model_profiles.get("conservador") or {}
+    model_take_profits = list(conservative.get("take_profits") or enriched.get("take_profits") or [])
+    if not model_take_profits:
+        return None
+    model_tp1 = float(model_take_profits[0])
+    progress_pct = _progress_from_model_to_tp1_pct(model_entry, model_tp1, market_entry, direction)
+    r_progress = _r_progress_from_model_entry(model_entry, stop_loss, market_entry, direction)
+    if progress_pct > MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT or r_progress > MAX_CLOSE_MARKET_R_PROGRESS:
+        return None
+
+    repriced_profiles = _reprice_profiles(model_profiles, model_entry, stop_loss, market_entry, direction)
+    conservative_profile = repriced_profiles.get("conservador") or {}
+    take_profits = list(conservative_profile.get("take_profits") or [])
+    if not take_profits:
+        return None
+    conservative_tp1_rr = _safe_rr(market_entry, stop_loss, float(take_profits[0]))
+    if conservative_tp1_rr < float(profile_cfg.get("min_rr", 0.0)):
+        return None
+
+    enriched.update({
+        "entry_price": round(market_entry, 8),
+        "take_profits": take_profits,
+        "profiles": repriced_profiles,
+        "raw_score": float(enriched.get("raw_score", enriched.get("score", 0.0))),
+        "normalized_score": float(enriched.get("normalized_score", enriched.get("score", 0.0))),
+        "components": list(enriched.get("components") or []),
+        "raw_components": list(enriched.get("raw_components") or enriched.get("components") or []),
+        "normalized_components": list(enriched.get("normalized_components") or enriched.get("components") or []),
+        "setup_group": setup_group,
+        "score_profile": setup_group,
+        "score_calibration": SCORE_CALIBRATION_VERSION,
+        "send_mode": "market_on_close",
+        "entry_model_price": round(model_entry, 8),
+        "entry_sent_price": round(market_entry, 8),
+        "tp1_progress_at_send_pct": progress_pct,
+        "r_progress_at_send": r_progress,
+        "setup_stage": SETUP_STAGE_CLOSED_CONFIRMED,
+        "candidate_tier": setup_group,
+        "final_tier": setup_group,
+        "entry_model": ENTRY_MODEL_NAME,
+    })
+    return enriched
+
+
+def build_symbol_candidate(symbol: str, df_1h: pd.DataFrame, df_15m: pd.DataFrame, df_5m: pd.DataFrame) -> Optional[Dict]:
+    closed_15m = _closed_15m_frame(df_15m)
+    result = strategy_engine.mtf_strategy(df_1h=df_1h, df_15m=closed_15m, df_5m=df_5m)
+    if not result:
+        return None
+    return _build_candidate(symbol, result, df_5m)
 
 
 class RateLimiter:
@@ -291,21 +469,24 @@ def _select_dispatchable_signal(
     return None
 
 
-def _build_candidate(symbol: str, result: Dict, df_5m: pd.DataFrame) -> Dict:
-    direction = str(result["direction"]).upper()
-    raw_score = _raw_score(result)
-    normalized_score = _normalized_score(result)
+def _build_candidate(symbol: str, result: Dict, df_5m: pd.DataFrame) -> Optional[Dict]:
+    current_price = float(df_5m.iloc[-1]["close"])
+    executed = _apply_close_market_execution(result, current_price)
+    if not executed:
+        return None
+
+    direction = str(executed["direction"]).upper()
+    raw_score = _raw_score(executed)
+    normalized_score = _normalized_score(executed)
     entry_quality = _entry_quality(df_5m, direction)
     volume_quality = _volume_quality(df_5m)
 
-    # Ranking operativo con score comparable entre perfiles.
-    # Los thresholds siguen basados en raw_score para no romper el tiering.
     final_score = round(
         normalized_score + (entry_quality * 0.35) + (volume_quality * 0.40),
         2,
     )
 
-    candidate = dict(result)
+    candidate = dict(executed)
     candidate["symbol"] = symbol
     candidate["direction"] = direction
     candidate["raw_score"] = raw_score
@@ -335,9 +516,9 @@ async def scan_market_async(bot: Bot):
                     df_15m = get_klines(symbol, "15m")
                     df_5m = get_klines(symbol, "5m")
 
-                    result = mtf_strategy(df_1h, df_15m, df_5m)
-                    if result:
-                        candidates.append(_build_candidate(symbol, result, df_5m))
+                    candidate = build_symbol_candidate(symbol, df_1h, df_15m, df_5m)
+                    if candidate:
+                        candidates.append(candidate)
 
                     await asyncio.sleep(0.05)
                 except Exception as e:
