@@ -84,7 +84,7 @@ const state = {
     dashboard: { loaded: false, loading: false },
     signals: { loaded: false, loading: false },
     history: { loaded: false, loading: false },
-    market: { loaded: false, loading: false },
+    market: { loaded: false, loading: false, error: null },
     account: { loaded: false, loading: false },
   },
 };
@@ -752,6 +752,7 @@ function markLazyStateFromBootstrap() {
   state.lazy.history.loading = false;
   state.lazy.market.loaded = !isLightBootstrap;
   state.lazy.market.loading = false;
+  state.lazy.market.error = null;
   state.lazy.account.loaded = !isLightBootstrap;
   state.lazy.account.loading = false;
 }
@@ -821,24 +822,54 @@ async function refreshMarketState(force = false) {
   if (state.lazy.market.loading) return state.payload?.market || {};
   if (!force && state.lazy.market.loaded) return state.payload?.market || {};
   state.lazy.market.loading = true;
+  state.lazy.market.error = null;
+  if (state.currentView === 'market') {
+    renderMarket();
+    bindViewButtons();
+  }
   try {
-    const [market, watchlist] = await Promise.all([
+    const [marketResult, watchlistResult] = await Promise.allSettled([
       api('/api/miniapp/market'),
       api('/api/miniapp/watchlist'),
     ]);
     ensurePayloadShell();
-    state.payload.market = market && typeof market === 'object' ? market : {};
-    state.payload.watchlist = Array.isArray(watchlist?.items) ? watchlist.items : [];
-    state.payload.watchlist_meta = watchlist?.meta && typeof watchlist.meta === 'object' ? watchlist.meta : {};
-    state.lazy.market.loaded = true;
-    persistPayloadCache();
+    let updated = false;
+
+    if (marketResult.status === 'fulfilled') {
+      const market = marketResult.value;
+      state.payload.market = market && typeof market === 'object' ? market : {};
+      state.lazy.market.loaded = true;
+      state.lazy.market.error = null;
+      updated = true;
+    } else {
+      state.lazy.market.error = 'No pude actualizar la lectura de mercado ahora mismo.';
+      if (state.payload?.market && Object.keys(state.payload.market).length) {
+        state.lazy.market.loaded = true;
+      }
+    }
+
+    if (watchlistResult.status === 'fulfilled') {
+      const watchlist = watchlistResult.value;
+      state.payload.watchlist = Array.isArray(watchlist?.items) ? watchlist.items : [];
+      state.payload.watchlist_meta = watchlist?.meta && typeof watchlist.meta === 'object' ? watchlist.meta : {};
+      updated = true;
+    }
+
+    if (updated) persistPayloadCache();
     if (state.currentView === 'market') {
       renderMarket();
       bindViewButtons();
     }
+    if (marketResult.status === 'rejected' && watchlistResult.status === 'rejected') {
+      throw marketResult.reason || watchlistResult.reason || new Error('market_unavailable');
+    }
     return state.payload.market;
   } finally {
     state.lazy.market.loading = false;
+    if (state.currentView === 'market') {
+      renderMarket();
+      bindViewButtons();
+    }
   }
 }
 
@@ -2486,6 +2517,8 @@ function renderSignals() {
 
 function renderMarket() {
   const market = state.payload.market || {};
+  const marketLoading = Boolean(state.lazy.market?.loading);
+  const marketError = state.lazy.market?.error || null;
   const watchlist = state.payload.watchlist || [];
   const watchlistMeta = state.payload.watchlist_meta || { symbols: [], symbols_count: 0, max_symbols: 0, slots_left: 0, can_add_more: false };
   const gainers = market.top_gainers || [];
@@ -2515,7 +2548,7 @@ function renderMarket() {
         ${item.last_price ? `<span>Px: ${escapeHtml(formatNumber(item.last_price, 4))}</span>` : ''}
       </div>
     </div>
-  `).join('') : `<div class="empty-state">Sin ${type} disponibles.</div>`;
+  `).join('') : `<div class="empty-state">${marketLoading ? 'Actualizando datos...' : (marketError ? 'Sin datos frescos por ahora.' : `Sin ${type} disponibles.`)}</div>`;
 
   els.market.innerHTML = `
     <div class="section-grid">
@@ -2524,7 +2557,10 @@ function renderMarket() {
         <div class="hero-grid">
           <div>
             <h2 class="hero-title">${escapeHtml(market.bias || 'Neutral')} · ${escapeHtml(market.preferred_side || 'Selectivo')}</h2>
-            <p class="hero-subtitle">${escapeHtml(market.recommendation || 'Sin recomendación disponible por ahora.')}</p>
+            <p class="hero-subtitle">${escapeHtml(marketError || market.recommendation || (marketLoading ? 'Actualizando lectura de mercado...' : 'Sin recomendación disponible por ahora.'))}</p>
+            <div class="action-row compact" style="margin-top:12px;">
+              <button class="button button-secondary" data-market-refresh>${marketLoading ? 'Actualizando...' : 'Refrescar mercado'}</button>
+            </div>
           </div>
           <div class="pill-row">
             <span class="pill">Régimen: ${escapeHtml(market.regime || '—')}</span>
@@ -3141,17 +3177,12 @@ function scoreListsEqual(a, b) {
 
 function renderScoreBreakdown(items) {
   if (!items || !items.length) return '<div class="empty-state">Sin desglose disponible.</div>';
-  return `<div class="component-list">${items.map(item => {
-    const hasNumericScore = item.score !== undefined && item.score !== null && item.score !== '';
-    const valueLabel = hasNumericScore ? formatNumber(item.score, 2) : (item.status === 'ok' ? 'OK' : '—');
-    const toneClass = hasNumericScore ? (Number(item.score || 0) >= 0 ? 'positive-text' : 'negative-text') : 'positive-text';
-    return `
-      <div class="component-row">
-        <span>${escapeHtml(item.label)}</span>
-        <span class="${toneClass}">${escapeHtml(valueLabel)}</span>
-      </div>
-    `;
-  }).join('')}</div>`;
+  return `<div class="component-list">${items.map(item => `
+    <div class="component-row">
+      <span>${escapeHtml(item.label)}</span>
+      <span class="${Number(item.score || 0) >= 0 ? 'positive-text' : 'negative-text'}">${escapeHtml(formatNumber(item.score, 2))}</span>
+    </div>
+  `).join('')}</div>`;
 }
 
 function renderRadarDetailModal(payload) {
@@ -4286,6 +4317,17 @@ function bindViewButtons() {
       bindViewButtons();
     };
   }
+  document.querySelectorAll('[data-market-refresh]').forEach(button => {
+    button.onclick = async () => {
+      if (button.disabled) return;
+      button.disabled = true;
+      try {
+        await refreshMarketState(true);
+      } finally {
+        if (button.isConnected) button.disabled = false;
+      }
+    };
+  });
   document.querySelectorAll('[data-radar-reset]').forEach(button => {
     button.onclick = () => {
       resetRadarView();
