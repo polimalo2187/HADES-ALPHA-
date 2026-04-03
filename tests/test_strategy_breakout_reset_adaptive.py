@@ -3,8 +3,8 @@ import pandas as pd
 import app.strategy as strategy
 
 
-def test_live_entry_candidate_revalidates_rr_from_current_price():
-    candidate = strategy._live_entry_candidate(
+def test_market_entry_candidate_revalidates_rr_from_current_price():
+    candidate = strategy._market_entry_candidate(
         current_price=101.0,
         stop_loss=99.8,
         direction="LONG",
@@ -20,6 +20,8 @@ def test_live_entry_candidate_revalidates_rr_from_current_price():
     assert barrier_rr >= strategy.PLUS_PROFILE["min_barrier_rr"]
 
 
-def test_current_candle_progress_without_timestamps_falls_back_to_closed():
-    candle = pd.Series({"open": 1.0, "close": 1.1})
-    assert strategy._current_candle_progress(candle) == 1.0
+def test_progress_metrics_from_model_entry_are_consistent():
+    pct = strategy._progress_from_model_to_tp1_pct(100.0, 102.0, 100.5, "LONG")
+    r = strategy._r_progress_from_model_entry(100.0, 99.0, 100.5, "LONG")
+    assert pct == 25.0
+    assert r == 0.5
