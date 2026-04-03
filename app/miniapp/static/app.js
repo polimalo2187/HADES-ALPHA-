@@ -3171,19 +3171,25 @@ function scoreListsEqual(a, b) {
   if (a.length !== b.length) return false;
   return a.every((item, index) => {
     const other = b[index] || {};
-    return String(item?.label || '') === String(other?.label || '') && Number(item?.score || 0) === Number(other?.score || 0);
+    const leftScore = Number(item?.score);
+    const rightScore = Number(other?.score);
+    const leftMissing = item?.score === null || item?.score === undefined || Number.isNaN(leftScore);
+    const rightMissing = other?.score === null || other?.score === undefined || Number.isNaN(rightScore);
+    const scoresEqual = (leftMissing && rightMissing) || (!leftMissing && !rightMissing && leftScore === rightScore);
+    return String(item?.label || '') === String(other?.label || '') && scoresEqual;
   });
 }
 
 function renderScoreBreakdown(items) {
   if (!items || !items.length) return '<div class="empty-state">Sin desglose disponible.</div>';
   return `<div class="component-list">${items.map(item => {
-    const hasNumericScore = item && item.has_numeric_score !== false && item.score !== null && item.score !== undefined;
+    const numericScore = Number(item?.score);
+    const hasNumericScore = item && item.has_numeric_score !== false && item.score !== null && item.score !== undefined && !Number.isNaN(numericScore);
     const valueText = hasNumericScore
-      ? formatNumber(item.score, 2)
+      ? formatNumber(numericScore, 2)
       : (item?.status_label || 'OK');
     const toneClass = hasNumericScore
-      ? (Number(item.score || 0) >= 0 ? 'positive-text' : 'negative-text')
+      ? (numericScore >= 0 ? 'positive-text' : 'negative-text')
       : 'positive-text';
     return `
     <div class="component-row">
