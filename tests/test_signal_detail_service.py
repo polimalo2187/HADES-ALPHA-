@@ -138,6 +138,66 @@ class SignalDetailPayloadTests(unittest.TestCase):
         self.assertIsNone(payload['upgrade_hint'])
         tracking_mock.assert_called_once_with(11, 'sig-2', profile_name='agresivo')
 
+    def test_advanced_components_without_numeric_scores_render_as_passed_checks(self):
+        user = {'user_id': 12, 'plan': 'premium'}
+        tracking_payload = {
+            'signal_id': 'sig-3',
+            'symbol': 'SOLUSDT',
+            'direction': 'LONG',
+            'visibility': 'free',
+            'normalized_score': 74.0,
+            'setup_group': 'liquidity',
+            'entry_price': 120.0,
+            'status': 'active',
+            'created_at': None,
+            'telegram_valid_until': None,
+            'selected_profile': 'moderado',
+            'state_label': 'ACTIVA',
+            'entry_state_label': 'EN SEGUIMIENTO',
+            'result_label': 'Aún sin cierre final',
+            'recommendation': 'Lectura táctica activa.',
+            'current_price': 120.5,
+            'entry_zone_low': 119.0,
+            'entry_zone_high': 121.0,
+            'stop_loss': 116.0,
+            'take_profits': [124.0, 128.0],
+            'current_move_pct': 0.004,
+            'distance_to_entry_pct': 0.004,
+            'stop_distance_pct': 0.03,
+            'tp1_distance_pct': 0.03,
+            'tp1_hit_now': False,
+            'tp2_hit_now': False,
+            'stop_hit_now': False,
+            'in_entry_zone': True,
+            'is_operable_now': True,
+            'warnings': [],
+        }
+        analysis_payload = {
+            'setup_group': 'liquidity',
+            'score': 74.0,
+            'normalized_score': 74.0,
+            'atr_pct': 0.0072,
+            'timeframes': ['15m'],
+            'components': ['liquidity_zone', 'minimum_sweep', 'recovery_close'],
+            'raw_components': ['liquidity_zone', 'minimum_sweep', 'recovery_close'],
+            'normalized_components': ['liquidity_zone', 'minimum_sweep', 'recovery_close'],
+            'selected_stop_distance_pct': 0.03,
+            'selected_tp1_distance_pct': 0.03,
+            'selected_tp2_distance_pct': 0.06,
+            'warnings': [],
+            'selected_profile_payload': {'leverage': '30x-40x'},
+            'score_profile': 'free',
+            'score_calibration': 'v6_liquidity_original_close_market',
+            'market_validity_minutes': 21,
+        }
+
+        with patch('app.miniapp.service.plan_status', return_value={'plan': 'premium'}),              patch('app.miniapp.service.get_signal_tracking_for_user', return_value=tracking_payload),              patch('app.miniapp.service.get_signal_analysis_for_user', return_value=analysis_payload):
+            payload = build_signal_detail_payload(user, 'sig-3', profile_name='moderado')
+
+        self.assertEqual(payload['analysis']['components'][0]['label'], 'Liquidity Zone')
+        self.assertFalse(payload['analysis']['components'][0]['has_numeric_score'])
+        self.assertEqual(payload['analysis']['components'][0]['status_label'], 'OK')
+
 
 if __name__ == '__main__':
     unittest.main()
