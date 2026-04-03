@@ -77,6 +77,26 @@ def _analysis_feature_tier(plan: str) -> str:
     return "basic"
 
 
+def _fmt_component_row(item: object) -> str:
+    if isinstance(item, dict):
+        label = item.get("label") or item.get("name") or "—"
+        raw_value = item.get("points")
+        if raw_value is None:
+            raw_value = item.get("score")
+        try:
+            return f"{label}: {float(raw_value):.2f}"
+        except Exception:
+            return str(label)
+    if isinstance(item, (list, tuple)) and item:
+        label = item[0]
+        raw_value = item[1] if len(item) > 1 else None
+        try:
+            return f"{label}: {float(raw_value):.2f}"
+        except Exception:
+            return str(label)
+    return str(item)
+
+
 def build_signal_analysis_text(analysis: Dict, *, plan: str = PLAN_FREE, language: str = "es") -> str:
     tier = _analysis_feature_tier(plan)
     selected_profile = str(analysis.get("selected_profile") or "moderado")
@@ -113,7 +133,7 @@ def build_signal_analysis_text(analysis: Dict, *, plan: str = PLAN_FREE, languag
         if warnings:
             lines.extend(["", _t(language, "Notas:", "Notes:")])
             for item in warnings[:2]:
-                lines.append(f"• {item}")
+                lines.append(f"• {_fmt_component_row(item)}")
         lines.extend([
             "",
             _t(language, "💼 Sube a Plus para ver el análisis completo de la señal.", "💼 Upgrade to Plus to view the full signal analysis."),
@@ -160,23 +180,23 @@ def build_signal_analysis_text(analysis: Dict, *, plan: str = PLAN_FREE, languag
     if components:
         lines.extend(["", _t(language, "Lectura principal:", "Main reading:")])
         for item in components[:6]:
-            lines.append(f"• {item}")
+            lines.append(f"• {_fmt_component_row(item)}")
 
     if tier == "advanced":
         if raw_components:
             lines.extend(["", _t(language, "Componentes raw:", "Raw components:")])
             for item in raw_components[:6]:
-                lines.append(f"• {item}")
+                lines.append(f"• {_fmt_component_row(item)}")
         if normalized_components:
             lines.extend(["", _t(language, "Componentes normalizados:", "Normalized components:")])
             for item in normalized_components[:6]:
-                lines.append(f"• {item}")
+                lines.append(f"• {_fmt_component_row(item)}")
 
     if warnings:
         lines.extend(["", _t(language, "Notas:", "Notes:")])
         max_warn = 4 if tier == "advanced" else 2
         for item in warnings[:max_warn]:
-            lines.append(f"• {item}")
+            lines.append(f"• {_fmt_component_row(item)}")
 
     lines.extend([
         "",
