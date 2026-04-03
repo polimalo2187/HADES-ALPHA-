@@ -51,7 +51,7 @@ DEDUP_MINUTES = int(os.getenv("DEDUP_MINUTES", "10"))
 TELEGRAM_SIGNAL_COOLDOWN_MINUTES = 15
 MIN_SIGNAL_VALIDITY_MINUTES = int(os.getenv("MIN_SIGNAL_VALIDITY_MINUTES", "15"))
 MAX_SIGNAL_VALIDITY_MINUTES = int(os.getenv("MAX_SIGNAL_VALIDITY_MINUTES", "45"))
-MARKET_EVALUATION_VERSION = "v2_market_canonical"
+MARKET_EVALUATION_VERSION = "v3_entry_window_locked"
 
 # ======================================================
 # UTILIDADES
@@ -971,6 +971,32 @@ def _ms_to_dt(value: Any) -> Optional[datetime]:
         return None
 
 
+def _candle_time_bounds(row: List[Any]) -> tuple[Optional[datetime], Optional[datetime]]:
+    open_dt = _ms_to_dt(row[0]) if row else None
+    close_dt: Optional[datetime] = None
+    try:
+        if row and len(row) > 6 and row[6] is not None:
+            close_dt = _ms_to_dt(row[6])
+    except Exception:
+        close_dt = None
+    if open_dt is not None and close_dt is None:
+        close_dt = open_dt + timedelta(minutes=1)
+    return open_dt, close_dt
+
+
+def _entry_window_allows_new_fill(row: List[Any], entry_window_end: Optional[datetime]) -> bool:
+    if entry_window_end is None:
+        return True
+    candle_open_dt, candle_close_dt = _candle_time_bounds(row)
+    if candle_open_dt is None:
+        return False
+    if candle_open_dt >= entry_window_end:
+        return False
+    if candle_close_dt is not None and candle_close_dt > entry_window_end:
+        return False
+    return True
+
+
 def _entry_touched_in_candle(direction: str, entry_price: float, high: float, low: float) -> bool:
     if direction == "LONG":
         return low <= entry_price
@@ -1047,6 +1073,7 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
     tp2 = take_profits[1] if len(take_profits) > 1 else None
     created_at = signal_doc.get("created_at")
     valid_until = _get_evaluation_valid_until(signal_doc)
+    telegram_valid_until = signal_doc.get("telegram_valid_until")
 
     expired_no_fill = {
         "result": "expired",
@@ -1082,6 +1109,11 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
         logger.error(f"❌ Error descargando velas para evaluar {symbol}: {e}")
         return expired_no_fill
 
+    entry_window_end = telegram_valid_until if isinstance(telegram_valid_until, datetime) else valid_until
+    if isinstance(entry_window_end, datetime) and isinstance(valid_until, datetime):
+        if entry_window_end > valid_until:
+            entry_window_end = valid_until
+
     entry_touched = False
     entry_touched_at: Optional[datetime] = None
     tp1_progress_max_pct = 0.0
@@ -1109,9 +1141,10 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
         except Exception:
             continue
 
-        if not entry_touched and _entry_touched_in_candle(direction, entry_price, high, low):
-            entry_touched = True
-            entry_touched_at = _ms_to_dt(row[0])
+        if not entry_touched and _entry_window_allows_new_fill(row, entry_window_end):
+            if _entry_touched_in_candle(direction, entry_price, high, low):
+                entry_touched = True
+                entry_touched_at = _ms_to_dt(row[0])
 
         if not entry_touched:
             continue
