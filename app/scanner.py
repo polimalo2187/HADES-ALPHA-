@@ -229,8 +229,65 @@ def _pick_best(
         if not symbol or symbol in used_symbols:
             continue
         if predicate(signal):
-            used_symbols.add(symbol)
             return signal
+    return None
+
+
+def _build_base_signal(signal: Dict, visibility: str) -> Optional[Dict]:
+    return create_base_signal(
+        symbol=str(signal["symbol"]),
+        direction=str(signal["direction"]).upper(),
+        entry_price=float(signal["entry_price"]),
+        stop_loss=float(signal["stop_loss"]),
+        take_profits=list(signal["take_profits"]),
+        timeframes=list(signal.get("timeframes", ["5M"])),
+        visibility=visibility,
+        score=_raw_score(signal),
+        components=signal.get("components", []),
+        profiles=signal.get("profiles"),
+        atr_pct=signal.get("atr_pct"),
+        normalized_score=_normalized_score(signal),
+        raw_components=signal.get("raw_components"),
+        normalized_components=signal.get("normalized_components"),
+        setup_group=signal.get("setup_group"),
+        score_profile=signal.get("score_profile"),
+        score_calibration=signal.get("score_calibration"),
+        send_mode=signal.get("send_mode"),
+        entry_model_price=signal.get("entry_model_price"),
+        entry_sent_price=signal.get("entry_sent_price"),
+        tp1_progress_at_send_pct=signal.get("tp1_progress_at_send_pct"),
+        r_progress_at_send=signal.get("r_progress_at_send"),
+        setup_stage=signal.get("setup_stage"),
+    )
+
+
+def _select_dispatchable_signal(
+    pool: List[Dict],
+    visibility: str,
+    used_symbols: Set[str],
+) -> Optional[tuple[Dict, Dict]]:
+    for signal in pool:
+        symbol = str(signal.get("symbol", ""))
+        if not symbol or symbol in used_symbols:
+            continue
+
+        direction = str(signal.get("direction", "")).upper()
+        if recent_duplicate_exists(symbol, direction, visibility):
+            continue
+
+        base_signal = _build_base_signal(signal, visibility)
+        if not base_signal:
+            logger.info(
+                "⏭️ Señal descartada al crear base_signal: %s %s (%s)",
+                symbol,
+                direction,
+                visibility,
+            )
+            continue
+
+        used_symbols.add(symbol)
+        return signal, base_signal
+
     return None
 
 
@@ -329,69 +386,34 @@ async def scan_market_async(bot: Bot):
             )
 
             used_symbols: Set[str] = set()
-            premium_signal = _pick_best(premium_candidates, lambda _: True, used_symbols)
-            plus_signal = _pick_best(plus_candidates, lambda _: True, used_symbols)
-            free_signal = _pick_best(free_candidates, lambda _: True, used_symbols)
-
             selected = [
-                (PLAN_PREMIUM, "🥇 ORO", premium_signal),
-                (PLAN_PLUS, "🥈 PLATA", plus_signal),
-                (PLAN_FREE, "🥉 BRONCE", free_signal),
+                (PLAN_PREMIUM, "🥇 ORO", premium_candidates),
+                (PLAN_PLUS, "🥈 PLATA", plus_candidates),
+                (PLAN_FREE, "🥉 BRONCE", free_candidates),
             ]
-            selected_count = sum(1 for _, _, signal in selected if signal)
+            selected_count = 0
 
-            for visibility, medal, signal in selected:
-                if not signal:
+            for visibility, medal, pool in selected:
+                chosen = _select_dispatchable_signal(pool, visibility, used_symbols)
+                if not chosen:
                     continue
 
+                signal, base_signal = chosen
                 symbol = str(signal["symbol"])
                 direction = str(signal["direction"]).upper()
-                entry_price = float(signal["entry_price"])
                 raw_score = _raw_score(signal)
                 normalized_score = _normalized_score(signal)
                 final_score = float(signal.get("final_score", normalized_score))
 
-                if recent_duplicate_exists(symbol, direction, visibility):
-                    continue
-
-                base_signal = create_base_signal(
-                    symbol=symbol,
-                    direction=direction,
-                    entry_price=entry_price,
-                    stop_loss=float(signal["stop_loss"]),
-                    take_profits=list(signal["take_profits"]),
-                    timeframes=list(signal.get("timeframes", ["5M"])),
-                    visibility=visibility,
-                    # Conservamos raw_score aquí para no mezclar todavía
-                    # este paso con la lógica de validez/evaluación del paso 3.
-                    score=raw_score,
-                    components=signal.get("components", []),
-                    profiles=signal.get("profiles"),
-                    atr_pct=signal.get("atr_pct"),
-                    normalized_score=normalized_score,
-                    raw_components=signal.get("raw_components"),
-                    normalized_components=signal.get("normalized_components"),
-                    setup_group=signal.get("setup_group"),
-                    score_profile=signal.get("score_profile"),
-                    score_calibration=signal.get("score_calibration"),
-                )
-
-                if not base_signal:
-                    logger.info(
-                        "⏭️ Señal descartada al crear base_signal: %s %s (%s)",
-                        symbol,
-                        direction,
-                        visibility,
-                    )
-                    continue
-
                 try:
                     enqueue_signal_dispatch(base_signal)
+                    selected_count += 1
                 except Exception as e:
                     logger.error("⚠️ Error encolando señal para dispatch: %s", e, exc_info=True)
+                    continue
 
                 logger.info(
-                    "✅ %s | %s %s | raw_score=%s | normalized_score=%s | final_score=%s | entry_q=%s | vol_q=%s | setup=%s | plan=%s | calib=%s",
+                    "✅ %s | %s %s | raw_score=%s | normalized_score=%s | final_score=%s | entry_q=%s | vol_q=%s | setup=%s | plan=%s | calib=%s | send_mode=%s | stage=%s",
                     medal,
                     symbol,
                     direction,
@@ -403,6 +425,8 @@ async def scan_market_async(bot: Bot):
                     signal.get("setup_group", "unknown"),
                     visibility,
                     signal.get("score_calibration", "unknown"),
+                    signal.get("send_mode", "unknown"),
+                    signal.get("setup_stage", "unknown"),
                 )
 
             heartbeat(
