@@ -1,75 +1,72 @@
+import tests._bootstrap
+
+import sys
+import types
+import pymongo
+
+if 'telegram' not in sys.modules:
+    telegram = types.ModuleType('telegram')
+    class Bot: ...
+    telegram.Bot = Bot
+    sys.modules['telegram'] = telegram
+
+if not hasattr(pymongo, 'UpdateOne'):
+    class UpdateOne:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+    pymongo.UpdateOne = UpdateOne
+
+errors_mod = sys.modules.get('pymongo.errors')
+if errors_mod is not None and not hasattr(errors_mod, 'BulkWriteError'):
+    class BulkWriteError(Exception):
+        pass
+    errors_mod.BulkWriteError = BulkWriteError
+
 from datetime import timedelta
 
 import pandas as pd
 
-import app.strategy as strategy
+import app.scanner as scanner
 
 
 def test_closed_15m_frame_drops_open_candle_and_keeps_closed_history():
-    now = pd.Timestamp.now(tz="UTC")
+    now = pd.Timestamp.now(tz='UTC')
     df = pd.DataFrame(
         [
-            {"close_time": now - timedelta(minutes=15), "close": 1.0},
-            {"close_time": now + timedelta(minutes=10), "close": 2.0},
+            {'close_time': now - timedelta(minutes=15), 'close': 1.0},
+            {'close_time': now + timedelta(minutes=10), 'close': 2.0},
         ]
     )
 
-    closed = strategy._closed_15m_frame(df)
+    closed = scanner._closed_15m_frame(df)
 
     assert len(closed) == 1
-    assert float(closed.iloc[-1]["close"]) == 1.0
+    assert float(closed.iloc[-1]['close']) == 1.0
 
 
-def test_market_entry_candidate_rejects_price_that_breaks_rr_or_stop_side():
-    assert strategy._market_entry_candidate(99.7, 99.8, "LONG", 103.2, 102.8, strategy.PLUS_PROFILE) is None
-    assert strategy._market_entry_candidate(102.95, 99.8, "LONG", 103.2, 102.8, strategy.PLUS_PROFILE) is None
+def test_apply_close_market_execution_uses_market_price_and_keeps_original_filters():
+    result = {
+        'direction': 'LONG',
+        'entry_price': 100.0,
+        'stop_loss': 99.0,
+        'take_profits': [101.5, 101.95],
+        'profiles': {
+            'conservador': {'stop_loss': 99.0, 'take_profits': [101.5, 101.95], 'leverage': '20x-30x'},
+            'moderado': {'stop_loss': 99.0, 'take_profits': [101.75, 102.35], 'leverage': '30x-40x'},
+            'agresivo': {'stop_loss': 99.0, 'take_profits': [102.05, 102.75], 'leverage': '40x-50x'},
+        },
+        'score': 82.0,
+        'components': ['liquidity_zone', 'confirmation_candle'],
+    }
 
+    payload = scanner._apply_close_market_execution(result, current_price=100.1)
 
-def test_evaluate_direction_uses_market_entry_after_closed_confirmation(monkeypatch):
-    rows = []
-    base_time = pd.Timestamp.now(tz="UTC") - timedelta(minutes=(strategy.LIQUIDITY_LOOKBACK + 3) * 15)
-    for idx in range(strategy.LIQUIDITY_LOOKBACK + 2):
-        open_time = base_time + timedelta(minutes=idx * 15)
-        close_time = open_time + timedelta(minutes=15)
-        rows.append(
-            {
-                "open": 100.0,
-                "close": 100.8,
-                "high": 104.0,
-                "low": 99.6,
-                "volume": 1000.0,
-                "atr": 1.0,
-                "atr_pct": 0.01,
-                "rel_volume": 1.5,
-                "body": 0.8,
-                "range": 1.6,
-                "body_ratio": 0.5,
-                "upper_wick": 0.2,
-                "lower_wick": 0.2,
-                "ema20": 100.5,
-                "ema50": 100.4,
-                "open_time": open_time,
-                "close_time": close_time,
-            }
-        )
-
-    df = pd.DataFrame(rows)
-    df_1h = pd.DataFrame(rows + rows[:30])
-
-    monkeypatch.setattr(strategy, "_higher_timeframe_context_ok", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(strategy, "_select_liquidity_zone", lambda *_args, **_kwargs: {"price": 100.1, "count": 3, "latest_index": 10})
-    monkeypatch.setattr(strategy, "_recovery_candle_ok", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(strategy, "_confirmation_candle_ok", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(strategy, "_ema_reclaim_ok", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(strategy, "_nearest_barrier_price", lambda *_args, **_kwargs: 103.8)
-
-    result = strategy._evaluate_direction(df, df_1h, "LONG", strategy.FREE_PROFILE, current_market_price=100.4)
-
-    assert result is not None
-    payload, ranking = result
-    assert payload["send_mode"] == "market_on_close"
-    assert payload["entry_price"] == payload["entry_sent_price"]
-    assert payload["entry_price"] == round(100.4, 8)
-    assert payload["entry_price"] != payload["entry_model_price"]
-    assert payload["setup_stage"] == "closed_confirmed"
-    assert ranking[1] > 0
+    assert payload is not None
+    assert payload['send_mode'] == 'market_on_close'
+    assert payload['entry_price'] == round(100.1, 8)
+    assert payload['entry_sent_price'] == round(100.1, 8)
+    assert payload['entry_model_price'] == round(100.0, 8)
+    assert payload['setup_group'] == 'plus'
+    assert payload['setup_stage'] == 'closed_confirmed'
+    assert payload['tp1_progress_at_send_pct'] >= 0.0
