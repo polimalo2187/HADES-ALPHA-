@@ -121,3 +121,15 @@ def test_evaluate_direction_emits_numeric_component_breakdown(monkeypatch):
     assert payload["components"][0]["points"] is not None
     assert payload["raw_components"][0]["points"] is not None
     assert payload["normalized_components"][0]["points"] is not None
+
+
+def test_strategy_profiles_keep_strictness_order_after_rebalance():
+    assert strategy.SCORE_CALIBRATION_VERSION == "v7_liquidity_original_market_balanced"
+
+    assert strategy.PREMIUM_PROFILE["min_rel_volume"] > strategy.PLUS_PROFILE["min_rel_volume"] > strategy.FREE_PROFILE["min_rel_volume"]
+    assert strategy.PREMIUM_PROFILE["min_confirm_rel_volume"] > strategy.PLUS_PROFILE["min_confirm_rel_volume"] > strategy.FREE_PROFILE["min_confirm_rel_volume"]
+    assert strategy.PREMIUM_PROFILE["min_confirm_body_ratio"] > strategy.PLUS_PROFILE["min_confirm_body_ratio"] > strategy.FREE_PROFILE["min_confirm_body_ratio"]
+    assert strategy.PREMIUM_PROFILE["min_rr"] > strategy.PLUS_PROFILE["min_rr"] > strategy.FREE_PROFILE["min_rr"]
+    assert strategy.PREMIUM_PROFILE["min_barrier_rr"] > strategy.PLUS_PROFILE["min_barrier_rr"] > strategy.FREE_PROFILE["min_barrier_rr"]
+    assert strategy.PREMIUM_PROFILE["max_countertrend_atr"] < strategy.PLUS_PROFILE["max_countertrend_atr"] < strategy.FREE_PROFILE["max_countertrend_atr"]
+    assert strategy.PREMIUM_PROFILE["min_sweep_range_atr"] > strategy.PLUS_PROFILE["min_sweep_range_atr"] > strategy.FREE_PROFILE["min_sweep_range_atr"]
