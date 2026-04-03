@@ -27,7 +27,7 @@ MIN_HISTORY_BARS = max(LIQUIDITY_LOOKBACK + 8, ATR_PERIOD + VOLUME_PERIOD + 8)
 
 STRATEGY_NAME = "LIQUIDITY_SWEEP_REVERSAL"
 SCORE_CALIBRATION_VERSION = "v4_liquidity_live_entry"
-LIVE_CONFIRM_MIN_PROGRESS = 0.33  # ~5 minutos de una vela de 15m
+LIVE_CONFIRM_MIN_PROGRESS = 0.10  # permitir confirmación temprana sin esperar demasiado
 
 # =======================================
 # PERFILES POR PLAN
@@ -665,13 +665,13 @@ def _evaluate_direction(
     live_ready = _live_confirmation_ready(confirm_candle, sweep_candle, direction, profile)
     closed_ready = _confirmation_candle_ok(confirm_candle, sweep_candle, direction, profile)
     if confirm_progress < 0.99:
-        if not live_ready:
-            return None
-        setup_stage = "live_confirmed"
-    else:
         if not (live_ready or closed_ready):
             return None
-        setup_stage = "closed_confirmed" if closed_ready else "live_confirmed"
+        setup_stage = "live_confirmed" if live_ready else "early_structural_confirmed"
+    else:
+        if not closed_ready:
+            return None
+        setup_stage = "closed_confirmed"
 
     if not _ema_reclaim_ok(confirm_candle, direction, profile):
         return None
@@ -715,10 +715,16 @@ def _evaluate_direction(
         nearest_barrier=live_nearest_barrier,
         profile=profile,
     )
-    if not live_candidate:
-        return None
 
-    entry_price, trade_profiles, live_room_rr, live_barrier_rr = live_candidate
+    if live_candidate:
+        entry_price, trade_profiles, active_room_rr, active_barrier_rr = live_candidate
+        send_mode = "live_market"
+    else:
+        entry_price = model_entry
+        trade_profiles = _build_trade_profiles(model_entry, direction, stop_loss, room_rr)
+        active_room_rr = room_rr
+        active_barrier_rr = barrier_rr
+        send_mode = "structural"
 
     result = {
         "strategy_name": STRATEGY_NAME,
@@ -743,7 +749,7 @@ def _evaluate_direction(
         "score_profile": str(profile["name"]),
         "score_calibration": SCORE_CALIBRATION_VERSION,
         "entry_model": "liquidity_zone_offset_v1",
-        "send_mode": "live_market",
+        "send_mode": send_mode,
         "setup_stage": setup_stage,
         "tp1_progress_at_send_pct": 0.0,
         "r_progress_at_send": 0.0,
@@ -752,8 +758,8 @@ def _evaluate_direction(
 
     ranking = (
         int(zone["count"]),
-        round(live_room_rr, 4),
-        round(live_barrier_rr, 4),
+        round(active_room_rr, 4),
+        round(active_barrier_rr, 4),
         round(rel_volume, 4),
     )
     return result, ranking
