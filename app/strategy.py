@@ -9,7 +9,8 @@ import pandas as pd
 # CONFIGURACIÓN BASE — LIQUIDITY SWEEP REVERSAL
 # =======================================
 # Regla operativa acordada:
-# - filtros de estrategia idénticos a la versión original
+# - base estructural original conservada
+# - thresholds recalibrados ligeramente para mejorar frecuencia comercial
 # - confirmación por cierre de vela
 # - envío inmediato tras el cierre con precio real de mercado
 # - SL estructural intacto
@@ -25,7 +26,7 @@ PIVOT_WINDOW = 3
 MIN_HISTORY_BARS = max(LIQUIDITY_LOOKBACK + 8, ATR_PERIOD + VOLUME_PERIOD + 8)
 
 STRATEGY_NAME = "LIQUIDITY_SWEEP_REVERSAL"
-SCORE_CALIBRATION_VERSION = "v6_liquidity_original_close_market"
+SCORE_CALIBRATION_VERSION = "v7_liquidity_original_market_balanced"
 
 # =======================================
 # PERFILES POR PLAN
@@ -35,23 +36,23 @@ SCORE_CALIBRATION_VERSION = "v6_liquidity_original_close_market"
 PREMIUM_PROFILE = {
     "name": "premium",
     "score": 90.0,
-    "atr_pct_min": 0.0021,
-    "atr_pct_max": 0.0135,
+    "atr_pct_min": 0.0019,
+    "atr_pct_max": 0.0140,
     "liquidity_tolerance_atr": 0.22,
     "min_sweep_atr": 0.12,
-    "min_rel_volume": 1.15,
-    "min_confirm_rel_volume": 0.75,
+    "min_rel_volume": 1.08,
+    "min_confirm_rel_volume": 0.70,
     "min_wick_body_ratio": 1.25,
     "min_wick_range_ratio": 0.34,
-    "min_confirm_body_ratio": 0.22,
+    "min_confirm_body_ratio": 0.19,
     "entry_offset_atr": 0.06,
     "sl_buffer_atr": 0.11,
-    "min_rr": 1.35,
-    "min_barrier_rr": 0.85,
+    "min_rr": 1.30,
+    "min_barrier_rr": 0.80,
     "ema_reclaim_buffer_atr": 0.12,
-    "max_countertrend_atr": 0.42,
+    "max_countertrend_atr": 0.48,
     "min_pivots": 2,
-    "min_sweep_range_atr": 0.65,
+    "min_sweep_range_atr": 0.58,
     "max_sweep_range_atr": 2.80,
     "max_risk_pct": 0.0105,
     "components": [
@@ -70,23 +71,23 @@ PREMIUM_PROFILE = {
 PLUS_PROFILE = {
     "name": "plus",
     "score": 82.0,
-    "atr_pct_min": 0.0018,
-    "atr_pct_max": 0.0145,
+    "atr_pct_min": 0.0016,
+    "atr_pct_max": 0.0152,
     "liquidity_tolerance_atr": 0.27,
     "min_sweep_atr": 0.10,
-    "min_rel_volume": 1.00,
-    "min_confirm_rel_volume": 0.68,
+    "min_rel_volume": 0.95,
+    "min_confirm_rel_volume": 0.62,
     "min_wick_body_ratio": 1.00,
     "min_wick_range_ratio": 0.28,
-    "min_confirm_body_ratio": 0.17,
+    "min_confirm_body_ratio": 0.15,
     "entry_offset_atr": 0.08,
     "sl_buffer_atr": 0.13,
-    "min_rr": 1.25,
-    "min_barrier_rr": 0.75,
+    "min_rr": 1.20,
+    "min_barrier_rr": 0.70,
     "ema_reclaim_buffer_atr": 0.16,
-    "max_countertrend_atr": 0.56,
+    "max_countertrend_atr": 0.62,
     "min_pivots": 2,
-    "min_sweep_range_atr": 0.52,
+    "min_sweep_range_atr": 0.47,
     "max_sweep_range_atr": 3.10,
     "max_risk_pct": 0.0125,
     "components": [
@@ -105,23 +106,23 @@ PLUS_PROFILE = {
 FREE_PROFILE = {
     "name": "free",
     "score": 74.0,
-    "atr_pct_min": 0.0015,
-    "atr_pct_max": 0.0160,
+    "atr_pct_min": 0.0013,
+    "atr_pct_max": 0.0170,
     "liquidity_tolerance_atr": 0.33,
     "min_sweep_atr": 0.07,
-    "min_rel_volume": 0.90,
-    "min_confirm_rel_volume": 0.58,
+    "min_rel_volume": 0.85,
+    "min_confirm_rel_volume": 0.52,
     "min_wick_body_ratio": 0.82,
     "min_wick_range_ratio": 0.24,
-    "min_confirm_body_ratio": 0.12,
+    "min_confirm_body_ratio": 0.10,
     "entry_offset_atr": 0.09,
     "sl_buffer_atr": 0.15,
-    "min_rr": 1.15,
-    "min_barrier_rr": 0.68,
+    "min_rr": 1.10,
+    "min_barrier_rr": 0.64,
     "ema_reclaim_buffer_atr": 0.22,
-    "max_countertrend_atr": 0.68,
+    "max_countertrend_atr": 0.74,
     "min_pivots": 2,
-    "min_sweep_range_atr": 0.45,
+    "min_sweep_range_atr": 0.40,
     "max_sweep_range_atr": 3.40,
     "max_risk_pct": 0.0145,
     "components": [
