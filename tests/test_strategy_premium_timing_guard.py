@@ -21,11 +21,6 @@ def test_live_confirmation_ready_uses_time_progress_body_and_projected_volume():
     assert strategy._live_confirmation_ready(confirm, sweep, "LONG", strategy.PREMIUM_PROFILE) is True
 
 
-def test_reprice_candidate_keeps_structural_stop_and_revalidates_rr():
-    repriced = strategy._reprice_candidate(101.0, 99.8, "LONG", 103.2, 102.8, strategy.PLUS_PROFILE)
-    assert repriced is not None
-    entry_price, trade_profiles, room_rr, barrier_rr = repriced
-    assert round(entry_price, 4) == 101.0
-    assert trade_profiles["conservador"]["stop_loss"] == round(99.8, 6)
-    assert room_rr >= strategy.PLUS_PROFILE["min_rr"]
-    assert barrier_rr >= strategy.PLUS_PROFILE["min_barrier_rr"]
+def test_live_entry_candidate_rejects_price_that_breaks_rr_or_stop_side():
+    assert strategy._live_entry_candidate(99.7, 99.8, "LONG", 103.2, 102.8, strategy.PLUS_PROFILE) is None
+    assert strategy._live_entry_candidate(102.95, 99.8, "LONG", 103.2, 102.8, strategy.PLUS_PROFILE) is None
