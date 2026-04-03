@@ -36,7 +36,7 @@ FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "64"))
 
 MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT = float(os.getenv("MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT", "15"))
 MAX_CLOSE_MARKET_R_PROGRESS = float(os.getenv("MAX_CLOSE_MARKET_R_PROGRESS", "0.15"))
-SCORE_CALIBRATION_VERSION = "v6_liquidity_original_close_market"
+SCORE_CALIBRATION_VERSION = strategy_engine.SCORE_CALIBRATION_VERSION
 ENTRY_MODEL_NAME = "liquidity_zone_offset_v1"
 SETUP_STAGE_CLOSED_CONFIRMED = "closed_confirmed"
 
@@ -510,6 +510,9 @@ async def scan_market_async(bot: Bot):
             symbols = get_active_futures_symbols()
             candidates: List[Dict] = []
 
+            symbol_failures = 0
+            symbol_failure_samples: List[str] = []
+
             for symbol in symbols:
                 try:
                     df_1h = get_klines(symbol, "1h")
@@ -522,18 +525,32 @@ async def scan_market_async(bot: Bot):
 
                     await asyncio.sleep(0.05)
                 except Exception as e:
-                    logger.debug("⚠️ Error procesando %s: %s", symbol, e)
+                    symbol_failures += 1
+                    if len(symbol_failure_samples) < 5:
+                        symbol_failure_samples.append(f"{symbol}: {e}")
+                    logger.warning("⚠️ Error procesando %s: %s", symbol, e)
 
             if not candidates:
-                logger.info("📭 No hay oportunidades fuertes en este ciclo")
+                if symbol_failures:
+                    logger.warning(
+                        "📭 Sin oportunidades en este ciclo, pero hubo errores de scanner | cycle=%s symbols=%s failures=%s samples=%s",
+                        cycle_number,
+                        len(symbols),
+                        symbol_failures,
+                        symbol_failure_samples,
+                    )
+                else:
+                    logger.info("📭 No hay oportunidades fuertes en este ciclo")
                 heartbeat(
                     "scanner",
-                    status="ok",
+                    status="degraded" if symbol_failures else "ok",
                     details={
                         "cycle": cycle_number,
                         "symbols": len(symbols),
                         "candidates": 0,
                         "selected": 0,
+                        "symbol_failures": symbol_failures,
+                        "symbol_failure_samples": symbol_failure_samples,
                         "scan_interval_seconds": SCAN_INTERVAL_SECONDS,
                         "cycle_started_at": cycle_started_at.isoformat(),
                     },
@@ -612,7 +629,7 @@ async def scan_market_async(bot: Bot):
 
             heartbeat(
                 "scanner",
-                status="ok",
+                status="degraded" if symbol_failures else "ok",
                 details={
                     "cycle": cycle_number,
                     "symbols": len(symbols),
@@ -621,6 +638,8 @@ async def scan_market_async(bot: Bot):
                     "plus_candidates": len(plus_candidates),
                     "free_candidates": len(free_candidates),
                     "selected": selected_count,
+                    "symbol_failures": symbol_failures,
+                    "symbol_failure_samples": symbol_failure_samples,
                     "scan_interval_seconds": SCAN_INTERVAL_SECONDS,
                     "cycle_started_at": cycle_started_at.isoformat(),
                 },
