@@ -3141,12 +3141,17 @@ function scoreListsEqual(a, b) {
 
 function renderScoreBreakdown(items) {
   if (!items || !items.length) return '<div class="empty-state">Sin desglose disponible.</div>';
-  return `<div class="component-list">${items.map(item => `
-    <div class="component-row">
-      <span>${escapeHtml(item.label)}</span>
-      <span class="${Number(item.score || 0) >= 0 ? 'positive-text' : 'negative-text'}">${escapeHtml(formatNumber(item.score, 2))}</span>
-    </div>
-  `).join('')}</div>`;
+  return `<div class="component-list">${items.map(item => {
+    const hasNumericScore = item.score !== undefined && item.score !== null && item.score !== '';
+    const valueLabel = hasNumericScore ? formatNumber(item.score, 2) : (item.status === 'ok' ? 'OK' : '—');
+    const toneClass = hasNumericScore ? (Number(item.score || 0) >= 0 ? 'positive-text' : 'negative-text') : 'positive-text';
+    return `
+      <div class="component-row">
+        <span>${escapeHtml(item.label)}</span>
+        <span class="${toneClass}">${escapeHtml(valueLabel)}</span>
+      </div>
+    `;
+  }).join('')}</div>`;
 }
 
 function renderRadarDetailModal(payload) {
