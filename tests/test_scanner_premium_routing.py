@@ -56,3 +56,8 @@ def test_select_dispatchable_signal_skips_duplicate_and_uses_next_candidate(monk
     signal, base_signal = chosen
     assert signal["symbol"] == "BBBUSDT"
     assert base_signal["symbol"] == "BBBUSDT"
+
+
+def test_scanner_interval_default_is_20_seconds():
+    scanner = _load_scanner()
+    assert scanner.SCAN_INTERVAL_SECONDS == 20
