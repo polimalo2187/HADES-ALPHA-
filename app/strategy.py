@@ -25,7 +25,7 @@ PIVOT_WINDOW = 3
 MIN_HISTORY_BARS = max(LIQUIDITY_LOOKBACK + 8, ATR_PERIOD + VOLUME_PERIOD + 8)
 
 STRATEGY_NAME = "LIQUIDITY_SWEEP_REVERSAL"
-SCORE_CALIBRATION_VERSION = "v5_liquidity_close_market_entry"
+SCORE_CALIBRATION_VERSION = "v6_liquidity_original_close_market"
 
 # =======================================
 # PERFILES POR PLAN
