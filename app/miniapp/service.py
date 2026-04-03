@@ -1840,8 +1840,29 @@ def _human_component_label(raw_label: Any) -> str:
         "volume_quality": "Calidad de volumen",
         "entry_freshness": "Frescura de entrada",
         "profile_penalty": "Ajuste por perfil",
+        "liquidity_zone": "Liquidity Zone",
+        "minimum_sweep": "Minimum Sweep",
+        "recovery_close": "Recovery Close",
+        "relative_volume": "Relative Volume",
+        "confirmation_candle": "Confirmation Candle",
+        "ema_reclaim_filter": "Ema Reclaim Filter",
+        "htf_context": "HTF Context",
+        "barrier_room": "Barrier Room",
+        "rr_filter": "RR Filter",
     }
     return mapping.get(normalized, str(raw_label or "—").replace("_", " ").title())
+
+
+def _coerce_component_score(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except Exception:
+        return None
+    if parsed != parsed or parsed in {float("inf"), float("-inf")}:
+        return None
+    return round(parsed, 2)
 
 
 def _serialize_score_components(items: Any, *, limit: Optional[int] = None) -> list[Dict[str, Any]]:
@@ -1858,14 +1879,14 @@ def _serialize_score_components(items: Any, *, limit: Optional[int] = None) -> l
         elif isinstance(raw_item, dict):
             label = raw_item.get("label") or raw_item.get("name")
             points = raw_item.get("points")
+            if points is None:
+                for candidate_key in ("score", "value", "raw", "normalized"):
+                    if raw_item.get(candidate_key) is not None:
+                        points = raw_item.get(candidate_key)
+                        break
         else:
             label = raw_item
-        score_value = None
-        if points is not None:
-            try:
-                score_value = round(float(points), 2)
-            except Exception:
-                score_value = None
+        score_value = _coerce_component_score(points)
         has_numeric_score = score_value is not None
         row = {
             "label": _human_component_label(label),
