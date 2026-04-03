@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, List, Optional, Tuple
 
@@ -9,12 +8,12 @@ import pandas as pd
 # =======================================
 # CONFIGURACIÓN BASE — LIQUIDITY SWEEP REVERSAL
 # =======================================
-# Regla operativa actual:
-# - conservar la estrategia base lo más fiel posible al archivo original
-# - no endurecer filtros fuera de esa base
-# - resolver la tardanza desde la capa de ejecución
-# - confirmar en vivo antes del cierre cuando sea posible
-# - enviar con precio vivo, SL estructural y RR revalidado
+# Regla operativa acordada:
+# - filtros de estrategia idénticos a la versión original
+# - confirmación por cierre de vela
+# - envío inmediato tras el cierre con precio real de mercado
+# - SL estructural intacto
+# - TPs recalculados desde el precio real de envío
 # =======================================
 
 ATR_PERIOD = 14
@@ -26,8 +25,7 @@ PIVOT_WINDOW = 3
 MIN_HISTORY_BARS = max(LIQUIDITY_LOOKBACK + 8, ATR_PERIOD + VOLUME_PERIOD + 8)
 
 STRATEGY_NAME = "LIQUIDITY_SWEEP_REVERSAL"
-SCORE_CALIBRATION_VERSION = "v4_liquidity_live_entry"
-LIVE_CONFIRM_MIN_PROGRESS = 0.10  # permitir confirmación temprana sin esperar demasiado
+SCORE_CALIBRATION_VERSION = "v5_liquidity_close_market_entry"
 
 # =======================================
 # PERFILES POR PLAN
@@ -169,7 +167,6 @@ TRADING_PROFILES = {
 # INDICADORES Y HELPERS DE VELA
 # =======================================
 
-
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
@@ -202,13 +199,11 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-
 def _normalize_price(value: float, decimals: int = 8) -> float:
     if value is None:
         return 0.0
     quant = Decimal("1").scaleb(-decimals)
     return float(Decimal(str(float(value))).quantize(quant, rounding=ROUND_HALF_UP))
-
 
 
 def _find_pivots(series: pd.Series, mode: str, window: int) -> List[Tuple[int, float]]:
@@ -231,7 +226,6 @@ def _find_pivots(series: pd.Series, mode: str, window: int) -> List[Tuple[int, f
                 pivots.append((idx, center))
 
     return pivots
-
 
 
 def _cluster_pivots(pivots: List[Tuple[int, float]], tolerance: float) -> List[Dict]:
@@ -262,7 +256,6 @@ def _cluster_pivots(pivots: List[Tuple[int, float]], tolerance: float) -> List[D
         zone["latest_index"] = max(zone["indices"])
 
     return zones
-
 
 
 def _select_liquidity_zone(
@@ -324,7 +317,6 @@ def _select_liquidity_zone(
     return candidates[0]
 
 
-
 def _recovery_candle_ok(
     sweep_candle: pd.Series,
     direction: str,
@@ -350,30 +342,6 @@ def _recovery_candle_ok(
         return False
 
     return True
-
-
-
-def _current_candle_progress(candle: pd.Series) -> float:
-    open_time = candle.get("open_time")
-    close_time = candle.get("close_time")
-    if open_time is None or close_time is None:
-        return 1.0
-    try:
-        open_dt = pd.to_datetime(open_time, utc=True).to_pydatetime()
-        close_dt = pd.to_datetime(close_time, utc=True).to_pydatetime()
-        total = max((close_dt - open_dt).total_seconds(), 1.0)
-        elapsed = (datetime.now(timezone.utc) - open_dt).total_seconds()
-        return max(0.0, min(1.0, elapsed / total))
-    except Exception:
-        return 1.0
-
-
-
-def _projected_rel_volume(confirm_candle: pd.Series) -> float:
-    rel_volume = float(confirm_candle.get("rel_volume", 0.0) or 0.0)
-    progress = max(_current_candle_progress(confirm_candle), 0.05)
-    return rel_volume / progress
-
 
 
 def _confirmation_candle_ok(confirm_candle: pd.Series, sweep_candle: pd.Series, direction: str, profile: Dict) -> bool:
@@ -404,40 +372,6 @@ def _confirmation_candle_ok(confirm_candle: pd.Series, sweep_candle: pd.Series, 
     return bullish_close and follow_through
 
 
-
-def _live_confirmation_ready(confirm_candle: pd.Series, sweep_candle: pd.Series, direction: str, profile: Dict) -> bool:
-    progress = _current_candle_progress(confirm_candle)
-    if progress < LIVE_CONFIRM_MIN_PROGRESS:
-        return False
-
-    body_ratio = float(confirm_candle.get("body_ratio", 0.0) or 0.0)
-    projected_rel_volume = _projected_rel_volume(confirm_candle)
-    min_body_ratio = float(profile["min_confirm_body_ratio"])
-    min_rel_volume = float(profile["min_confirm_rel_volume"])
-
-    body_ok = body_ratio >= min_body_ratio
-    hybrid_ok = projected_rel_volume >= min_rel_volume and body_ratio >= max(0.10, min_body_ratio * 0.70)
-
-    if not (body_ok or hybrid_ok):
-        return False
-
-    if direction == "SHORT":
-        bearish_close = float(confirm_candle["close"]) < float(confirm_candle["open"])
-        follow_through = (
-            float(confirm_candle["close"]) <= float(sweep_candle["close"])
-            or float(confirm_candle["low"]) < float(sweep_candle["low"])
-        )
-        return bearish_close and follow_through
-
-    bullish_close = float(confirm_candle["close"]) > float(confirm_candle["open"])
-    follow_through = (
-        float(confirm_candle["close"]) >= float(sweep_candle["close"])
-        or float(confirm_candle["high"]) > float(sweep_candle["high"])
-    )
-    return bullish_close and follow_through
-
-
-
 def _ema_reclaim_ok(confirm_candle: pd.Series, direction: str, profile: Dict) -> bool:
     atr = max(float(confirm_candle["atr"]), 1e-9)
     buffer = atr * float(profile["ema_reclaim_buffer_atr"])
@@ -446,7 +380,6 @@ def _ema_reclaim_ok(confirm_candle: pd.Series, direction: str, profile: Dict) ->
     if direction == "LONG":
         return float(confirm_candle["close"]) >= (ema20 - buffer)
     return float(confirm_candle["close"]) <= (ema20 + buffer)
-
 
 
 def _higher_timeframe_context_ok(df_1h: pd.DataFrame, direction: str, profile: Dict) -> bool:
@@ -486,7 +419,6 @@ def _higher_timeframe_context_ok(df_1h: pd.DataFrame, direction: str, profile: D
     return True
 
 
-
 def _room_to_target(entry_price: float, stop_loss: float, structure_target: float, direction: str) -> float:
     risk = abs(stop_loss - entry_price)
     if risk <= 0:
@@ -498,7 +430,6 @@ def _room_to_target(entry_price: float, stop_loss: float, structure_target: floa
         room = structure_target - entry_price
 
     return max(0.0, room / risk)
-
 
 
 def _nearest_barrier_price(
@@ -543,12 +474,10 @@ def _nearest_barrier_price(
     return max(candidates) if candidates else None
 
 
-
 def _tp_from_rr(entry_price: float, risk: float, rr: float, direction: str) -> float:
     if direction == "LONG":
         return entry_price + (risk * rr)
     return entry_price - (risk * rr)
-
 
 
 def _build_trade_profiles(
@@ -581,8 +510,16 @@ def _build_trade_profiles(
     return profiles
 
 
+def _closed_15m_frame(df_15m: pd.DataFrame) -> pd.DataFrame:
+    if df_15m.empty or "close_time" not in df_15m.columns:
+        return df_15m.copy()
 
-def _live_entry_candidate(
+    now_utc = pd.Timestamp.now(tz="UTC")
+    closed = df_15m[df_15m["close_time"] <= now_utc].copy()
+    return closed if not closed.empty else df_15m.iloc[:-1].copy()
+
+
+def _market_entry_candidate(
     current_price: float,
     stop_loss: float,
     direction: str,
@@ -620,6 +557,27 @@ def _live_entry_candidate(
     trade_profiles = _build_trade_profiles(entry_price, direction, stop_loss, room_rr)
     return entry_price, trade_profiles, room_rr, barrier_rr
 
+
+def _progress_from_model_to_tp1_pct(model_entry: float, model_tp1: float, sent_entry: float, direction: str) -> float:
+    denominator = abs(model_tp1 - model_entry)
+    if denominator <= 1e-9:
+        return 0.0
+    if direction == "LONG":
+        moved = max(0.0, sent_entry - model_entry)
+    else:
+        moved = max(0.0, model_entry - sent_entry)
+    return round((moved / denominator) * 100.0, 2)
+
+
+def _r_progress_from_model_entry(model_entry: float, stop_loss: float, sent_entry: float, direction: str) -> float:
+    denominator = abs(model_entry - stop_loss)
+    if denominator <= 1e-9:
+        return 0.0
+    if direction == "LONG":
+        moved = sent_entry - model_entry
+    else:
+        moved = model_entry - sent_entry
+    return round(moved / denominator, 4)
 
 
 def _evaluate_direction(
@@ -661,17 +619,8 @@ def _evaluate_direction(
     if not _recovery_candle_ok(sweep_candle, direction, profile, zone_price):
         return None
 
-    confirm_progress = _current_candle_progress(confirm_candle)
-    live_ready = _live_confirmation_ready(confirm_candle, sweep_candle, direction, profile)
-    closed_ready = _confirmation_candle_ok(confirm_candle, sweep_candle, direction, profile)
-    if confirm_progress < 0.99:
-        if not (live_ready or closed_ready):
-            return None
-        setup_stage = "live_confirmed" if live_ready else "early_structural_confirmed"
-    else:
-        if not closed_ready:
-            return None
-        setup_stage = "closed_confirmed"
+    if not _confirmation_candle_ok(confirm_candle, sweep_candle, direction, profile):
+        return None
 
     if not _ema_reclaim_ok(confirm_candle, direction, profile):
         return None
@@ -699,32 +648,28 @@ def _evaluate_direction(
         return None
 
     model_nearest_barrier = _nearest_barrier_price(historical, df_1h, model_entry, direction)
-    barrier_rr = room_rr
+    model_barrier_rr = room_rr
     if model_nearest_barrier is not None:
-        barrier_rr = _room_to_target(model_entry, stop_loss, model_nearest_barrier, direction)
-        if barrier_rr < float(profile["min_barrier_rr"]):
+        model_barrier_rr = _room_to_target(model_entry, stop_loss, model_nearest_barrier, direction)
+        if model_barrier_rr < float(profile["min_barrier_rr"]):
             return None
 
-    current_price = float(current_market_price) if current_market_price is not None else float(confirm_candle["close"])
-    live_nearest_barrier = _nearest_barrier_price(historical, df_1h, current_price, direction)
-    live_candidate = _live_entry_candidate(
-        current_price=current_price,
+    market_price = float(current_market_price) if current_market_price is not None else float(confirm_candle["close"])
+    market_nearest_barrier = _nearest_barrier_price(historical, df_1h, market_price, direction)
+    market_candidate = _market_entry_candidate(
+        current_price=market_price,
         stop_loss=stop_loss,
         direction=direction,
         structure_target=structure_target,
-        nearest_barrier=live_nearest_barrier,
+        nearest_barrier=market_nearest_barrier,
         profile=profile,
     )
+    if market_candidate is None:
+        return None
 
-    if live_candidate:
-        entry_price, trade_profiles, active_room_rr, active_barrier_rr = live_candidate
-        send_mode = "live_market"
-    else:
-        entry_price = model_entry
-        trade_profiles = _build_trade_profiles(model_entry, direction, stop_loss, room_rr)
-        active_room_rr = room_rr
-        active_barrier_rr = barrier_rr
-        send_mode = "structural"
+    entry_price, trade_profiles, active_room_rr, active_barrier_rr = market_candidate
+    model_trade_profiles = _build_trade_profiles(model_entry, direction, stop_loss, room_rr)
+    model_tp1 = float(model_trade_profiles["conservador"]["take_profits"][0])
 
     result = {
         "strategy_name": STRATEGY_NAME,
@@ -749,11 +694,10 @@ def _evaluate_direction(
         "score_profile": str(profile["name"]),
         "score_calibration": SCORE_CALIBRATION_VERSION,
         "entry_model": "liquidity_zone_offset_v1",
-        "send_mode": send_mode,
-        "setup_stage": setup_stage,
-        "tp1_progress_at_send_pct": 0.0,
-        "r_progress_at_send": 0.0,
-        "live_confirm_progress": round(confirm_progress, 4),
+        "send_mode": "market_on_close",
+        "setup_stage": "closed_confirmed",
+        "tp1_progress_at_send_pct": _progress_from_model_to_tp1_pct(model_entry, model_tp1, entry_price, direction),
+        "r_progress_at_send": _r_progress_from_model_entry(model_entry, stop_loss, entry_price, direction),
     }
 
     ranking = (
@@ -763,7 +707,6 @@ def _evaluate_direction(
         round(rel_volume, 4),
     )
     return result, ranking
-
 
 
 def _evaluate_profile(
@@ -792,16 +735,16 @@ def _evaluate_profile(
 # ESTRATEGIA PRINCIPAL
 # =======================================
 
-
 def liquidity_sweep_reversal_strategy(
     df_1h: pd.DataFrame,
     df_15m: pd.DataFrame,
     df_5m: Optional[pd.DataFrame] = None,
 ) -> Optional[Dict]:
-    if len(df_15m) < MIN_HISTORY_BARS or len(df_1h) < 60:
+    closed_15m = _closed_15m_frame(df_15m)
+    if len(closed_15m) < MIN_HISTORY_BARS or len(df_1h) < 60:
         return None
 
-    df = add_indicators(df_15m)
+    df = add_indicators(closed_15m)
     if len(df) < MIN_HISTORY_BARS:
         return None
 
@@ -829,7 +772,6 @@ def liquidity_sweep_reversal_strategy(
 # Internamente ya no usa MTF como estrategia, pero sí usa 1H
 # como filtro de contexto y 15M como timeframe operativo.
 # =======================================
-
 
 def mtf_strategy(
     df_1h: pd.DataFrame,
