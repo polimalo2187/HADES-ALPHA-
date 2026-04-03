@@ -56,6 +56,10 @@ from app.services.admin_service import (
 
 _RADAR_SCAN_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
 _RADAR_SCAN_TTL_SECONDS = 120
+_RADAR_SYMBOL_PAYLOAD_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
+_RADAR_SYMBOL_PAYLOAD_TTL_SECONDS = 60
+_RADAR_VIEW_CACHE: Dict[int, tuple[float, Dict[str, Any], List[Dict[str, Any]], Dict[str, Any]]] = {}
+_RADAR_VIEW_TTL_SECONDS = 90
 
 
 def _cache_get_radar_scan(symbol: str) -> Optional[Dict[str, Any]]:
@@ -72,6 +76,37 @@ def _cache_get_radar_scan(symbol: str) -> Optional[Dict[str, Any]]:
 
 def _cache_set_radar_scan(symbol: str, payload: Dict[str, Any]) -> None:
     _RADAR_SCAN_CACHE[str(symbol or '').upper().strip()] = (time.time() + _RADAR_SCAN_TTL_SECONDS, dict(payload))
+
+def _cache_get_radar_symbol_payload(user_id: int, symbol: str) -> Optional[Dict[str, Any]]:
+    key = f"{int(user_id)}:{str(symbol or '').upper().strip()}"
+    item = _RADAR_SYMBOL_PAYLOAD_CACHE.get(key)
+    if not item:
+        return None
+    expires_at, payload = item
+    if time.time() >= expires_at:
+        _RADAR_SYMBOL_PAYLOAD_CACHE.pop(key, None)
+        return None
+    return dict(payload)
+
+
+def _cache_set_radar_symbol_payload(user_id: int, symbol: str, payload: Dict[str, Any]) -> None:
+    key = f"{int(user_id)}:{str(symbol or '').upper().strip()}"
+    _RADAR_SYMBOL_PAYLOAD_CACHE[key] = (time.time() + _RADAR_SYMBOL_PAYLOAD_TTL_SECONDS, dict(payload))
+
+
+def _cache_set_radar_view(user_id: int, snapshot: Dict[str, Any], items: List[Dict[str, Any]], summary: Dict[str, Any]) -> None:
+    _RADAR_VIEW_CACHE[int(user_id)] = (time.time() + _RADAR_VIEW_TTL_SECONDS, dict(snapshot), [dict(item) for item in items], dict(summary))
+
+
+def _cache_get_radar_view(user_id: int) -> Optional[tuple[Dict[str, Any], List[Dict[str, Any]], Dict[str, Any]]]:
+    item = _RADAR_VIEW_CACHE.get(int(user_id))
+    if not item:
+        return None
+    expires_at, snapshot, items, summary = item
+    if time.time() >= expires_at:
+        _RADAR_VIEW_CACHE.pop(int(user_id), None)
+        return None
+    return dict(snapshot), [dict(entry) for entry in items], dict(summary)
 
 def _iso(value: Any) -> Optional[str]:
     if isinstance(value, datetime):
@@ -1617,6 +1652,7 @@ def _serialize_radar(
         "aligned_now": sum(1 for item in items if item.get("alignment_label") in {"A favor", "Con flujo"}),
         "sort_default": "ranking",
     }
+    _cache_set_radar_view(user_id, market_snapshot or {}, items, summary)
     return items, summary
 
 
@@ -1849,7 +1885,8 @@ def _serialize_score_components(items: Any, *, limit: Optional[int] = None) -> l
         row = {
             "label": _human_component_label(label),
             "score": score_value,
-            "tone": "positive" if (score_value or 0) >= 0 else "negative",
+            "status": "ok" if score_value is None else None,
+            "tone": "positive" if score_value is None or (score_value or 0) >= 0 else "negative",
         }
         rows.append(row)
     if limit is not None:
@@ -1884,13 +1921,12 @@ def _build_radar_scanner_snapshot(symbol: str, *, expected_direction: Optional[s
         return cached
 
     try:
-        from app.scanner import get_klines
-        from app.strategy import mtf_strategy
+        from app.scanner import build_symbol_candidate, get_klines
 
         df_1h = get_klines(symbol_value, "1h")
         df_15m = get_klines(symbol_value, "15m")
         df_5m = get_klines(symbol_value, "5m")
-        result = mtf_strategy(df_1h=df_1h, df_15m=df_15m, df_5m=df_5m)
+        result = build_symbol_candidate(symbol_value, df_1h=df_1h, df_15m=df_15m, df_5m=df_5m)
     except Exception:
         payload = {
             "status": "unavailable",
@@ -1963,15 +1999,21 @@ def build_radar_symbol_payload(user: Dict[str, Any], symbol: str) -> Optional[Di
     if not symbol_value:
         return None
 
+    user_id = int(user.get("user_id") or 0)
+    cached_payload = _cache_get_radar_symbol_payload(user_id, symbol_value)
+    if cached_payload is not None:
+        return cached_payload
+
     status = plan_status(user)
     effective_plan = normalize_plan(status.get("plan") or user.get("plan"))
-    snapshot = get_market_state_snapshot() or {}
-    radar_items, radar_summary = _serialize_radar(
-        int(user.get("user_id") or 0),
-        limit=24,
-        fetch_limit=80,
-        market_snapshot=snapshot,
-    )
+
+    cached_view = _cache_get_radar_view(user_id)
+    if cached_view is not None:
+        snapshot, radar_items, _radar_summary = cached_view
+    else:
+        snapshot = get_market_state_snapshot() or {}
+        radar_items, _radar_summary = _serialize_radar(user_id, limit=24, fetch_limit=40, market_snapshot=snapshot)
+
     radar_item = next((item for item in radar_items if str(item.get("symbol") or '').upper() == symbol_value), None)
     if not radar_item:
         return None
@@ -1997,7 +2039,7 @@ def build_radar_symbol_payload(user: Dict[str, Any], symbol: str) -> Optional[Di
     else:
         tactical_checks.append("El scanner no pudo evaluarse ahora mismo; decide con prudencia hasta refrescar.")
 
-    return {
+    payload = {
         "symbol": symbol_value,
         "viewer_plan": effective_plan,
         "market_context": {
@@ -2007,23 +2049,20 @@ def build_radar_symbol_payload(user: Dict[str, Any], symbol: str) -> Optional[Di
             "environment": snapshot.get("environment"),
             "recommendation": snapshot.get("recommendation"),
         },
-        "summary": radar_summary,
         "radar": radar_item,
         "scanner": scanner,
         "signal_context": {
-            "has_active_signal": bool(radar_item.get("has_active_signal")),
             "label": radar_item.get("signal_context_label"),
             "signal_id": signal_id,
+            "signal": signal_context,
+            "has_active_signal": bool(radar_item.get("has_active_signal")),
             "signal_detail_available": signal_detail_available,
-            "signal": signal_context or None,
         },
         "tactical_checks": tactical_checks,
+        "generated_at": datetime.utcnow().isoformat(),
     }
-
-
-def _signal_visibility_rank(plan: Any) -> int:
-    value = normalize_plan(plan)
-    return {"free": 0, "plus": 1, "premium": 2}.get(value, 0)
+    _cache_set_radar_symbol_payload(user_id, symbol_value, payload)
+    return payload
 
 
 def build_signal_detail_payload(user: Dict[str, Any], signal_id: str, *, profile_name: str = "moderado") -> Optional[Dict[str, Any]]:
