@@ -2,13 +2,39 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from statistics import median
+import threading
+import time
 from typing import Any, Dict, List, Tuple
 
 from app.binance_api import get_futures_24h_tickers, get_open_interest, get_premium_index
+from app.services.market_data_service import get_funding_rate_pct_map, get_open_interest_map
+
+_MARKET_STATE_CACHE_TTL_SECONDS = 20
+_MARKET_STATE_LOCK = threading.Lock()
+_MARKET_STATE_CACHE: tuple[float, Dict[str, Any]] | None = None
 
 
 def _now_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _get_cached_market_state() -> Dict[str, Any] | None:
+    global _MARKET_STATE_CACHE
+    with _MARKET_STATE_LOCK:
+        item = _MARKET_STATE_CACHE
+        if not item:
+            return None
+        expires_at, payload = item
+        if time.time() >= expires_at:
+            _MARKET_STATE_CACHE = None
+            return None
+        return dict(payload)
+
+
+def _set_cached_market_state(payload: Dict[str, Any]) -> None:
+    global _MARKET_STATE_CACHE
+    with _MARKET_STATE_LOCK:
+        _MARKET_STATE_CACHE = (time.time() + _MARKET_STATE_CACHE_TTL_SECONDS, dict(payload))
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -102,13 +128,26 @@ def _classify_environment(bias: str, regime: str, volatility: str, participation
     return "Mixto", "Opera selectivo: prioriza estructura limpia y evita perseguir precio."
 
 
-def _major_symbol_block(symbol: str, rows_by_symbol: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+def _major_symbol_block(
+    symbol: str,
+    rows_by_symbol: Dict[str, Dict[str, Any]],
+    *,
+    funding_rate_map: Dict[str, float] | None = None,
+    open_interest_map: Dict[str, float] | None = None,
+) -> Dict[str, Any]:
     row = rows_by_symbol.get(symbol, {"symbol": symbol, "change": 0.0, "quote_volume": 0.0})
-    premium = get_premium_index(symbol) or {}
-    oi = get_open_interest(symbol) or {}
+    funding_rate_map = funding_rate_map or {}
+    open_interest_map = open_interest_map or {}
 
-    funding_rate = _safe_float(premium.get("lastFundingRate")) * 100.0
-    open_interest = _safe_float(oi.get("openInterest"))
+    funding_rate = _safe_float(funding_rate_map.get(symbol))
+    open_interest = _safe_float(open_interest_map.get(symbol))
+
+    if symbol not in funding_rate_map:
+        premium = get_premium_index(symbol) or {}
+        funding_rate = _safe_float(premium.get("lastFundingRate")) * 100.0
+    if symbol not in open_interest_map:
+        oi = get_open_interest(symbol) or {}
+        open_interest = _safe_float(oi.get("openInterest"))
 
     return {
         "symbol": symbol,
@@ -119,7 +158,12 @@ def _major_symbol_block(symbol: str, rows_by_symbol: Dict[str, Dict[str, Any]]) 
     }
 
 
-def get_market_state_snapshot() -> Dict[str, Any] | None:
+def get_market_state_snapshot(*, force_refresh: bool = False) -> Dict[str, Any] | None:
+    if not force_refresh:
+        cached = _get_cached_market_state()
+        if cached is not None:
+            return cached
+
     raw = get_futures_24h_tickers()
     if not raw:
         return None
@@ -151,22 +195,22 @@ def get_market_state_snapshot() -> Dict[str, Any] | None:
     top_losers = sorted(parsed, key=lambda x: x["change"])[:4]
     top_volume = sorted(parsed, key=lambda x: x["quote_volume"], reverse=True)[:5]
 
-    oi_rows = []
-    for row in top_volume[:12]:
-        try:
-            oi_data = get_open_interest(row["symbol"]) or {}
-            oi_value = _safe_float(oi_data.get("openInterest"))
-        except Exception:
-            oi_value = 0.0
-        oi_rows.append({
+    detail_symbols = ["BTCUSDT", "ETHUSDT", *[row["symbol"] for row in top_volume[:8]]]
+    funding_rate_map = get_funding_rate_pct_map(detail_symbols, premium_index_fn=get_premium_index)
+    open_interest_map = get_open_interest_map(detail_symbols, open_interest_fn=get_open_interest)
+
+    oi_rows = [
+        {
             "symbol": row["symbol"],
-            "open_interest": oi_value,
+            "open_interest": _safe_float(open_interest_map.get(row["symbol"])),
             "change": row["change"],
-        })
+        }
+        for row in top_volume[:8]
+    ]
     top_open_interest = sorted(oi_rows, key=lambda x: x["open_interest"], reverse=True)[:4]
 
-    btc = _major_symbol_block("BTCUSDT", rows_by_symbol)
-    eth = _major_symbol_block("ETHUSDT", rows_by_symbol)
+    btc = _major_symbol_block("BTCUSDT", rows_by_symbol, funding_rate_map=funding_rate_map, open_interest_map=open_interest_map)
+    eth = _major_symbol_block("ETHUSDT", rows_by_symbol, funding_rate_map=funding_rate_map, open_interest_map=open_interest_map)
 
     bias, preferred_side = _classify_bias(adv_ratio, avg_change, btc["change"], eth["change"])
     regime = _classify_regime(adv_ratio, median_abs_change, top_abs_change)
@@ -174,7 +218,7 @@ def get_market_state_snapshot() -> Dict[str, Any] | None:
     participation = _classify_participation(active_ratio)
     environment, recommendation = _classify_environment(bias, regime, volatility, participation)
 
-    return {
+    payload = {
         "time": _now_utc(),
         "universe": universe,
         "advancers": advancers,
@@ -199,6 +243,8 @@ def get_market_state_snapshot() -> Dict[str, Any] | None:
         "top_volume": top_volume,
         "top_open_interest": top_open_interest,
     }
+    _set_cached_market_state(payload)
+    return payload
 
 
 def format_volume(value: float) -> str:
