@@ -38,3 +38,21 @@ def test_scanner_routes_only_native_profile_candidates():
 
     assert scanner._qualifies_for_free({"setup_group": "free", "raw_score": 74.0}) is True
     assert scanner._qualifies_for_free({"setup_group": "plus", "raw_score": 74.0}) is False
+
+
+
+def test_select_dispatchable_signal_skips_duplicate_and_uses_next_candidate(monkeypatch):
+    scanner = _load_scanner()
+
+    duplicate = {"symbol": "AAAUSDT", "direction": "LONG", "entry_price": 1.0, "stop_loss": 0.9, "take_profits": [1.1], "timeframes": ["15M"], "raw_score": 90.0, "normalized_score": 90.0, "setup_group": "premium", "score_profile": "premium", "score_calibration": "v1"}
+    fallback = {"symbol": "BBBUSDT", "direction": "LONG", "entry_price": 2.0, "stop_loss": 1.8, "take_profits": [2.2], "timeframes": ["15M"], "raw_score": 90.0, "normalized_score": 90.0, "setup_group": "premium", "score_profile": "premium", "score_calibration": "v1"}
+
+    monkeypatch.setattr(scanner, "recent_duplicate_exists", lambda symbol, *_args: symbol == "AAAUSDT")
+    monkeypatch.setattr(scanner, "create_base_signal", lambda **kwargs: {"symbol": kwargs["symbol"], "visibility": kwargs["visibility"]})
+
+    chosen = scanner._select_dispatchable_signal([duplicate, fallback], "premium", set())
+
+    assert chosen is not None
+    signal, base_signal = chosen
+    assert signal["symbol"] == "BBBUSDT"
+    assert base_signal["symbol"] == "BBBUSDT"
