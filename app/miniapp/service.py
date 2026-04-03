@@ -1866,10 +1866,14 @@ def _serialize_score_components(items: Any, *, limit: Optional[int] = None) -> l
                 score_value = round(float(points), 2)
             except Exception:
                 score_value = None
+        has_numeric_score = score_value is not None
         row = {
             "label": _human_component_label(label),
             "score": score_value,
             "tone": "positive" if (score_value or 0) >= 0 else "negative",
+            "status": "passed" if not has_numeric_score else ("positive" if (score_value or 0) >= 0 else "negative"),
+            "status_label": "OK" if not has_numeric_score else None,
+            "has_numeric_score": has_numeric_score,
         }
         rows.append(row)
     if limit is not None:
