@@ -25,7 +25,7 @@ PIVOT_WINDOW = 3
 MIN_HISTORY_BARS = max(LIQUIDITY_LOOKBACK + 8, ATR_PERIOD + VOLUME_PERIOD + 8)
 
 STRATEGY_NAME = "LIQUIDITY_SWEEP_REVERSAL"
-SCORE_CALIBRATION_VERSION = "v6_liquidity_close_market_entry_softened"
+SCORE_CALIBRATION_VERSION = "v5_liquidity_close_market_entry"
 
 # =======================================
 # PERFILES POR PLAN
@@ -36,24 +36,24 @@ PREMIUM_PROFILE = {
     "name": "premium",
     "score": 90.0,
     "atr_pct_min": 0.0021,
-    "atr_pct_max": 0.0142,
-    "liquidity_tolerance_atr": 0.24,
-    "min_sweep_atr": 0.10,
-    "min_rel_volume": 1.05,
-    "min_confirm_rel_volume": 0.68,
-    "min_wick_body_ratio": 1.12,
-    "min_wick_range_ratio": 0.30,
-    "min_confirm_body_ratio": 0.19,
+    "atr_pct_max": 0.0135,
+    "liquidity_tolerance_atr": 0.22,
+    "min_sweep_atr": 0.12,
+    "min_rel_volume": 1.15,
+    "min_confirm_rel_volume": 0.75,
+    "min_wick_body_ratio": 1.25,
+    "min_wick_range_ratio": 0.34,
+    "min_confirm_body_ratio": 0.22,
     "entry_offset_atr": 0.06,
     "sl_buffer_atr": 0.11,
-    "min_rr": 1.25,
-    "min_barrier_rr": 0.76,
+    "min_rr": 1.35,
+    "min_barrier_rr": 0.85,
     "ema_reclaim_buffer_atr": 0.12,
-    "max_countertrend_atr": 0.50,
+    "max_countertrend_atr": 0.42,
     "min_pivots": 2,
-    "min_sweep_range_atr": 0.58,
-    "max_sweep_range_atr": 3.05,
-    "max_risk_pct": 0.0115,
+    "min_sweep_range_atr": 0.65,
+    "max_sweep_range_atr": 2.80,
+    "max_risk_pct": 0.0105,
     "components": [
         "liquidity_zone",
         "minimum_sweep",
@@ -71,24 +71,24 @@ PLUS_PROFILE = {
     "name": "plus",
     "score": 82.0,
     "atr_pct_min": 0.0018,
-    "atr_pct_max": 0.0155,
-    "liquidity_tolerance_atr": 0.30,
-    "min_sweep_atr": 0.085,
-    "min_rel_volume": 0.93,
-    "min_confirm_rel_volume": 0.62,
-    "min_wick_body_ratio": 0.90,
-    "min_wick_range_ratio": 0.24,
-    "min_confirm_body_ratio": 0.145,
+    "atr_pct_max": 0.0145,
+    "liquidity_tolerance_atr": 0.27,
+    "min_sweep_atr": 0.10,
+    "min_rel_volume": 1.00,
+    "min_confirm_rel_volume": 0.68,
+    "min_wick_body_ratio": 1.00,
+    "min_wick_range_ratio": 0.28,
+    "min_confirm_body_ratio": 0.17,
     "entry_offset_atr": 0.08,
     "sl_buffer_atr": 0.13,
-    "min_rr": 1.18,
-    "min_barrier_rr": 0.68,
+    "min_rr": 1.25,
+    "min_barrier_rr": 0.75,
     "ema_reclaim_buffer_atr": 0.16,
-    "max_countertrend_atr": 0.64,
+    "max_countertrend_atr": 0.56,
     "min_pivots": 2,
-    "min_sweep_range_atr": 0.46,
-    "max_sweep_range_atr": 3.35,
-    "max_risk_pct": 0.0132,
+    "min_sweep_range_atr": 0.52,
+    "max_sweep_range_atr": 3.10,
+    "max_risk_pct": 0.0125,
     "components": [
         "liquidity_zone",
         "minimum_sweep",
@@ -106,24 +106,24 @@ FREE_PROFILE = {
     "name": "free",
     "score": 74.0,
     "atr_pct_min": 0.0015,
-    "atr_pct_max": 0.0170,
-    "liquidity_tolerance_atr": 0.36,
-    "min_sweep_atr": 0.06,
-    "min_rel_volume": 0.84,
-    "min_confirm_rel_volume": 0.52,
-    "min_wick_body_ratio": 0.74,
-    "min_wick_range_ratio": 0.20,
-    "min_confirm_body_ratio": 0.10,
+    "atr_pct_max": 0.0160,
+    "liquidity_tolerance_atr": 0.33,
+    "min_sweep_atr": 0.07,
+    "min_rel_volume": 0.90,
+    "min_confirm_rel_volume": 0.58,
+    "min_wick_body_ratio": 0.82,
+    "min_wick_range_ratio": 0.24,
+    "min_confirm_body_ratio": 0.12,
     "entry_offset_atr": 0.09,
     "sl_buffer_atr": 0.15,
-    "min_rr": 1.08,
-    "min_barrier_rr": 0.60,
+    "min_rr": 1.15,
+    "min_barrier_rr": 0.68,
     "ema_reclaim_buffer_atr": 0.22,
-    "max_countertrend_atr": 0.78,
+    "max_countertrend_atr": 0.68,
     "min_pivots": 2,
-    "min_sweep_range_atr": 0.40,
-    "max_sweep_range_atr": 3.65,
-    "max_risk_pct": 0.0155,
+    "min_sweep_range_atr": 0.45,
+    "max_sweep_range_atr": 3.40,
+    "max_risk_pct": 0.0145,
     "components": [
         "liquidity_zone",
         "minimum_sweep",
@@ -580,6 +580,122 @@ def _r_progress_from_model_entry(model_entry: float, stop_loss: float, sent_entr
     return round(moved / denominator, 4)
 
 
+def _safe_ratio(value: float, baseline: float) -> float:
+    if baseline <= 1e-9:
+        return 0.0
+    return round(float(value) / float(baseline), 2)
+
+
+def _htf_context_snapshot(df_1h: pd.DataFrame, direction: str, profile: Dict) -> Dict[str, float | bool]:
+    if len(df_1h) < max(HTF_LOOKBACK, 60):
+        return {"ok": False, "raw": 0.0, "normalized": 0.0}
+
+    htf = add_indicators(df_1h)
+    recent = htf.iloc[-2]
+    prev = htf.iloc[-3]
+
+    atr = max(float(recent["atr"]), 1e-9)
+    close = float(recent["close"])
+    ema20 = float(recent["ema20"])
+    ema50 = float(recent["ema50"])
+    slope20 = ema20 - float(prev["ema20"])
+    countertrend = atr * float(profile["max_countertrend_atr"])
+
+    if direction == "LONG":
+        raw = (close - ema20) / atr
+        heavy_bearish_bias = ema20 < ema50 and slope20 < 0
+        clearly_against = (
+            close < ema50 - (countertrend * 1.85)
+            and close < ema20 - (countertrend * 1.35)
+        )
+        stretched_against = close < ema20 - (countertrend * 2.20)
+        ok = not (heavy_bearish_bias and (clearly_against or stretched_against))
+        normalized = round(max(0.0, ((close - (ema20 - countertrend)) / atr)), 2)
+        return {"ok": ok, "raw": round(raw, 2), "normalized": normalized}
+
+    raw = (ema20 - close) / atr
+    heavy_bullish_bias = ema20 > ema50 and slope20 > 0
+    clearly_against = (
+        close > ema50 + (countertrend * 1.85)
+        and close > ema20 + (countertrend * 1.35)
+    )
+    stretched_against = close > ema20 + (countertrend * 2.20)
+    ok = not (heavy_bullish_bias and (clearly_against or stretched_against))
+    normalized = round(max(0.0, (((ema20 + countertrend) - close) / atr)), 2)
+    return {"ok": ok, "raw": round(raw, 2), "normalized": normalized}
+
+
+def _build_component_breakdown(
+    *,
+    direction: str,
+    profile: Dict,
+    zone: Dict,
+    zone_price: float,
+    sweep_candle: pd.Series,
+    confirm_candle: pd.Series,
+    atr: float,
+    rel_volume: float,
+    room_rr: float,
+    barrier_rr: float,
+    htf_snapshot: Dict[str, float | bool],
+) -> tuple[list[Dict[str, float | str]], list[Dict[str, float | str]], list[Dict[str, float | str]]]:
+    if direction == "SHORT":
+        sweep_distance_atr = abs(float(sweep_candle["high"]) - zone_price) / max(atr, 1e-9)
+        reclaim_margin_atr = (float(confirm_candle["ema20"]) + (atr * float(profile["ema_reclaim_buffer_atr"])) - float(confirm_candle["close"])) / max(atr, 1e-9)
+    else:
+        sweep_distance_atr = abs(zone_price - float(sweep_candle["low"])) / max(atr, 1e-9)
+        reclaim_margin_atr = (float(confirm_candle["close"]) - (float(confirm_candle["ema20"]) - (atr * float(profile["ema_reclaim_buffer_atr"])))) / max(atr, 1e-9)
+
+    wick_body_ratio = max(
+        float(sweep_candle["upper_wick"] if direction == "SHORT" else sweep_candle["lower_wick"]),
+        0.0,
+    ) / max(float(sweep_candle["body"]), 1e-9)
+    wick_range_ratio = max(
+        float(sweep_candle["upper_wick"] if direction == "SHORT" else sweep_candle["lower_wick"]),
+        0.0,
+    ) / max(float(sweep_candle["range"]), 1e-9)
+    recovery_strength = round(min(wick_body_ratio, wick_range_ratio), 2)
+    recovery_normalized = round(
+        (wick_body_ratio / max(float(profile["min_wick_body_ratio"]), 1e-9)
+         + wick_range_ratio / max(float(profile["min_wick_range_ratio"]), 1e-9)) / 2.0,
+        2,
+    )
+
+    confirm_body_ratio = float(confirm_candle["body_ratio"])
+    confirm_rel_volume = float(confirm_candle["rel_volume"])
+    confirmation_strength = round(confirm_body_ratio, 2)
+    confirmation_normalized = round(
+        (confirm_body_ratio / max(float(profile["min_confirm_body_ratio"]), 1e-9)
+         + confirm_rel_volume / max(float(profile["min_confirm_rel_volume"]), 1e-9)) / 2.0,
+        2,
+    )
+
+    raw_components = [
+        {"label": "liquidity_zone", "points": round(float(zone.get("count") or 0), 2)},
+        {"label": "minimum_sweep", "points": round(float(sweep_distance_atr), 2)},
+        {"label": "recovery_close", "points": recovery_strength},
+        {"label": "relative_volume", "points": round(float(rel_volume), 2)},
+        {"label": "confirmation_candle", "points": confirmation_strength},
+        {"label": "ema_reclaim_filter", "points": round(float(reclaim_margin_atr), 2)},
+        {"label": "htf_context", "points": round(float(htf_snapshot.get("raw") or 0.0), 2)},
+        {"label": "barrier_room", "points": round(float(barrier_rr), 2)},
+        {"label": "rr_filter", "points": round(float(room_rr), 2)},
+    ]
+
+    normalized_components = [
+        {"label": "liquidity_zone", "points": _safe_ratio(float(zone.get("count") or 0.0), float(profile["min_pivots"]))},
+        {"label": "minimum_sweep", "points": _safe_ratio(float(sweep_distance_atr), float(profile["min_sweep_atr"]))},
+        {"label": "recovery_close", "points": recovery_normalized},
+        {"label": "relative_volume", "points": _safe_ratio(float(rel_volume), float(profile["min_rel_volume"]))},
+        {"label": "confirmation_candle", "points": confirmation_normalized},
+        {"label": "ema_reclaim_filter", "points": round(max(0.0, float(reclaim_margin_atr)), 2)},
+        {"label": "htf_context", "points": round(float(htf_snapshot.get("normalized") or 0.0), 2)},
+        {"label": "barrier_room", "points": _safe_ratio(float(barrier_rr), float(profile["min_barrier_rr"]))},
+        {"label": "rr_filter", "points": _safe_ratio(float(room_rr), float(profile["min_rr"]))},
+    ]
+    return normalized_components, raw_components, normalized_components
+
+
 def _evaluate_direction(
     df: pd.DataFrame,
     df_1h: pd.DataFrame,
@@ -607,7 +723,8 @@ def _evaluate_direction(
     if not (float(profile["min_sweep_range_atr"]) <= sweep_range_atr <= float(profile["max_sweep_range_atr"])):
         return None
 
-    if not _higher_timeframe_context_ok(df_1h, direction, profile):
+    htf_snapshot = _htf_context_snapshot(df_1h, direction, profile)
+    if not bool(htf_snapshot.get("ok")):
         return None
 
     zone = _select_liquidity_zone(historical, direction, sweep_candle, profile)
@@ -671,6 +788,20 @@ def _evaluate_direction(
     model_trade_profiles = _build_trade_profiles(model_entry, direction, stop_loss, room_rr)
     model_tp1 = float(model_trade_profiles["conservador"]["take_profits"][0])
 
+    components, raw_components, normalized_components = _build_component_breakdown(
+        direction=direction,
+        profile=profile,
+        zone=zone,
+        zone_price=zone_price,
+        sweep_candle=sweep_candle,
+        confirm_candle=confirm_candle,
+        atr=atr,
+        rel_volume=rel_volume,
+        room_rr=room_rr,
+        barrier_rr=model_barrier_rr,
+        htf_snapshot=htf_snapshot,
+    )
+
     result = {
         "strategy_name": STRATEGY_NAME,
         "direction": direction,
@@ -683,9 +814,9 @@ def _evaluate_direction(
         "score": round(float(profile["score"]), 2),
         "raw_score": round(float(profile["score"]), 2),
         "normalized_score": round(float(profile["score"]), 2),
-        "components": list(profile["components"]),
-        "raw_components": list(profile["components"]),
-        "normalized_components": list(profile["components"]),
+        "components": components,
+        "raw_components": raw_components,
+        "normalized_components": normalized_components,
         "timeframes": ["15M"],
         "setup_group": str(profile["name"]),
         "candidate_tier": str(profile["name"]),
