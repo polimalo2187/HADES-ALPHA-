@@ -743,6 +743,8 @@ def get_signal_analysis_for_user(user_id: int, signal_id: str, profile_name: str
         "selected_profile": selected_profile,
         "selected_profile_payload": selected_payload,
         "warnings": warnings,
+        "telegram_window_open": telegram_window_open,
+        "evaluation_window_open": evaluation_window_open,
     }
     analysis.setdefault("normalized_score", base_signal.get("normalized_score"))
     analysis.setdefault("setup_group", base_signal.get("setup_group"))
@@ -872,6 +874,9 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
     else:
         progress_to_tp1_pct = None
 
+    telegram_window_open = isinstance(telegram_valid_until, datetime) and telegram_valid_until > now
+    evaluation_window_open = isinstance(evaluation_valid_until, datetime) and evaluation_valid_until > now
+
     if final_result == "won":
         recommendation = "La señal ya cerró como ganadora. Úsala solo como referencia de seguimiento."
         state_label = "FINALIZADA"
@@ -902,7 +907,10 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
     elif signal_active_for_entry:
         recommendation = "La señal aún no entró en zona y la ventana de Telegram sigue viva. Espera confirmación en entrada, no persigas precio."
         state_label = "ESPERANDO ENTRADA"
-    elif isinstance(evaluation_valid_until, datetime) and evaluation_valid_until > now:
+    elif telegram_window_open and entry_state_label == "ENTRADA YA ALEJADA":
+        recommendation = "La señal sigue visible en Telegram, pero el precio ya salió de la zona de entrada. No la persigas."
+        state_label = "ENTRADA YA ALEJADA"
+    elif evaluation_window_open:
         recommendation = "La señal ya salió de Telegram y sigue en evaluación. Úsala solo como referencia."
         state_label = "CERRADA EN TELEGRAM / EVALUANDO"
     else:
@@ -941,6 +949,8 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
         "result": final_result,
         "result_doc": result_doc or {},
         "warnings": warnings,
+        "telegram_window_open": telegram_window_open,
+        "evaluation_window_open": evaluation_window_open,
     }
 
 def get_recent_user_signals_for_user(user_id: int, limit: int = 10, active_only: bool = False) -> List[Dict]:
