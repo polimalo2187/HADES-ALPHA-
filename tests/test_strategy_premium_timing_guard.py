@@ -124,7 +124,7 @@ def test_evaluate_direction_emits_numeric_component_breakdown(monkeypatch):
 
 
 def test_strategy_profiles_keep_strictness_order_after_rebalance():
-    assert strategy.SCORE_CALIBRATION_VERSION == "v12_liquidity_pending_commercial_rebalance"
+    assert strategy.SCORE_CALIBRATION_VERSION == "v14_reference_close_guarded"
 
     assert strategy.PREMIUM_PROFILE["min_rel_volume"] > strategy.PLUS_PROFILE["min_rel_volume"] > strategy.FREE_PROFILE["min_rel_volume"]
     assert strategy.PREMIUM_PROFILE["min_confirm_rel_volume"] > strategy.PLUS_PROFILE["min_confirm_rel_volume"] > strategy.FREE_PROFILE["min_confirm_rel_volume"]
@@ -136,8 +136,8 @@ def test_strategy_profiles_keep_strictness_order_after_rebalance():
 
 
 def test_pending_entry_actionable_rejects_already_away_signals():
-    assert strategy._pending_entry_actionable("SHORT", 100.0, 99.7) is False
-    assert strategy._pending_entry_actionable("LONG", 100.0, 100.3) is False
+    assert strategy._pending_entry_actionable("SHORT", 100.0, 99.6) is False
+    assert strategy._pending_entry_actionable("LONG", 100.0, 100.5) is False
     assert strategy._pending_entry_actionable("SHORT", 100.0, 100.4) is True
     assert strategy._pending_entry_actionable("LONG", 100.0, 99.6) is True
     assert strategy._pending_entry_actionable("SHORT", 100.0, 99.9) is True
@@ -185,3 +185,24 @@ def test_evaluate_direction_rejects_stale_pending_short_on_send(monkeypatch):
     result = strategy._evaluate_direction(df, df_1h, "SHORT", strategy.FREE_PROFILE, current_market_price=99.7)
 
     assert result is None
+
+
+def test_pending_entry_actionable_accepts_small_favorable_move():
+    assert strategy._pending_entry_actionable("SHORT", 100.0, 99.72) is True
+    assert strategy._pending_entry_actionable("LONG", 100.0, 100.28) is True
+
+
+def test_mtf_strategy_accepts_reference_market_price_and_debug_counts(monkeypatch):
+    captured = {}
+
+    def fake_liquidity(df_1h, df_15m, df_5m=None, reference_market_price=None, debug_counts=None):
+        captured["reference_market_price"] = reference_market_price
+        captured["debug_counts"] = debug_counts
+        return {"ok": True}
+
+    monkeypatch.setattr(strategy, "liquidity_sweep_reversal_strategy", fake_liquidity)
+    debug = {}
+    result = strategy.mtf_strategy(pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), reference_market_price=100.2, debug_counts=debug)
+    assert result == {"ok": True}
+    assert captured["reference_market_price"] == 100.2
+    assert captured["debug_counts"] is debug
