@@ -27,7 +27,7 @@ BINANCE_FUTURES_API = "https://fapi.binance.com"
 SCAN_INTERVAL_SECONDS = int(os.getenv("SCAN_INTERVAL_SECONDS", "20"))
 SCAN_IDLE_POLL_SECONDS = float(os.getenv("SCAN_IDLE_POLL_SECONDS", "2"))
 SCAN_CLOSE_GRACE_SECONDS = float(os.getenv("SCAN_CLOSE_GRACE_SECONDS", "3"))
-SCANNER_SYMBOL_CONCURRENCY = int(os.getenv("SCANNER_SYMBOL_CONCURRENCY", "16"))
+SCANNER_SYMBOL_CONCURRENCY = int(os.getenv("SCANNER_SYMBOL_CONCURRENCY", "24"))
 MIN_QUOTE_VOLUME = int(os.getenv("MIN_QUOTE_VOLUME", "20000000"))
 DEDUP_MINUTES = int(os.getenv("DEDUP_MINUTES", "10"))
 REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "0"))
@@ -35,6 +35,8 @@ REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "8"))
 REQUEST_CONNECT_TIMEOUT = float(os.getenv("REQUEST_CONNECT_TIMEOUT", str(min(4.0, REQUEST_TIMEOUT))))
 REQUEST_READ_TIMEOUT = float(os.getenv("REQUEST_READ_TIMEOUT", str(REQUEST_TIMEOUT)))
 HTTP_POOL_SIZE = max(8, SCANNER_SYMBOL_CONCURRENCY * 3)
+SCANNER_FETCH_5M = str(os.getenv("SCANNER_FETCH_5M", "false")).strip().lower() in {"1", "true", "yes", "on"}
+DEFAULT_KLINE_LIMITS = {"1h": 96, "15m": 96, "5m": 64}
 
 # Thresholds basados en raw_score real.
 PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "78"))
@@ -89,27 +91,38 @@ def _should_scan_reference_close(last_processed_close: Optional[datetime], refer
     return last_processed_close is None or reference_close > last_processed_close
 
 
-def _reference_price_from_5m(df_5m: pd.DataFrame, reference_close: Optional[datetime]) -> Optional[float]:
-    if df_5m is None or df_5m.empty:
+def _reference_price_from_frame(df_frame: Optional[pd.DataFrame], reference_close: Optional[datetime]) -> Optional[float]:
+    if df_frame is None or df_frame.empty:
         return None
     try:
-        if reference_close is None or "close_time" not in df_5m.columns:
-            return float(df_5m.iloc[-1]["close"])
+        if reference_close is None or "close_time" not in df_frame.columns:
+            return float(df_frame.iloc[-1]["close"])
         ref_ts = pd.Timestamp(reference_close, tz="UTC") if pd.Timestamp(reference_close).tzinfo is None else pd.Timestamp(reference_close).tz_convert("UTC")
-        closed = df_5m[df_5m["close_time"] <= ref_ts]
+        closed = df_frame[df_frame["close_time"] <= ref_ts]
         if not closed.empty:
             return float(closed.iloc[-1]["close"])
-        if len(df_5m) > 1:
-            return float(df_5m.iloc[-2]["close"])
-        return float(df_5m.iloc[-1]["close"])
+        if len(df_frame) > 1:
+            return float(df_frame.iloc[-2]["close"])
+        return float(df_frame.iloc[-1]["close"])
     except Exception:
         return None
+
+
+def _candidate_rank_frame(df_15m: pd.DataFrame, df_5m: Optional[pd.DataFrame]) -> pd.DataFrame:
+    if df_5m is not None and not df_5m.empty:
+        return df_5m
+    return df_15m
+
+
+def _reference_price_from_5m(df_5m: Optional[pd.DataFrame], reference_close: Optional[datetime]) -> Optional[float]:
+    """Backward-compatible wrapper kept for tests and existing callers."""
+    return _reference_price_from_frame(df_5m, reference_close)
 
 
 def _fetch_symbol_candidate(symbol: str, reference_close: datetime) -> tuple[Optional[Dict], Dict[str, int]]:
     df_1h = get_klines(symbol, "1h")
     df_15m = get_klines(symbol, "15m")
-    df_5m = get_klines(symbol, "5m")
+    df_5m = get_klines(symbol, "5m") if SCANNER_FETCH_5M else None
     return build_symbol_candidate(symbol, df_1h, df_15m, df_5m, reference_close)
 
 
@@ -395,9 +408,10 @@ def _apply_close_market_execution(result: Dict, current_price: float) -> Optiona
     return enriched
 
 
-def build_symbol_candidate(symbol: str, df_1h: pd.DataFrame, df_15m: pd.DataFrame, df_5m: pd.DataFrame, reference_close: datetime) -> tuple[Optional[Dict], Dict[str, int]]:
+def build_symbol_candidate(symbol: str, df_1h: pd.DataFrame, df_15m: pd.DataFrame, df_5m: Optional[pd.DataFrame], reference_close: datetime) -> tuple[Optional[Dict], Dict[str, int]]:
     closed_15m = _closed_15m_frame(df_15m)
-    reference_market_price = _reference_price_from_5m(df_5m, reference_close)
+    rank_frame = _candidate_rank_frame(closed_15m, df_5m)
+    reference_market_price = _reference_price_from_frame(rank_frame, reference_close)
     debug_counts: Dict[str, int] = {}
     result = strategy_engine.mtf_strategy(
         df_1h=df_1h,
@@ -408,7 +422,7 @@ def build_symbol_candidate(symbol: str, df_1h: pd.DataFrame, df_15m: pd.DataFram
     )
     if not result:
         return None, debug_counts
-    return _build_candidate(symbol, result, df_5m), debug_counts
+    return _build_candidate(symbol, result, closed_15m, df_5m), debug_counts
 
 
 class RateLimiter:
@@ -432,7 +446,9 @@ class RateLimiter:
 rate_limiter = RateLimiter(REQUEST_DELAY)
 
 
-def get_klines(symbol: str, interval: str, limit: int = 220) -> pd.DataFrame:
+def get_klines(symbol: str, interval: str, limit: Optional[int] = None) -> pd.DataFrame:
+    if limit is None:
+        limit = DEFAULT_KLINE_LIMITS.get(interval, 96)
     url = f"{BINANCE_FUTURES_API}/fapi/v1/klines"
     params = {"symbol": symbol, "interval": interval, "limit": limit}
     response = _http_get(url, params=params)
@@ -670,12 +686,15 @@ def _select_dispatchable_signal(
     return None
 
 
-def _build_candidate(symbol: str, result: Dict, df_5m: pd.DataFrame) -> Optional[Dict]:
+def _build_candidate(symbol: str, result: Dict, df_15m: Optional[pd.DataFrame] = None, df_5m: Optional[pd.DataFrame] = None) -> Optional[Dict]:
     direction = str(result.get("direction") or "").upper()
     send_mode = str(result.get("send_mode") or "").strip().lower()
+    if df_15m is None:
+        df_15m = df_5m if df_5m is not None else pd.DataFrame()
+    rank_frame = _candidate_rank_frame(df_15m, df_5m)
 
     if send_mode == "market_on_close":
-        current_price = float(df_5m.iloc[-1]["close"])
+        current_price = float(rank_frame.iloc[-1]["close"])
         candidate = _apply_close_market_execution(result, current_price)
         if not candidate:
             return None
@@ -687,8 +706,8 @@ def _build_candidate(symbol: str, result: Dict, df_5m: pd.DataFrame) -> Optional
 
     raw_score = _raw_score(candidate)
     normalized_score = _normalized_score(candidate)
-    entry_quality = _entry_quality(df_5m, direction)
-    volume_quality = _volume_quality(df_5m)
+    entry_quality = _entry_quality(rank_frame, direction)
+    volume_quality = _volume_quality(rank_frame)
 
     final_score = round(
         normalized_score + (entry_quality * 0.35) + (volume_quality * 0.40),
@@ -727,16 +746,20 @@ async def scan_market_async(bot: Bot):
             candidates, symbol_failures, symbol_failure_samples, reject_totals = await _collect_symbol_candidates(symbols, reference_close)
 
             if not candidates:
+                cycle_finished_at = datetime.utcnow()
+                cycle_duration_seconds = round(max(0.0, (cycle_finished_at - cycle_started_at).total_seconds()), 3)
                 if symbol_failures:
                     logger.warning(
-                        "📭 Sin oportunidades en este ciclo, pero hubo errores de scanner | cycle=%s symbols=%s failures=%s samples=%s",
+                        "📭 Sin oportunidades en este ciclo, pero hubo errores de scanner | cycle=%s symbols=%s failures=%s lag=%ss duration=%ss samples=%s",
                         cycle_number,
                         len(symbols),
                         symbol_failures,
+                        scan_lag_seconds,
+                        cycle_duration_seconds,
                         symbol_failure_samples,
                     )
                 else:
-                    logger.info("📭 No hay oportunidades fuertes en este ciclo | rejects=%s", reject_totals)
+                    logger.info("📭 No hay oportunidades fuertes en este ciclo | lag=%ss | duration=%ss | rejects=%s", scan_lag_seconds, cycle_duration_seconds, reject_totals)
                 heartbeat(
                     "scanner",
                     status="degraded" if symbol_failures else "ok",
@@ -751,7 +774,8 @@ async def scan_market_async(bot: Bot):
                         "reference_close": reference_close.isoformat(),
                         "scan_lag_seconds": scan_lag_seconds,
                         "cycle_started_at": cycle_started_at.isoformat(),
-                    "reject_totals": reject_totals,
+                        "cycle_duration_seconds": cycle_duration_seconds,
+                        "fetch_5m_enabled": SCANNER_FETCH_5M,
                         "reject_totals": reject_totals,
                     },
                 )
@@ -776,13 +800,17 @@ async def scan_market_async(bot: Bot):
             plus_candidates = [c for c in candidates if _qualifies_for_plus(c)]
             free_candidates = [c for c in candidates if _qualifies_for_free(c)]
 
+            cycle_finished_at = datetime.utcnow()
+            cycle_duration_seconds = round(max(0.0, (cycle_finished_at - cycle_started_at).total_seconds()), 3)
+
             logger.info(
-                "📚 Candidatos | total=%s | premium=%s | plus=%s | free=%s | lag=%ss | rejects=%s",
+                "📚 Candidatos | total=%s | premium=%s | plus=%s | free=%s | lag=%ss | duration=%ss | rejects=%s",
                 len(candidates),
                 len(premium_candidates),
                 len(plus_candidates),
                 len(free_candidates),
                 scan_lag_seconds,
+                cycle_duration_seconds,
                 reject_totals,
             )
 
@@ -848,8 +876,9 @@ async def scan_market_async(bot: Bot):
                     "reference_close": reference_close.isoformat(),
                     "scan_lag_seconds": scan_lag_seconds,
                     "cycle_started_at": cycle_started_at.isoformat(),
+                    "cycle_duration_seconds": cycle_duration_seconds,
+                    "fetch_5m_enabled": SCANNER_FETCH_5M,
                     "reject_totals": reject_totals,
-                        "reject_totals": reject_totals,
                 },
             )
             last_processed_close = reference_close
