@@ -30,7 +30,9 @@ SCAN_CLOSE_GRACE_SECONDS = float(os.getenv("SCAN_CLOSE_GRACE_SECONDS", "3"))
 SCANNER_SYMBOL_CONCURRENCY = int(os.getenv("SCANNER_SYMBOL_CONCURRENCY", "24"))
 MIN_QUOTE_VOLUME = int(os.getenv("MIN_QUOTE_VOLUME", "20000000"))
 DEDUP_MINUTES = int(os.getenv("DEDUP_MINUTES", "10"))
-REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "0"))
+LEGACY_REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "0"))
+SCANNER_FORCE_REQUEST_DELAY = str(os.getenv("SCANNER_FORCE_REQUEST_DELAY", "false")).strip().lower() in {"1", "true", "yes", "on"}
+REQUEST_DELAY = LEGACY_REQUEST_DELAY if (SCANNER_FORCE_REQUEST_DELAY or SCANNER_SYMBOL_CONCURRENCY <= 1) else 0.0
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "8"))
 REQUEST_CONNECT_TIMEOUT = float(os.getenv("REQUEST_CONNECT_TIMEOUT", str(min(4.0, REQUEST_TIMEOUT))))
 REQUEST_READ_TIMEOUT = float(os.getenv("REQUEST_READ_TIMEOUT", str(REQUEST_TIMEOUT)))
@@ -729,6 +731,21 @@ async def scan_market_async(bot: Bot):
     logger.info(
         "📡 Scanner iniciado — clasificación exclusiva por plan + ranking con normalized_score"
     )
+    logger.info(
+        "⚙️ Scanner config | concurrency=%s | request_delay_env=%ss | effective_request_delay=%ss | force_request_delay=%s | fetch_5m=%s | kline_limits=%s",
+        SCANNER_SYMBOL_CONCURRENCY,
+        LEGACY_REQUEST_DELAY,
+        REQUEST_DELAY,
+        SCANNER_FORCE_REQUEST_DELAY,
+        SCANNER_FETCH_5M,
+        DEFAULT_KLINE_LIMITS,
+    )
+    if LEGACY_REQUEST_DELAY > 0 and REQUEST_DELAY == 0 and SCANNER_SYMBOL_CONCURRENCY > 1:
+        logger.warning(
+            "🚫 REQUEST_DELAY=%ss detectado pero desactivado en scanner concurrente para evitar serializar %s requests por ciclo",
+            LEGACY_REQUEST_DELAY,
+            "1 + (2 o 3) por símbolo",
+        )
 
     cycle_number = 0
     last_processed_close: Optional[datetime] = None
@@ -776,6 +793,8 @@ async def scan_market_async(bot: Bot):
                         "cycle_started_at": cycle_started_at.isoformat(),
                         "cycle_duration_seconds": cycle_duration_seconds,
                         "fetch_5m_enabled": SCANNER_FETCH_5M,
+                        "legacy_request_delay": LEGACY_REQUEST_DELAY,
+                        "effective_request_delay": REQUEST_DELAY,
                         "reject_totals": reject_totals,
                     },
                 )
@@ -878,6 +897,8 @@ async def scan_market_async(bot: Bot):
                     "cycle_started_at": cycle_started_at.isoformat(),
                     "cycle_duration_seconds": cycle_duration_seconds,
                     "fetch_5m_enabled": SCANNER_FETCH_5M,
+                    "legacy_request_delay": LEGACY_REQUEST_DELAY,
+                    "effective_request_delay": REQUEST_DELAY,
                     "reject_totals": reject_totals,
                 },
             )
