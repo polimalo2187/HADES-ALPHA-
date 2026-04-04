@@ -254,3 +254,22 @@ def test_request_delay_can_be_forced_explicitly(monkeypatch):
     scanner = _load_scanner()
     assert scanner.LEGACY_REQUEST_DELAY == 0.8
     assert scanner.REQUEST_DELAY == 0.8
+
+
+def test_scan_lag_seconds_uses_reference_close_delta():
+    scanner = _load_scanner()
+    ref = datetime(2026, 4, 4, 20, 15, 0)
+    now = datetime(2026, 4, 4, 20, 19, 59)
+    assert scanner._scan_lag_seconds(ref, now) == 299.0
+
+
+def test_should_skip_startup_stale_reference_cycle_only_on_first_old_cycle(monkeypatch):
+    monkeypatch.setenv("SCAN_STARTUP_STALE_REFERENCE_MAX_LAG_SECONDS", "90")
+    scanner = _load_scanner()
+    ref = datetime(2026, 4, 4, 20, 15, 0)
+    stale_now = datetime(2026, 4, 4, 20, 19, 59)
+    fresh_now = datetime(2026, 4, 4, 20, 15, 30)
+
+    assert scanner._should_skip_startup_stale_reference_cycle(None, ref, stale_now) is True
+    assert scanner._should_skip_startup_stale_reference_cycle(None, ref, fresh_now) is False
+    assert scanner._should_skip_startup_stale_reference_cycle(ref, ref, stale_now) is False
