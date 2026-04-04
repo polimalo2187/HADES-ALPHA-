@@ -203,3 +203,36 @@ def test_build_candidate_preserves_pending_entry_signal_without_repricing():
     assert enriched["entry_sent_price"] is None
     assert enriched["take_profits"] == [98.5, 97.5]
     assert enriched["setup_group"] == "plus"
+
+
+from datetime import datetime, timedelta
+import pandas as pd
+
+
+def test_reference_price_from_5m_uses_reference_close():
+    scanner = _load_scanner()
+    ref = datetime(2026, 4, 4, 13, 30, 0)
+    df = pd.DataFrame([
+        {"close_time": pd.Timestamp("2026-04-04T13:25:00Z"), "close": 100.0},
+        {"close_time": pd.Timestamp("2026-04-04T13:30:00Z"), "close": 100.2},
+        {"close_time": pd.Timestamp("2026-04-04T13:35:00Z"), "close": 99.6},
+    ])
+    price = scanner._reference_price_from_5m(df, ref)
+    assert price == 100.2
+
+
+def test_build_symbol_candidate_returns_debug_counts_when_strategy_rejects(monkeypatch):
+    scanner = _load_scanner()
+    df = pd.DataFrame([{
+        "open_time": pd.Timestamp("2026-04-04T13:00:00Z"),
+        "close_time": pd.Timestamp("2026-04-04T13:15:00Z"),
+        "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.0, "volume": 10.0,
+    }])
+    def fake_strategy(**kwargs):
+        debug = kwargs.get("debug_counts")
+        debug["stale_pending"] = 3
+        return None
+    monkeypatch.setattr(scanner.strategy_engine, "mtf_strategy", fake_strategy)
+    candidate, debug_counts = scanner.build_symbol_candidate("TESTUSDT", df, df, df, datetime(2026, 4, 4, 13, 30, 0))
+    assert candidate is None
+    assert debug_counts["stale_pending"] == 3
