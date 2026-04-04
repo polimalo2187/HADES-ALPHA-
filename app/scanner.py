@@ -273,7 +273,50 @@ def _apply_close_market_execution(result: Dict, current_price: float) -> Optiona
         })
         return enriched
 
+    pending_signal = str(enriched.get("send_mode") or "").strip().lower() == "entry_zone_pending"
     model_entry = float(enriched.get("entry_model_price") or enriched.get("entry_price") or 0.0)
+
+    if pending_signal:
+        if model_entry <= 0 or stop_loss <= 0:
+            return None
+
+        risk_pct = abs(stop_loss - model_entry) / max(model_entry, 1e-9)
+        if risk_pct > float(profile_cfg.get("max_risk_pct", 1.0)):
+            return None
+
+        model_profiles = dict(enriched.get("profiles") or {})
+        conservative = model_profiles.get("conservador") or {}
+        model_take_profits = list(conservative.get("take_profits") or enriched.get("take_profits") or [])
+        if not model_take_profits:
+            return None
+        conservative_tp1_rr = _safe_rr(model_entry, stop_loss, float(model_take_profits[0]))
+        if conservative_tp1_rr < float(profile_cfg.get("min_rr", 0.0)):
+            return None
+
+        enriched.update({
+            "entry_price": round(model_entry, 8),
+            "take_profits": model_take_profits,
+            "profiles": model_profiles,
+            "raw_score": float(enriched.get("raw_score", enriched.get("score", 0.0))),
+            "normalized_score": float(enriched.get("normalized_score", enriched.get("score", 0.0))),
+            "components": list(enriched.get("components") or []),
+            "raw_components": list(enriched.get("raw_components") or enriched.get("components") or []),
+            "normalized_components": list(enriched.get("normalized_components") or enriched.get("components") or []),
+            "setup_group": setup_group,
+            "score_profile": setup_group,
+            "score_calibration": SCORE_CALIBRATION_VERSION,
+            "send_mode": "entry_zone_pending",
+            "entry_model_price": round(model_entry, 8),
+            "entry_sent_price": None,
+            "tp1_progress_at_send_pct": None,
+            "r_progress_at_send": None,
+            "setup_stage": str(enriched.get("setup_stage") or SETUP_STAGE_CLOSED_CONFIRMED),
+            "candidate_tier": enriched.get("candidate_tier") or setup_group,
+            "final_tier": enriched.get("final_tier") or setup_group,
+            "entry_model": enriched.get("entry_model") or ENTRY_MODEL_NAME,
+        })
+        return enriched
+
     market_entry = float(current_price or enriched.get("entry_sent_price") or enriched.get("entry_price") or 0.0)
     if market_entry <= 0 or stop_loss <= 0 or model_entry <= 0:
         return None
