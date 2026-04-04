@@ -27,6 +27,7 @@ BINANCE_FUTURES_API = "https://fapi.binance.com"
 SCAN_INTERVAL_SECONDS = int(os.getenv("SCAN_INTERVAL_SECONDS", "20"))
 SCAN_IDLE_POLL_SECONDS = float(os.getenv("SCAN_IDLE_POLL_SECONDS", "2"))
 SCAN_CLOSE_GRACE_SECONDS = float(os.getenv("SCAN_CLOSE_GRACE_SECONDS", "3"))
+SCAN_STARTUP_STALE_REFERENCE_MAX_LAG_SECONDS = float(os.getenv("SCAN_STARTUP_STALE_REFERENCE_MAX_LAG_SECONDS", "90"))
 SCANNER_SYMBOL_CONCURRENCY = int(os.getenv("SCANNER_SYMBOL_CONCURRENCY", "24"))
 MIN_QUOTE_VOLUME = int(os.getenv("MIN_QUOTE_VOLUME", "20000000"))
 DEDUP_MINUTES = int(os.getenv("DEDUP_MINUTES", "10"))
@@ -91,6 +92,17 @@ def _latest_ready_15m_close(now: Optional[datetime] = None) -> datetime:
 
 def _should_scan_reference_close(last_processed_close: Optional[datetime], reference_close: datetime) -> bool:
     return last_processed_close is None or reference_close > last_processed_close
+
+
+def _scan_lag_seconds(reference_close: datetime, now: Optional[datetime] = None) -> float:
+    current = now or datetime.utcnow()
+    return round(max(0.0, (current - reference_close).total_seconds()), 3)
+
+
+def _should_skip_startup_stale_reference_cycle(last_processed_close: Optional[datetime], reference_close: datetime, now: Optional[datetime] = None) -> bool:
+    if last_processed_close is not None:
+        return False
+    return _scan_lag_seconds(reference_close, now) > SCAN_STARTUP_STALE_REFERENCE_MAX_LAG_SECONDS
 
 
 def _reference_price_from_frame(df_frame: Optional[pd.DataFrame], reference_close: Optional[datetime]) -> Optional[float]:
@@ -740,6 +752,10 @@ async def scan_market_async(bot: Bot):
         SCANNER_FETCH_5M,
         DEFAULT_KLINE_LIMITS,
     )
+    logger.info(
+        "⏱️ Startup stale-reference guard | max_lag=%ss",
+        SCAN_STARTUP_STALE_REFERENCE_MAX_LAG_SECONDS,
+    )
     if LEGACY_REQUEST_DELAY > 0 and REQUEST_DELAY == 0 and SCANNER_SYMBOL_CONCURRENCY > 1:
         logger.warning(
             "🚫 REQUEST_DELAY=%ss detectado pero desactivado en scanner concurrente para evitar serializar %s requests por ciclo",
@@ -758,7 +774,40 @@ async def scan_market_async(bot: Bot):
                 continue
 
             cycle_started_at = datetime.utcnow()
-            scan_lag_seconds = round(max(0.0, (cycle_started_at - reference_close).total_seconds()), 3)
+            scan_lag_seconds = _scan_lag_seconds(reference_close, cycle_started_at)
+            if _should_skip_startup_stale_reference_cycle(last_processed_close, reference_close, cycle_started_at):
+                logger.warning(
+                    "⏭️ Ciclo inicial omitido por reference_close envejecido | lag=%ss | threshold=%ss | reference_close=%s",
+                    scan_lag_seconds,
+                    SCAN_STARTUP_STALE_REFERENCE_MAX_LAG_SECONDS,
+                    reference_close.isoformat(),
+                )
+                heartbeat(
+                    "scanner",
+                    status="ok",
+                    details={
+                        "cycle": cycle_number,
+                        "symbols": 0,
+                        "candidates": 0,
+                        "selected": 0,
+                        "startup_cycle_skipped": True,
+                        "startup_skip_reason": "stale_reference_close",
+                        "scan_interval_seconds": SCAN_INTERVAL_SECONDS,
+                        "reference_close": reference_close.isoformat(),
+                        "scan_lag_seconds": scan_lag_seconds,
+                        "cycle_started_at": cycle_started_at.isoformat(),
+                        "cycle_duration_seconds": 0.0,
+                        "fetch_5m_enabled": SCANNER_FETCH_5M,
+                        "legacy_request_delay": LEGACY_REQUEST_DELAY,
+                        "effective_request_delay": REQUEST_DELAY,
+                        "startup_stale_reference_max_lag_seconds": SCAN_STARTUP_STALE_REFERENCE_MAX_LAG_SECONDS,
+                    },
+                )
+                last_processed_close = reference_close
+                cycle_number += 1
+                await asyncio.sleep(SCAN_IDLE_POLL_SECONDS)
+                continue
+
             symbols = get_active_futures_symbols()
             candidates, symbol_failures, symbol_failure_samples, reject_totals = await _collect_symbol_candidates(symbols, reference_close)
 
