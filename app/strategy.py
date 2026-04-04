@@ -26,7 +26,7 @@ PIVOT_WINDOW = 3
 MIN_HISTORY_BARS = max(LIQUIDITY_LOOKBACK + 8, ATR_PERIOD + VOLUME_PERIOD + 8)
 
 STRATEGY_NAME = "LIQUIDITY_SWEEP_REVERSAL"
-SCORE_CALIBRATION_VERSION = "v9_liquidity_original_pending_entry"
+SCORE_CALIBRATION_VERSION = "v10_liquidity_original_pending_fresh_entry"
 
 # =======================================
 # PERFILES POR PLAN
@@ -697,6 +697,30 @@ def _build_component_breakdown(
     return normalized_components, raw_components, normalized_components
 
 
+
+
+def _pending_entry_actionable(direction: str, entry_price: float, current_price: Optional[float], *, pct: float = 0.0015) -> bool:
+    """Reject signals that are already gone in the favorable direction when emitted.
+
+    Pending-entry signals are only actionable if price is still waiting for the zone, or currently in the zone.
+    For SHORT, if price is already below the entry zone, the retrace entry is gone.
+    For LONG, if price is already above the entry zone, the bounce entry is gone.
+    """
+    try:
+        entry_price = float(entry_price)
+        current_price = float(current_price)
+    except Exception:
+        return True
+
+    zone_low = entry_price * (1 - pct)
+    zone_high = entry_price * (1 + pct)
+    direction = str(direction).upper()
+
+    if direction == "SHORT":
+        return current_price >= zone_low
+    if direction == "LONG":
+        return current_price <= zone_high
+    return True
 def _evaluate_direction(
     df: pd.DataFrame,
     df_1h: pd.DataFrame,
@@ -753,6 +777,15 @@ def _evaluate_direction(
         entry_price = zone_price + entry_offset
         stop_loss = float(sweep_candle["low"]) - (atr * float(profile["sl_buffer_atr"]))
         structure_target = float(historical.tail(TARGET_LOOKBACK)["high"].max())
+
+    actionable_price = current_market_price
+    if actionable_price is None:
+        try:
+            actionable_price = float(confirm_candle["close"])
+        except Exception:
+            actionable_price = None
+    if not _pending_entry_actionable(direction, entry_price, actionable_price):
+        return None
 
     risk = abs(stop_loss - entry_price)
     if risk <= 0:
