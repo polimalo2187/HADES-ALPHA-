@@ -804,6 +804,7 @@ def _evaluate_direction(
         except Exception:
             actionable_price = None
     if not _pending_entry_actionable(direction, entry_price, actionable_price):
+        _bump_debug(debug_counts, "stale_pending")
         return None
 
     risk = abs(stop_loss - entry_price)
