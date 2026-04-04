@@ -793,7 +793,7 @@ def _tracking_entry_state(direction: str, current_price: Optional[float], zone_l
             return "AÚN ESPERANDO ENTRADA", False, True
         return "ENTRADA YA ALEJADA", False, False
     if isinstance(evaluation_valid_until, datetime) and evaluation_valid_until > now:
-        return "CERRADA EN TELEGRAM / AÚN EVALUANDO", False, False
+        return "EN EVALUACIÓN", False, False
     return "SEÑAL FINALIZADA", False, False
 
 
@@ -905,14 +905,17 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
         recommendation = "El precio sigue dentro de la zona base. La señal todavía es operable si tu gestión acompaña."
         state_label = "ACTIVA"
     elif signal_active_for_entry:
-        recommendation = "La señal aún no entró en zona y la ventana de Telegram sigue viva. Espera confirmación en entrada, no persigas precio."
+        recommendation = "La señal aún no entró en zona. Espera confirmación en entrada y no persigas precio."
         state_label = "ESPERANDO ENTRADA"
-    elif telegram_window_open and entry_state_label == "ENTRADA YA ALEJADA":
-        recommendation = "La señal sigue visible en Telegram, pero el precio ya salió de la zona de entrada. No la persigas."
+    elif entry_state_label == "ENTRADA YA ALEJADA" and evaluation_window_open:
+        recommendation = "La señal sigue en evaluación dentro de la MiniApp, pero el precio ya salió de la zona de entrada. No entrar."
+        state_label = "ENTRADA YA ALEJADA"
+    elif entry_state_label == "ENTRADA YA ALEJADA":
+        recommendation = "El precio ya salió de la zona de entrada. No entrar; úsala solo como referencia."
         state_label = "ENTRADA YA ALEJADA"
     elif evaluation_window_open:
-        recommendation = "La señal ya salió de Telegram y sigue en evaluación. Úsala solo como referencia."
-        state_label = "CERRADA EN TELEGRAM / EVALUANDO"
+        recommendation = "La señal sigue en evaluación dentro de la MiniApp. Úsala como referencia operativa."
+        state_label = "EN EVALUACIÓN"
     else:
         recommendation = "La señal ya no está operativa. Úsala solo como referencia histórica."
         state_label = "FINALIZADA"
