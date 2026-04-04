@@ -34,8 +34,8 @@ PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "72"))
 FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "64"))
 
 
-MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT = float(os.getenv("MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT", "15"))
-MAX_CLOSE_MARKET_R_PROGRESS = float(os.getenv("MAX_CLOSE_MARKET_R_PROGRESS", "0.15"))
+MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT = float(os.getenv("MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT", "25"))
+MAX_CLOSE_MARKET_R_PROGRESS = float(os.getenv("MAX_CLOSE_MARKET_R_PROGRESS", "0.25"))
 SCORE_CALIBRATION_VERSION = strategy_engine.SCORE_CALIBRATION_VERSION
 ENTRY_MODEL_NAME = "liquidity_zone_offset_v1"
 SETUP_STAGE_CLOSED_CONFIRMED = "closed_confirmed"
@@ -142,9 +142,61 @@ def _apply_close_market_execution(result: Dict, current_price: float) -> Optiona
     if direction not in {"LONG", "SHORT"}:
         return None
 
-    model_entry = float(enriched.get("entry_price") or 0.0)
+    setup_group = _infer_setup_group(enriched)
+    profile_cfg = _profile_config_for_signal(enriched)
     stop_loss = float(enriched.get("stop_loss") or 0.0)
-    market_entry = float(current_price or 0.0)
+
+    prepriced_market_signal = str(enriched.get("send_mode") or "").strip().lower() == "market_on_close" and enriched.get("entry_sent_price") is not None
+
+    if prepriced_market_signal:
+        model_entry = float(enriched.get("entry_model_price") or enriched.get("entry_price") or 0.0)
+        market_entry = float(enriched.get("entry_sent_price") or enriched.get("entry_price") or current_price or 0.0)
+        profiles = dict(enriched.get("profiles") or {})
+        conservative = profiles.get("conservador") or {}
+        take_profits = list(conservative.get("take_profits") or enriched.get("take_profits") or [])
+        if market_entry <= 0 or stop_loss <= 0 or model_entry <= 0 or not take_profits:
+            return None
+
+        if direction == "LONG" and market_entry <= stop_loss:
+            return None
+        if direction == "SHORT" and market_entry >= stop_loss:
+            return None
+
+        risk_pct = abs(stop_loss - market_entry) / max(market_entry, 1e-9)
+        if risk_pct > float(profile_cfg.get("max_risk_pct", 1.0)):
+            return None
+
+        progress_pct = float(enriched.get("tp1_progress_at_send_pct") or 0.0)
+        r_progress = float(enriched.get("r_progress_at_send") or 0.0)
+        if progress_pct > MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT or r_progress > MAX_CLOSE_MARKET_R_PROGRESS:
+            return None
+
+        enriched.update({
+            "entry_price": round(market_entry, 8),
+            "take_profits": take_profits,
+            "profiles": profiles,
+            "raw_score": float(enriched.get("raw_score", enriched.get("score", 0.0))),
+            "normalized_score": float(enriched.get("normalized_score", enriched.get("score", 0.0))),
+            "components": list(enriched.get("components") or []),
+            "raw_components": list(enriched.get("raw_components") or enriched.get("components") or []),
+            "normalized_components": list(enriched.get("normalized_components") or enriched.get("components") or []),
+            "setup_group": setup_group,
+            "score_profile": setup_group,
+            "score_calibration": SCORE_CALIBRATION_VERSION,
+            "send_mode": "market_on_close",
+            "entry_model_price": round(model_entry, 8),
+            "entry_sent_price": round(market_entry, 8),
+            "tp1_progress_at_send_pct": progress_pct,
+            "r_progress_at_send": r_progress,
+            "setup_stage": str(enriched.get("setup_stage") or SETUP_STAGE_CLOSED_CONFIRMED),
+            "candidate_tier": enriched.get("candidate_tier") or setup_group,
+            "final_tier": enriched.get("final_tier") or setup_group,
+            "entry_model": enriched.get("entry_model") or ENTRY_MODEL_NAME,
+        })
+        return enriched
+
+    model_entry = float(enriched.get("entry_model_price") or enriched.get("entry_price") or 0.0)
+    market_entry = float(current_price or enriched.get("entry_sent_price") or enriched.get("entry_price") or 0.0)
     if market_entry <= 0 or stop_loss <= 0 or model_entry <= 0:
         return None
 
@@ -153,8 +205,6 @@ def _apply_close_market_execution(result: Dict, current_price: float) -> Optiona
     if direction == "SHORT" and market_entry >= stop_loss:
         return None
 
-    setup_group = _infer_setup_group(enriched)
-    profile_cfg = _profile_config_for_signal(enriched)
     risk_pct = abs(stop_loss - market_entry) / max(market_entry, 1e-9)
     if risk_pct > float(profile_cfg.get("max_risk_pct", 1.0)):
         return None
