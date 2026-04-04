@@ -236,3 +236,21 @@ def test_build_symbol_candidate_returns_debug_counts_when_strategy_rejects(monke
     candidate, debug_counts = scanner.build_symbol_candidate("TESTUSDT", df, df, df, datetime(2026, 4, 4, 13, 30, 0))
     assert candidate is None
     assert debug_counts["stale_pending"] == 3
+
+
+def test_request_delay_is_disabled_when_scanner_is_concurrent(monkeypatch):
+    monkeypatch.setenv("REQUEST_DELAY", "0.8")
+    monkeypatch.setenv("SCANNER_SYMBOL_CONCURRENCY", "24")
+    monkeypatch.delenv("SCANNER_FORCE_REQUEST_DELAY", raising=False)
+    scanner = _load_scanner()
+    assert scanner.LEGACY_REQUEST_DELAY == 0.8
+    assert scanner.REQUEST_DELAY == 0.0
+
+
+def test_request_delay_can_be_forced_explicitly(monkeypatch):
+    monkeypatch.setenv("REQUEST_DELAY", "0.8")
+    monkeypatch.setenv("SCANNER_SYMBOL_CONCURRENCY", "24")
+    monkeypatch.setenv("SCANNER_FORCE_REQUEST_DELAY", "true")
+    scanner = _load_scanner()
+    assert scanner.LEGACY_REQUEST_DELAY == 0.8
+    assert scanner.REQUEST_DELAY == 0.8
