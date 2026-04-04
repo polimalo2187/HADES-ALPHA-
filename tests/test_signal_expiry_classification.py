@@ -115,3 +115,31 @@ def test_signal_can_still_resolve_after_fill_that_happened_before_telegram_windo
     assert evaluation["result"] == "lost"
     assert evaluation["resolution"] == "sl"
     assert evaluation["entry_touched"] is True
+
+
+def test_pending_short_zone_that_never_retraces_cannot_finish_as_sl():
+    now = datetime.utcnow()
+    signal = {
+        **_base_signal("SHORT"),
+        "entry_price": 100.0,
+        "entry_zone": {"low": 99.85, "high": 100.15},
+        "signal_market_price": 101.0,
+        "send_mode": "entry_zone_pending",
+        "stop_loss": 102.0,
+        "take_profits": [98.0, 96.0],
+        "created_at": now - timedelta(minutes=20),
+        "telegram_valid_until": now - timedelta(minutes=5),
+        "evaluation_valid_until": now,
+    }
+    klines = [
+        [1, 101.0, 101.6, 100.4, 101.3, 0, int((signal["created_at"] + timedelta(minutes=2)).timestamp() * 1000)],
+        [2, 101.3, 102.4, 100.3, 102.1, 0, int((signal["created_at"] + timedelta(minutes=8)).timestamp() * 1000)],
+        [3, 102.1, 102.5, 100.2, 102.2, 0, int(signal["evaluation_valid_until"].timestamp() * 1000)],
+    ]
+
+    with patch('app.signals._fetch_klines_between', return_value=klines):
+        evaluation = _evaluate_signal_result(signal)
+
+    assert evaluation["result"] == "expired"
+    assert evaluation["resolution"] == "expired_no_fill"
+    assert evaluation["entry_touched"] is False
