@@ -124,7 +124,7 @@ def test_evaluate_direction_emits_numeric_component_breakdown(monkeypatch):
 
 
 def test_strategy_profiles_keep_strictness_order_after_rebalance():
-    assert strategy.SCORE_CALIBRATION_VERSION == "v7_liquidity_original_market_balanced"
+    assert strategy.SCORE_CALIBRATION_VERSION == "v8_liquidity_original_market_frequency"
 
     assert strategy.PREMIUM_PROFILE["min_rel_volume"] > strategy.PLUS_PROFILE["min_rel_volume"] > strategy.FREE_PROFILE["min_rel_volume"]
     assert strategy.PREMIUM_PROFILE["min_confirm_rel_volume"] > strategy.PLUS_PROFILE["min_confirm_rel_volume"] > strategy.FREE_PROFILE["min_confirm_rel_volume"]
