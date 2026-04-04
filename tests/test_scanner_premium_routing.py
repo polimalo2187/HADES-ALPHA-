@@ -84,7 +84,7 @@ def test_apply_close_market_execution_preserves_prepriced_market_signal():
         "normalized_score": 74.0,
         "setup_group": "free",
         "score_profile": "free",
-        "score_calibration": "v8_liquidity_original_market_frequency",
+        "score_calibration": "v9_liquidity_original_pending_entry",
         "send_mode": "market_on_close",
         "tp1_progress_at_send_pct": 12.0,
         "r_progress_at_send": 0.11,
@@ -104,7 +104,7 @@ def test_apply_close_market_execution_preserves_prepriced_market_signal():
     assert enriched["send_mode"] == "market_on_close"
 
 
-def test_apply_close_market_execution_accepts_relaxed_progress_guard():
+def test_apply_close_market_execution_rejects_late_market_chase():
     scanner = _load_scanner()
 
     payload = {
@@ -125,7 +125,7 @@ def test_apply_close_market_execution_accepts_relaxed_progress_guard():
         "normalized_score": 74.0,
         "setup_group": "free",
         "score_profile": "free",
-        "score_calibration": "v8_liquidity_original_market_frequency",
+        "score_calibration": "v9_liquidity_original_pending_entry",
         "send_mode": "market_on_close",
         "tp1_progress_at_send_pct": 22.0,
         "r_progress_at_send": 0.20,
@@ -137,4 +137,4 @@ def test_apply_close_market_execution_accepts_relaxed_progress_guard():
 
     enriched = scanner._apply_close_market_execution(payload, current_price=100.45)
 
-    assert enriched is not None
+    assert enriched is None
