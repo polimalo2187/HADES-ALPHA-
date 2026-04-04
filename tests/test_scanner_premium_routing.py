@@ -160,3 +160,46 @@ def test_should_scan_reference_close_only_on_new_bucket():
     assert scanner._should_scan_reference_close(None, ref) is True
     assert scanner._should_scan_reference_close(datetime(2026, 4, 4, 9, 45, 0), ref) is True
     assert scanner._should_scan_reference_close(ref, ref) is False
+
+
+def test_build_candidate_preserves_pending_entry_signal_without_repricing():
+    scanner = _load_scanner()
+
+    payload = {
+        "direction": "SHORT",
+        "entry_price": 100.0,
+        "entry_model_price": 100.0,
+        "entry_sent_price": None,
+        "stop_loss": 101.0,
+        "take_profits": [98.5, 97.5],
+        "profiles": {
+            "conservador": {
+                "stop_loss": 101.0,
+                "take_profits": [98.5, 97.5],
+                "leverage": "20x-30x",
+            }
+        },
+        "raw_score": 82.0,
+        "normalized_score": 82.0,
+        "setup_group": "plus",
+        "score_profile": "plus",
+        "score_calibration": "v12_liquidity_pending_commercial_rebalance",
+        "send_mode": "entry_zone_pending",
+        "tp1_progress_at_send_pct": None,
+        "r_progress_at_send": None,
+        "setup_stage": "closed_confirmed",
+        "candidate_tier": "plus",
+        "final_tier": "plus",
+        "entry_model": "liquidity_zone_offset_v1",
+        "components": ["liquidity_zone"],
+    }
+
+    enriched = scanner._build_candidate("TESTUSDT", payload, df_5m=__import__("pandas").DataFrame([{"close": 99.4, "volume": 1000}, {"close": 99.2, "volume": 1200}]))
+
+    assert enriched is not None
+    assert enriched["send_mode"] == "entry_zone_pending"
+    assert enriched["entry_price"] == 100.0
+    assert enriched["entry_model_price"] == 100.0
+    assert enriched["entry_sent_price"] is None
+    assert enriched["take_profits"] == [98.5, 97.5]
+    assert enriched["setup_group"] == "plus"
