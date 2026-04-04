@@ -26,7 +26,7 @@ PIVOT_WINDOW = 3
 MIN_HISTORY_BARS = max(LIQUIDITY_LOOKBACK + 8, ATR_PERIOD + VOLUME_PERIOD + 8)
 
 STRATEGY_NAME = "LIQUIDITY_SWEEP_REVERSAL"
-SCORE_CALIBRATION_VERSION = "v8_liquidity_original_market_frequency"
+SCORE_CALIBRATION_VERSION = "v9_liquidity_original_pending_entry"
 
 # =======================================
 # PERFILES POR PLAN
@@ -36,23 +36,23 @@ SCORE_CALIBRATION_VERSION = "v8_liquidity_original_market_frequency"
 PREMIUM_PROFILE = {
     "name": "premium",
     "score": 90.0,
-    "atr_pct_min": 0.0017,
-    "atr_pct_max": 0.0148,
-    "liquidity_tolerance_atr": 0.24,
+    "atr_pct_min": 0.0021,
+    "atr_pct_max": 0.0135,
+    "liquidity_tolerance_atr": 0.22,
     "min_sweep_atr": 0.12,
-    "min_rel_volume": 1.00,
-    "min_confirm_rel_volume": 0.62,
+    "min_rel_volume": 1.15,
+    "min_confirm_rel_volume": 0.75,
     "min_wick_body_ratio": 1.25,
     "min_wick_range_ratio": 0.34,
-    "min_confirm_body_ratio": 0.16,
+    "min_confirm_body_ratio": 0.22,
     "entry_offset_atr": 0.06,
     "sl_buffer_atr": 0.11,
-    "min_rr": 1.22,
-    "min_barrier_rr": 0.72,
-    "ema_reclaim_buffer_atr": 0.14,
-    "max_countertrend_atr": 0.55,
+    "min_rr": 1.35,
+    "min_barrier_rr": 0.85,
+    "ema_reclaim_buffer_atr": 0.12,
+    "max_countertrend_atr": 0.42,
     "min_pivots": 2,
-    "min_sweep_range_atr": 0.50,
+    "min_sweep_range_atr": 0.65,
     "max_sweep_range_atr": 2.80,
     "max_risk_pct": 0.0105,
     "components": [
@@ -71,23 +71,23 @@ PREMIUM_PROFILE = {
 PLUS_PROFILE = {
     "name": "plus",
     "score": 82.0,
-    "atr_pct_min": 0.0014,
-    "atr_pct_max": 0.0160,
-    "liquidity_tolerance_atr": 0.30,
+    "atr_pct_min": 0.0018,
+    "atr_pct_max": 0.0145,
+    "liquidity_tolerance_atr": 0.27,
     "min_sweep_atr": 0.10,
-    "min_rel_volume": 0.88,
-    "min_confirm_rel_volume": 0.54,
+    "min_rel_volume": 1.00,
+    "min_confirm_rel_volume": 0.68,
     "min_wick_body_ratio": 1.00,
     "min_wick_range_ratio": 0.28,
-    "min_confirm_body_ratio": 0.13,
+    "min_confirm_body_ratio": 0.17,
     "entry_offset_atr": 0.08,
     "sl_buffer_atr": 0.13,
-    "min_rr": 1.14,
-    "min_barrier_rr": 0.62,
-    "ema_reclaim_buffer_atr": 0.20,
-    "max_countertrend_atr": 0.72,
+    "min_rr": 1.25,
+    "min_barrier_rr": 0.75,
+    "ema_reclaim_buffer_atr": 0.16,
+    "max_countertrend_atr": 0.56,
     "min_pivots": 2,
-    "min_sweep_range_atr": 0.42,
+    "min_sweep_range_atr": 0.52,
     "max_sweep_range_atr": 3.10,
     "max_risk_pct": 0.0125,
     "components": [
@@ -106,23 +106,23 @@ PLUS_PROFILE = {
 FREE_PROFILE = {
     "name": "free",
     "score": 74.0,
-    "atr_pct_min": 0.0011,
-    "atr_pct_max": 0.0185,
-    "liquidity_tolerance_atr": 0.37,
+    "atr_pct_min": 0.0015,
+    "atr_pct_max": 0.0160,
+    "liquidity_tolerance_atr": 0.33,
     "min_sweep_atr": 0.07,
-    "min_rel_volume": 0.78,
-    "min_confirm_rel_volume": 0.46,
+    "min_rel_volume": 0.90,
+    "min_confirm_rel_volume": 0.58,
     "min_wick_body_ratio": 0.82,
     "min_wick_range_ratio": 0.24,
-    "min_confirm_body_ratio": 0.08,
+    "min_confirm_body_ratio": 0.12,
     "entry_offset_atr": 0.09,
     "sl_buffer_atr": 0.15,
-    "min_rr": 1.05,
-    "min_barrier_rr": 0.56,
-    "ema_reclaim_buffer_atr": 0.28,
-    "max_countertrend_atr": 0.86,
+    "min_rr": 1.15,
+    "min_barrier_rr": 0.68,
+    "ema_reclaim_buffer_atr": 0.22,
+    "max_countertrend_atr": 0.68,
     "min_pivots": 2,
-    "min_sweep_range_atr": 0.34,
+    "min_sweep_range_atr": 0.45,
     "max_sweep_range_atr": 3.40,
     "max_risk_pct": 0.0145,
     "components": [
@@ -704,6 +704,7 @@ def _evaluate_direction(
     profile: Dict,
     current_market_price: Optional[float] = None,
 ) -> Optional[Tuple[Dict, Tuple]]:
+    _ = current_market_price
     sweep_candle = df.iloc[-2]
     confirm_candle = df.iloc[-1]
     historical = df.iloc[:-2].tail(LIQUIDITY_LOOKBACK)
@@ -745,49 +746,34 @@ def _evaluate_direction(
 
     entry_offset = atr * float(profile["entry_offset_atr"])
     if direction == "SHORT":
-        model_entry = zone_price - entry_offset
+        entry_price = zone_price - entry_offset
         stop_loss = float(sweep_candle["high"]) + (atr * float(profile["sl_buffer_atr"]))
         structure_target = float(historical.tail(TARGET_LOOKBACK)["low"].min())
     else:
-        model_entry = zone_price + entry_offset
+        entry_price = zone_price + entry_offset
         stop_loss = float(sweep_candle["low"]) - (atr * float(profile["sl_buffer_atr"]))
         structure_target = float(historical.tail(TARGET_LOOKBACK)["high"].max())
 
-    risk = abs(stop_loss - model_entry)
+    risk = abs(stop_loss - entry_price)
     if risk <= 0:
         return None
 
-    risk_pct = risk / max(model_entry, 1e-9)
+    risk_pct = risk / max(entry_price, 1e-9)
     if risk_pct > float(profile["max_risk_pct"]):
         return None
 
-    room_rr = _room_to_target(model_entry, stop_loss, structure_target, direction)
+    room_rr = _room_to_target(entry_price, stop_loss, structure_target, direction)
     if room_rr < float(profile["min_rr"]):
         return None
 
-    model_nearest_barrier = _nearest_barrier_price(historical, df_1h, model_entry, direction)
-    model_barrier_rr = room_rr
-    if model_nearest_barrier is not None:
-        model_barrier_rr = _room_to_target(model_entry, stop_loss, model_nearest_barrier, direction)
-        if model_barrier_rr < float(profile["min_barrier_rr"]):
+    nearest_barrier = _nearest_barrier_price(historical, df_1h, entry_price, direction)
+    barrier_rr = room_rr
+    if nearest_barrier is not None:
+        barrier_rr = _room_to_target(entry_price, stop_loss, nearest_barrier, direction)
+        if barrier_rr < float(profile["min_barrier_rr"]):
             return None
 
-    market_price = float(current_market_price) if current_market_price is not None else float(confirm_candle["close"])
-    market_nearest_barrier = _nearest_barrier_price(historical, df_1h, market_price, direction)
-    market_candidate = _market_entry_candidate(
-        current_price=market_price,
-        stop_loss=stop_loss,
-        direction=direction,
-        structure_target=structure_target,
-        nearest_barrier=market_nearest_barrier,
-        profile=profile,
-    )
-    if market_candidate is None:
-        return None
-
-    entry_price, trade_profiles, active_room_rr, active_barrier_rr = market_candidate
-    model_trade_profiles = _build_trade_profiles(model_entry, direction, stop_loss, room_rr)
-    model_tp1 = float(model_trade_profiles["conservador"]["take_profits"][0])
+    trade_profiles = _build_trade_profiles(entry_price, direction, stop_loss, room_rr)
 
     components, raw_components, normalized_components = _build_component_breakdown(
         direction=direction,
@@ -799,7 +785,7 @@ def _evaluate_direction(
         atr=atr,
         rel_volume=rel_volume,
         room_rr=room_rr,
-        barrier_rr=model_barrier_rr,
+        barrier_rr=barrier_rr,
         htf_snapshot=htf_snapshot,
     )
 
@@ -807,8 +793,8 @@ def _evaluate_direction(
         "strategy_name": STRATEGY_NAME,
         "direction": direction,
         "entry_price": _normalize_price(entry_price),
-        "entry_model_price": _normalize_price(model_entry),
-        "entry_sent_price": _normalize_price(entry_price),
+        "entry_model_price": _normalize_price(entry_price),
+        "entry_sent_price": None,
         "stop_loss": trade_profiles["conservador"]["stop_loss"],
         "take_profits": list(trade_profiles["conservador"]["take_profits"]),
         "profiles": trade_profiles,
@@ -826,16 +812,16 @@ def _evaluate_direction(
         "score_profile": str(profile["name"]),
         "score_calibration": SCORE_CALIBRATION_VERSION,
         "entry_model": "liquidity_zone_offset_v1",
-        "send_mode": "market_on_close",
+        "send_mode": "entry_zone_pending",
         "setup_stage": "closed_confirmed",
-        "tp1_progress_at_send_pct": _progress_from_model_to_tp1_pct(model_entry, model_tp1, entry_price, direction),
-        "r_progress_at_send": _r_progress_from_model_entry(model_entry, stop_loss, entry_price, direction),
+        "tp1_progress_at_send_pct": None,
+        "r_progress_at_send": None,
     }
 
     ranking = (
         int(zone["count"]),
-        round(active_room_rr, 4),
-        round(active_barrier_rr, 4),
+        round(room_rr, 4),
+        round(barrier_rr, 4),
         round(rel_volume, 4),
     )
     return result, ranking
