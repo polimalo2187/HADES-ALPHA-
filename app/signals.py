@@ -737,6 +737,12 @@ def get_signal_analysis_for_user(user_id: int, signal_id: str, profile_name: str
     if not selected_payload:
         warnings.append("No encontré el perfil operativo solicitado dentro de la señal.")
 
+    now = datetime.utcnow()
+    telegram_valid_until = user_signal.get("telegram_valid_until") or base_signal.get("telegram_valid_until")
+    evaluation_valid_until = _get_evaluation_valid_until(user_signal) or _get_evaluation_valid_until(base_signal)
+    telegram_window_open = isinstance(telegram_valid_until, datetime) and telegram_valid_until > now
+    evaluation_window_open = isinstance(evaluation_valid_until, datetime) and evaluation_valid_until > now
+
     analysis = {
         **base_signal,
         **user_signal,
