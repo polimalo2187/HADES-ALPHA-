@@ -89,24 +89,44 @@ def _should_scan_reference_close(last_processed_close: Optional[datetime], refer
     return last_processed_close is None or reference_close > last_processed_close
 
 
-def _fetch_symbol_candidate(symbol: str) -> Optional[Dict]:
+def _reference_price_from_5m(df_5m: pd.DataFrame, reference_close: Optional[datetime]) -> Optional[float]:
+    if df_5m is None or df_5m.empty:
+        return None
+    try:
+        if reference_close is None or "close_time" not in df_5m.columns:
+            return float(df_5m.iloc[-1]["close"])
+        ref_ts = pd.Timestamp(reference_close, tz="UTC") if pd.Timestamp(reference_close).tzinfo is None else pd.Timestamp(reference_close).tz_convert("UTC")
+        closed = df_5m[df_5m["close_time"] <= ref_ts]
+        if not closed.empty:
+            return float(closed.iloc[-1]["close"])
+        if len(df_5m) > 1:
+            return float(df_5m.iloc[-2]["close"])
+        return float(df_5m.iloc[-1]["close"])
+    except Exception:
+        return None
+
+
+def _fetch_symbol_candidate(symbol: str, reference_close: datetime) -> tuple[Optional[Dict], Dict[str, int]]:
     df_1h = get_klines(symbol, "1h")
     df_15m = get_klines(symbol, "15m")
     df_5m = get_klines(symbol, "5m")
-    return build_symbol_candidate(symbol, df_1h, df_15m, df_5m)
+    return build_symbol_candidate(symbol, df_1h, df_15m, df_5m, reference_close)
 
 
-async def _collect_symbol_candidates(symbols: List[str]) -> Tuple[List[Dict], int, List[str]]:
+async def _collect_symbol_candidates(symbols: List[str], reference_close: datetime) -> Tuple[List[Dict], int, List[str], Dict[str, int]]:
     semaphore = asyncio.Semaphore(max(1, SCANNER_SYMBOL_CONCURRENCY))
     candidates: List[Dict] = []
     symbol_failures = 0
     symbol_failure_samples: List[str] = []
+    reject_totals: Dict[str, int] = {}
 
     async def _scan_one(symbol: str) -> None:
         nonlocal symbol_failures
         async with semaphore:
             try:
-                candidate = await asyncio.to_thread(_fetch_symbol_candidate, symbol)
+                candidate, reject_counts = await asyncio.to_thread(_fetch_symbol_candidate, symbol, reference_close)
+                for key, value in reject_counts.items():
+                    reject_totals[key] = reject_totals.get(key, 0) + int(value)
                 if candidate:
                     candidates.append(candidate)
             except Exception as exc:
@@ -116,7 +136,7 @@ async def _collect_symbol_candidates(symbols: List[str]) -> Tuple[List[Dict], in
                 logger.warning("⚠️ Error procesando %s: %s", symbol, exc)
 
     await asyncio.gather(*(_scan_one(symbol) for symbol in symbols))
-    return candidates, symbol_failures, symbol_failure_samples
+    return candidates, symbol_failures, symbol_failure_samples, reject_totals
 
 _PROFILE_CONFIGS = {
     "premium": dict(strategy_engine.PREMIUM_PROFILE),
@@ -375,12 +395,20 @@ def _apply_close_market_execution(result: Dict, current_price: float) -> Optiona
     return enriched
 
 
-def build_symbol_candidate(symbol: str, df_1h: pd.DataFrame, df_15m: pd.DataFrame, df_5m: pd.DataFrame) -> Optional[Dict]:
+def build_symbol_candidate(symbol: str, df_1h: pd.DataFrame, df_15m: pd.DataFrame, df_5m: pd.DataFrame, reference_close: datetime) -> tuple[Optional[Dict], Dict[str, int]]:
     closed_15m = _closed_15m_frame(df_15m)
-    result = strategy_engine.mtf_strategy(df_1h=df_1h, df_15m=closed_15m, df_5m=df_5m)
+    reference_market_price = _reference_price_from_5m(df_5m, reference_close)
+    debug_counts: Dict[str, int] = {}
+    result = strategy_engine.mtf_strategy(
+        df_1h=df_1h,
+        df_15m=closed_15m,
+        df_5m=df_5m,
+        reference_market_price=reference_market_price,
+        debug_counts=debug_counts,
+    )
     if not result:
-        return None
-    return _build_candidate(symbol, result, df_5m)
+        return None, debug_counts
+    return _build_candidate(symbol, result, df_5m), debug_counts
 
 
 class RateLimiter:
@@ -696,7 +724,7 @@ async def scan_market_async(bot: Bot):
             cycle_started_at = datetime.utcnow()
             scan_lag_seconds = round(max(0.0, (cycle_started_at - reference_close).total_seconds()), 3)
             symbols = get_active_futures_symbols()
-            candidates, symbol_failures, symbol_failure_samples = await _collect_symbol_candidates(symbols)
+            candidates, symbol_failures, symbol_failure_samples, reject_totals = await _collect_symbol_candidates(symbols, reference_close)
 
             if not candidates:
                 if symbol_failures:
@@ -708,7 +736,7 @@ async def scan_market_async(bot: Bot):
                         symbol_failure_samples,
                     )
                 else:
-                    logger.info("📭 No hay oportunidades fuertes en este ciclo")
+                    logger.info("📭 No hay oportunidades fuertes en este ciclo | rejects=%s", reject_totals)
                 heartbeat(
                     "scanner",
                     status="degraded" if symbol_failures else "ok",
@@ -723,6 +751,8 @@ async def scan_market_async(bot: Bot):
                         "reference_close": reference_close.isoformat(),
                         "scan_lag_seconds": scan_lag_seconds,
                         "cycle_started_at": cycle_started_at.isoformat(),
+                    "reject_totals": reject_totals,
+                        "reject_totals": reject_totals,
                     },
                 )
                 last_processed_close = reference_close
@@ -747,12 +777,13 @@ async def scan_market_async(bot: Bot):
             free_candidates = [c for c in candidates if _qualifies_for_free(c)]
 
             logger.info(
-                "📚 Candidatos | total=%s | premium=%s | plus=%s | free=%s | lag=%ss",
+                "📚 Candidatos | total=%s | premium=%s | plus=%s | free=%s | lag=%ss | rejects=%s",
                 len(candidates),
                 len(premium_candidates),
                 len(plus_candidates),
                 len(free_candidates),
                 scan_lag_seconds,
+                reject_totals,
             )
 
             used_symbols: Set[str] = set()
@@ -817,6 +848,8 @@ async def scan_market_async(bot: Bot):
                     "reference_close": reference_close.isoformat(),
                     "scan_lag_seconds": scan_lag_seconds,
                     "cycle_started_at": cycle_started_at.isoformat(),
+                    "reject_totals": reject_totals,
+                        "reject_totals": reject_totals,
                 },
             )
             last_processed_close = reference_close
