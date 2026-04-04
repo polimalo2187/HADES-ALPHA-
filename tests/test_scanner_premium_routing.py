@@ -61,3 +61,80 @@ def test_select_dispatchable_signal_skips_duplicate_and_uses_next_candidate(monk
 def test_scanner_interval_default_is_20_seconds():
     scanner = _load_scanner()
     assert scanner.SCAN_INTERVAL_SECONDS == 20
+
+
+def test_apply_close_market_execution_preserves_prepriced_market_signal():
+    scanner = _load_scanner()
+
+    payload = {
+        "direction": "LONG",
+        "entry_price": 100.4,
+        "entry_model_price": 100.1,
+        "entry_sent_price": 100.4,
+        "stop_loss": 99.5,
+        "take_profits": [101.5, 102.1],
+        "profiles": {
+            "conservador": {
+                "stop_loss": 99.5,
+                "take_profits": [101.5, 102.1],
+                "leverage": "20x-30x",
+            }
+        },
+        "raw_score": 74.0,
+        "normalized_score": 74.0,
+        "setup_group": "free",
+        "score_profile": "free",
+        "score_calibration": "v8_liquidity_original_market_frequency",
+        "send_mode": "market_on_close",
+        "tp1_progress_at_send_pct": 12.0,
+        "r_progress_at_send": 0.11,
+        "setup_stage": "closed_confirmed",
+        "candidate_tier": "free",
+        "final_tier": "free",
+        "entry_model": "liquidity_zone_offset_v1",
+    }
+
+    enriched = scanner._apply_close_market_execution(payload, current_price=100.45)
+
+    assert enriched is not None
+    assert enriched["entry_model_price"] == 100.1
+    assert enriched["entry_sent_price"] == 100.4
+    assert enriched["entry_price"] == 100.4
+    assert enriched["take_profits"] == [101.5, 102.1]
+    assert enriched["send_mode"] == "market_on_close"
+
+
+def test_apply_close_market_execution_accepts_relaxed_progress_guard():
+    scanner = _load_scanner()
+
+    payload = {
+        "direction": "LONG",
+        "entry_price": 100.4,
+        "entry_model_price": 100.1,
+        "entry_sent_price": 100.4,
+        "stop_loss": 99.5,
+        "take_profits": [101.5, 102.1],
+        "profiles": {
+            "conservador": {
+                "stop_loss": 99.5,
+                "take_profits": [101.5, 102.1],
+                "leverage": "20x-30x",
+            }
+        },
+        "raw_score": 74.0,
+        "normalized_score": 74.0,
+        "setup_group": "free",
+        "score_profile": "free",
+        "score_calibration": "v8_liquidity_original_market_frequency",
+        "send_mode": "market_on_close",
+        "tp1_progress_at_send_pct": 22.0,
+        "r_progress_at_send": 0.20,
+        "setup_stage": "closed_confirmed",
+        "candidate_tier": "free",
+        "final_tier": "free",
+        "entry_model": "liquidity_zone_offset_v1",
+    }
+
+    enriched = scanner._apply_close_market_execution(payload, current_price=100.45)
+
+    assert enriched is not None
