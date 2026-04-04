@@ -34,8 +34,8 @@ PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "72"))
 FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "64"))
 
 
-MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT = float(os.getenv("MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT", "25"))
-MAX_CLOSE_MARKET_R_PROGRESS = float(os.getenv("MAX_CLOSE_MARKET_R_PROGRESS", "0.25"))
+MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT = float(os.getenv("MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT", "15"))
+MAX_CLOSE_MARKET_R_PROGRESS = float(os.getenv("MAX_CLOSE_MARKET_R_PROGRESS", "0.15"))
 SCORE_CALIBRATION_VERSION = strategy_engine.SCORE_CALIBRATION_VERSION
 ENTRY_MODEL_NAME = "liquidity_zone_offset_v1"
 SETUP_STAGE_CLOSED_CONFIRMED = "closed_confirmed"
@@ -520,14 +520,22 @@ def _select_dispatchable_signal(
 
 
 def _build_candidate(symbol: str, result: Dict, df_5m: pd.DataFrame) -> Optional[Dict]:
-    current_price = float(df_5m.iloc[-1]["close"])
-    executed = _apply_close_market_execution(result, current_price)
-    if not executed:
-        return None
+    direction = str(result.get("direction") or "").upper()
+    send_mode = str(result.get("send_mode") or "").strip().lower()
 
-    direction = str(executed["direction"]).upper()
-    raw_score = _raw_score(executed)
-    normalized_score = _normalized_score(executed)
+    if send_mode == "market_on_close":
+        current_price = float(df_5m.iloc[-1]["close"])
+        candidate = _apply_close_market_execution(result, current_price)
+        if not candidate:
+            return None
+    else:
+        candidate = dict(result)
+        candidate.setdefault("send_mode", "entry_zone_pending")
+        candidate.setdefault("entry_model_price", candidate.get("entry_price"))
+        candidate.setdefault("entry_sent_price", None)
+
+    raw_score = _raw_score(candidate)
+    normalized_score = _normalized_score(candidate)
     entry_quality = _entry_quality(df_5m, direction)
     volume_quality = _volume_quality(df_5m)
 
@@ -536,7 +544,7 @@ def _build_candidate(symbol: str, result: Dict, df_5m: pd.DataFrame) -> Optional
         2,
     )
 
-    candidate = dict(executed)
+    candidate = dict(candidate)
     candidate["symbol"] = symbol
     candidate["direction"] = direction
     candidate["raw_score"] = raw_score
