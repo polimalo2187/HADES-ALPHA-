@@ -5,6 +5,7 @@ import logging
 import os
 import queue
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
@@ -29,8 +30,10 @@ logger = logging.getLogger(__name__)
 PIPELINE_RETRY_LIMIT = int(os.getenv("SIGNAL_PIPELINE_RETRY_LIMIT", "3"))
 PIPELINE_RETRY_BASE_SECONDS = int(os.getenv("SIGNAL_PIPELINE_RETRY_BASE_SECONDS", "2"))
 PIPELINE_RECOVERY_LIMIT = int(os.getenv("SIGNAL_PIPELINE_RECOVERY_LIMIT", "200"))
+PUSH_EXECUTOR_WORKERS = int(os.getenv("SIGNAL_PUSH_EXECUTOR_WORKERS", "4"))
 
 _dispatch_queue: "queue.Queue[str]" = queue.Queue()
+_push_executor = ThreadPoolExecutor(max_workers=max(1, PUSH_EXECUTOR_WORKERS), thread_name_prefix="SignalPush")
 _started = False
 _bot: Optional[Bot] = None
 _worker_thread: Optional[threading.Thread] = None
@@ -245,7 +248,7 @@ def _schedule_retry(job: Dict, error: str) -> None:
     )
 
 
-def _update_delivery_results(signal_id: str, push_results: Dict[str, object]) -> None:
+def _update_delivery_results(signal_id: str, visibility: str, push_results: Dict[str, object]) -> None:
     now = datetime.utcnow()
     for result in push_results.get("results", []):
         status = result.get("status")
@@ -259,8 +262,20 @@ def _update_delivery_results(signal_id: str, push_results: Dict[str, object]) ->
             update["sent_at"] = result.get("sent_at") or now
         signal_deliveries_collection().update_one(
             {"signal_id": signal_id, "user_id": user_id},
-            {"$set": update},
+            {
+                "$set": update,
+                "$setOnInsert": new_signal_delivery(
+                    signal_id=signal_id,
+                    user_id=user_id,
+                    visibility=visibility,
+                ),
+            },
+            upsert=True,
         )
+
+
+def _run_push_dispatch(signal_doc: Dict, user_ids: List[int]) -> Dict[str, object]:
+    return asyncio.run(_dispatch_pushes(signal_doc, user_ids))
 
 
 def _process_job(job_id: str) -> None:
@@ -277,40 +292,55 @@ def _process_job(job_id: str) -> None:
         _schedule_retry(job, "base_signal_not_found")
         return
 
-    user_ids = _eligible_users_for_alert(str(signal_doc["visibility"]))
+    visibility = str(signal_doc["visibility"])
+    user_ids = _eligible_users_for_alert(visibility)
+    push_requested_at = datetime.utcnow()
     signal_jobs_collection().update_one(
         {"_id": job["_id"]},
         {
             "$set": {
                 "eligible_users": len(user_ids),
+                "push_requested_at": push_requested_at,
                 "updated_at": datetime.utcnow(),
             }
         },
     )
+    _mark_signal_dispatch(signal_id, dispatch_status="processing", push_requested_at=push_requested_at)
+
+    push_future = _push_executor.submit(_run_push_dispatch, signal_doc, user_ids)
+    sync_error: Optional[str] = None
 
     try:
-        _upsert_user_signals(signal_doc, user_ids)
-        _ensure_delivery_records(signal_id, str(signal_doc["visibility"]), user_ids)
+        try:
+            _upsert_user_signals(signal_doc, user_ids)
+            _ensure_delivery_records(signal_id, visibility, user_ids)
+        except Exception as sync_exc:
+            sync_error = f"fanout_sync_failed: {sync_exc}"
+            logger.error("❌ Error sincronizando fanout local de %s: %s", signal_id, sync_exc, exc_info=True)
 
-        push_results = asyncio.run(_dispatch_pushes(signal_doc, user_ids))
-        _update_delivery_results(signal_id, push_results)
+        push_results = push_future.result()
+        _update_delivery_results(signal_id, visibility, push_results)
 
         finished_at = datetime.utcnow()
-        signal_jobs_collection().update_one(
-            {"_id": job["_id"]},
-            {
-                "$set": {
-                    "status": "completed",
-                    "processing_finished_at": finished_at,
-                    "updated_at": finished_at,
-                    "requested_users": int(push_results.get("requested", 0)),
-                    "sent_users": int(push_results.get("sent", 0)),
-                    "failed_users": int(push_results.get("failed", 0)),
-                    "first_push_at": push_results.get("first_push_at"),
-                    "last_push_at": push_results.get("last_push_at"),
-                }
-            },
-        )
+        push_latency_ms = None
+        first_push_at = push_results.get("first_push_at")
+        if isinstance(first_push_at, datetime):
+            push_latency_ms = int(max(0.0, (first_push_at - push_requested_at).total_seconds()) * 1000)
+
+        job_update = {
+            "status": "completed",
+            "processing_finished_at": finished_at,
+            "updated_at": finished_at,
+            "requested_users": int(push_results.get("requested", 0)),
+            "sent_users": int(push_results.get("sent", 0)),
+            "failed_users": int(push_results.get("failed", 0)),
+            "first_push_at": push_results.get("first_push_at"),
+            "last_push_at": push_results.get("last_push_at"),
+            "push_latency_ms": push_latency_ms,
+        }
+        if sync_error:
+            job_update["sync_error"] = sync_error
+        signal_jobs_collection().update_one({"_id": job["_id"]}, {"$set": job_update})
         _mark_signal_dispatch(
             signal_id,
             dispatch_status="completed",
@@ -320,13 +350,16 @@ def _process_job(job_id: str) -> None:
             dispatch_failed_users=int(push_results.get("failed", 0)),
             first_push_at=push_results.get("first_push_at"),
             last_push_at=push_results.get("last_push_at"),
+            push_latency_ms=push_latency_ms,
+            fanout_sync_error=sync_error,
         )
         logger.info(
-            "⚡ Señal %s despachada | users=%s sent=%s failed=%s",
+            "⚡ Señal %s despachada | users=%s sent=%s failed=%s latency_ms=%s",
             signal_id,
             push_results.get("requested", 0),
             push_results.get("sent", 0),
             push_results.get("failed", 0),
+            push_latency_ms,
         )
     except Exception as exc:
         _schedule_retry(job, str(exc))
