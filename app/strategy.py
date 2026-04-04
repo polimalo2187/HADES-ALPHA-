@@ -26,7 +26,7 @@ PIVOT_WINDOW = 3
 MIN_HISTORY_BARS = max(LIQUIDITY_LOOKBACK + 8, ATR_PERIOD + VOLUME_PERIOD + 8)
 
 STRATEGY_NAME = "LIQUIDITY_SWEEP_REVERSAL"
-SCORE_CALIBRATION_VERSION = "v12_liquidity_pending_commercial_rebalance"
+SCORE_CALIBRATION_VERSION = "v14_reference_close_guarded"
 
 # =======================================
 # PERFILES POR PLAN
@@ -699,12 +699,16 @@ def _build_component_breakdown(
 
 
 
-def _pending_entry_actionable(direction: str, entry_price: float, current_price: Optional[float], *, pct: float = 0.0015) -> bool:
-    """Reject signals that are already gone in the favorable direction when emitted.
+def _pending_entry_actionable(direction: str, entry_price: float, current_price: Optional[float], *, pct: float = 0.0035) -> bool:
+    """Reject only setups already clearly gone before the signal could be emitted.
 
-    Pending-entry signals are only actionable if price is still waiting for the zone, or currently in the zone.
-    For SHORT, if price is already below the entry zone, the retrace entry is gone.
-    For LONG, if price is already above the entry zone, the bounce entry is gone.
+    A fixed 0.15% guard was too aggressive for this strategy once the scanner
+    moved to concurrent batches: later-processed symbols were being rejected
+    using a drifting live 5m price instead of a price aligned to the closed 15m
+    reference candle. That could zero-out whole cycles.
+
+    The guard stays, but it is intentionally wider and must be fed with a price
+    snapshot aligned to the scanner reference close, not an arbitrary live tick.
     """
     try:
         entry_price = float(entry_price)
@@ -721,51 +725,66 @@ def _pending_entry_actionable(direction: str, entry_price: float, current_price:
     if direction == "LONG":
         return current_price <= zone_high
     return True
+
+
+def _bump_debug(debug_counts: Optional[Dict[str, int]], key: str) -> None:
+    if debug_counts is None:
+        return
+    debug_counts[key] = int(debug_counts.get(key, 0)) + 1
 def _evaluate_direction(
     df: pd.DataFrame,
     df_1h: pd.DataFrame,
     direction: str,
     profile: Dict,
     current_market_price: Optional[float] = None,
+    debug_counts: Optional[Dict[str, int]] = None,
 ) -> Optional[Tuple[Dict, Tuple]]:
-    _ = current_market_price
     sweep_candle = df.iloc[-2]
     confirm_candle = df.iloc[-1]
     historical = df.iloc[:-2].tail(LIQUIDITY_LOOKBACK)
 
     if len(historical) < LIQUIDITY_LOOKBACK:
+        _bump_debug(debug_counts, "history")
         return None
 
     atr = float(sweep_candle["atr"])
     atr_pct = float(sweep_candle["atr_pct"])
     if atr <= 0 or not (float(profile["atr_pct_min"]) <= atr_pct <= float(profile["atr_pct_max"])):
+        _bump_debug(debug_counts, "atr_pct")
         return None
 
     rel_volume = max(float(sweep_candle["rel_volume"]), float(confirm_candle["rel_volume"]))
     if rel_volume < float(profile["min_rel_volume"]):
+        _bump_debug(debug_counts, "rel_volume")
         return None
 
     sweep_range_atr = float(sweep_candle["range"]) / atr
     if not (float(profile["min_sweep_range_atr"]) <= sweep_range_atr <= float(profile["max_sweep_range_atr"])):
+        _bump_debug(debug_counts, "sweep_range")
         return None
 
     htf_snapshot = _htf_context_snapshot(df_1h, direction, profile)
     if not bool(htf_snapshot.get("ok")):
+        _bump_debug(debug_counts, "htf_context")
         return None
 
     zone = _select_liquidity_zone(historical, direction, sweep_candle, profile)
     if not zone:
+        _bump_debug(debug_counts, "liquidity_zone")
         return None
 
     zone_price = float(zone["price"])
 
     if not _recovery_candle_ok(sweep_candle, direction, profile, zone_price):
+        _bump_debug(debug_counts, "recovery_close")
         return None
 
     if not _confirmation_candle_ok(confirm_candle, sweep_candle, direction, profile):
+        _bump_debug(debug_counts, "confirmation_candle")
         return None
 
     if not _ema_reclaim_ok(confirm_candle, direction, profile):
+        _bump_debug(debug_counts, "ema_reclaim")
         return None
 
     entry_offset = atr * float(profile["entry_offset_atr"])
@@ -797,6 +816,7 @@ def _evaluate_direction(
 
     room_rr = _room_to_target(entry_price, stop_loss, structure_target, direction)
     if room_rr < float(profile["min_rr"]):
+        _bump_debug(debug_counts, "min_rr")
         return None
 
     nearest_barrier = _nearest_barrier_price(historical, df_1h, entry_price, direction)
@@ -865,12 +885,13 @@ def _evaluate_profile(
     df_1h: pd.DataFrame,
     profile: Dict,
     current_market_price: Optional[float] = None,
+    debug_counts: Optional[Dict[str, int]] = None,
 ) -> Optional[Dict]:
     best_result: Optional[Dict] = None
     best_rank: Optional[Tuple] = None
 
     for direction in ("SHORT", "LONG"):
-        evaluated = _evaluate_direction(df, df_1h, direction, profile, current_market_price=current_market_price)
+        evaluated = _evaluate_direction(df, df_1h, direction, profile, current_market_price=current_market_price, debug_counts=debug_counts)
         if not evaluated:
             continue
 
@@ -890,6 +911,8 @@ def liquidity_sweep_reversal_strategy(
     df_1h: pd.DataFrame,
     df_15m: pd.DataFrame,
     df_5m: Optional[pd.DataFrame] = None,
+    reference_market_price: Optional[float] = None,
+    debug_counts: Optional[Dict[str, int]] = None,
 ) -> Optional[Dict]:
     closed_15m = _closed_15m_frame(df_15m)
     if len(closed_15m) < MIN_HISTORY_BARS or len(df_1h) < 60:
@@ -902,15 +925,19 @@ def liquidity_sweep_reversal_strategy(
     if df[["atr", "atr_pct", "rel_volume", "body_ratio", "ema20", "ema50"]].tail(5).isnull().any().any():
         return None
 
-    current_market_price: Optional[float] = None
-    if df_5m is not None and len(df_5m) > 0:
+    current_market_price: Optional[float] = reference_market_price
+    if current_market_price is None and df_5m is not None and len(df_5m) > 0:
         try:
-            current_market_price = float(df_5m.iloc[-1]["close"])
+            closed_5m = _closed_15m_frame(df_5m)
+            if len(closed_5m) > 0:
+                current_market_price = float(closed_5m.iloc[-1]["close"])
+            else:
+                current_market_price = float(df_5m.iloc[-1]["close"])
         except Exception:
             current_market_price = None
 
     for profile in PROFILES:
-        result = _evaluate_profile(df, df_1h, profile, current_market_price=current_market_price)
+        result = _evaluate_profile(df, df_1h, profile, current_market_price=current_market_price, debug_counts=debug_counts)
         if result:
             return result
 
@@ -928,5 +955,13 @@ def mtf_strategy(
     df_1h: pd.DataFrame,
     df_15m: pd.DataFrame,
     df_5m: pd.DataFrame,
+    reference_market_price: Optional[float] = None,
+    debug_counts: Optional[Dict[str, int]] = None,
 ) -> Optional[Dict]:
-    return liquidity_sweep_reversal_strategy(df_1h, df_15m, df_5m)
+    return liquidity_sweep_reversal_strategy(
+        df_1h,
+        df_15m,
+        df_5m,
+        reference_market_price=reference_market_price,
+        debug_counts=debug_counts,
+    )
