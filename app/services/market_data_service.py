@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Optional
 
@@ -130,18 +131,33 @@ def get_open_interest_value(symbol: str, *, open_interest_fn=None) -> float:
     return oi
 
 
-def get_funding_rate_pct_map(symbols: Iterable[str], *, premium_index_fn=None) -> Dict[str, float]:
+def _parallel_symbol_map(symbols: Iterable[str], fetcher, *, max_workers: int = 8) -> Dict[str, float]:
+    ordered = _unique_symbols(symbols)
+    if not ordered:
+        return {}
+    if len(ordered) == 1:
+        sym = ordered[0]
+        return {sym: fetcher(sym)}
+
+    workers = max(2, min(int(max_workers), len(ordered)))
     result: Dict[str, float] = {}
-    for sym in _unique_symbols(symbols):
-        result[sym] = get_funding_rate_pct(sym, premium_index_fn=premium_index_fn)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_to_symbol = {executor.submit(fetcher, sym): sym for sym in ordered}
+        for future in as_completed(future_to_symbol):
+            sym = future_to_symbol[future]
+            try:
+                result[sym] = float(future.result())
+            except Exception:
+                result[sym] = 0.0
     return result
+
+
+def get_funding_rate_pct_map(symbols: Iterable[str], *, premium_index_fn=None) -> Dict[str, float]:
+    return _parallel_symbol_map(symbols, lambda sym: get_funding_rate_pct(sym, premium_index_fn=premium_index_fn))
 
 
 def get_open_interest_map(symbols: Iterable[str], *, open_interest_fn=None) -> Dict[str, float]:
-    result: Dict[str, float] = {}
-    for sym in _unique_symbols(symbols):
-        result[sym] = get_open_interest_value(sym, open_interest_fn=open_interest_fn)
-    return result
+    return _parallel_symbol_map(symbols, lambda sym: get_open_interest_value(sym, open_interest_fn=open_interest_fn))
 
 
 def clear_market_data_caches() -> None:
