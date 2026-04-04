@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 import time
 from typing import Any, Dict, List, Tuple
 
@@ -28,7 +29,10 @@ _RADAR_RECENT_SYMBOLS: Dict[str, float] = {}
 _RADAR_SYMBOL_COOLDOWN_SECONDS = 1800  # 30 minutos
 
 
-def _get_json(url: str, timeout: int = 10) -> Any:
+BINANCE_PUBLIC_TIMEOUT_SECONDS = int(os.getenv("BINANCE_PUBLIC_TIMEOUT_SECONDS", "4"))
+
+
+def _get_json(url: str, timeout: int = BINANCE_PUBLIC_TIMEOUT_SECONDS) -> Any:
     """GET JSON con tolerancia a fallos.
     - Devuelve [] o {} si falla la petición.
     - Evita que un fallo de red tumbe el bot.
@@ -85,7 +89,7 @@ def get_futures_24h_tickers() -> List[Dict[str, Any]]:
     cached = _cache_get(key)
     if cached is not None:
         return cached
-    data = _get_json(FAPI_24H_TICKER, timeout=10)
+    data = _get_json(FAPI_24H_TICKER, timeout=max(BINANCE_PUBLIC_TIMEOUT_SECONDS, 4))
     if not isinstance(data, list):
         return []
     _cache_set(key, data, _TTL_TICKERS)
@@ -129,7 +133,7 @@ def get_premium_index(symbol: str) -> Dict[str, Any]:
     cached = _cache_get(key)
     if cached is not None:
         return cached
-    data = _get_json(FAPI_PREMIUM_INDEX.format(symbol=symbol), timeout=10)
+    data = _get_json(FAPI_PREMIUM_INDEX.format(symbol=symbol), timeout=BINANCE_PUBLIC_TIMEOUT_SECONDS)
     _cache_set(key, data, _TTL_SYMBOL_DETAILS)
     return data
 
@@ -141,7 +145,7 @@ def get_open_interest(symbol: str) -> Dict[str, Any]:
     cached = _cache_get(key)
     if cached is not None:
         return cached
-    data = _get_json(FAPI_OPEN_INTEREST.format(symbol=symbol), timeout=10)
+    data = _get_json(FAPI_OPEN_INTEREST.format(symbol=symbol), timeout=BINANCE_PUBLIC_TIMEOUT_SECONDS)
     _cache_set(key, data, _TTL_SYMBOL_DETAILS)
     return data
 
