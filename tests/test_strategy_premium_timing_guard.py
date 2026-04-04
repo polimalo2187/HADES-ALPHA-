@@ -25,7 +25,7 @@ def test_market_entry_candidate_rejects_price_that_breaks_rr_or_stop_side():
     assert strategy._market_entry_candidate(102.95, 99.8, "LONG", 103.2, 102.8, strategy.PLUS_PROFILE) is None
 
 
-def test_evaluate_direction_uses_market_entry_after_closed_confirmation(monkeypatch):
+def test_evaluate_direction_uses_pending_entry_from_liquidity_model(monkeypatch):
     rows = []
     base_time = pd.Timestamp.now(tz="UTC") - timedelta(minutes=(strategy.LIQUIDITY_LOOKBACK + 3) * 15)
     for idx in range(strategy.LIQUIDITY_LOOKBACK + 2):
@@ -67,10 +67,10 @@ def test_evaluate_direction_uses_market_entry_after_closed_confirmation(monkeypa
 
     assert result is not None
     payload, ranking = result
-    assert payload["send_mode"] == "market_on_close"
-    assert payload["entry_price"] == payload["entry_sent_price"]
-    assert payload["entry_price"] == round(100.4, 8)
-    assert payload["entry_price"] != payload["entry_model_price"]
+    assert payload["send_mode"] == "entry_zone_pending"
+    assert payload["entry_sent_price"] is None
+    assert payload["entry_price"] == payload["entry_model_price"]
+    assert payload["entry_price"] != round(100.4, 8)
     assert payload["setup_stage"] == "closed_confirmed"
     assert ranking[1] > 0
 
@@ -124,7 +124,7 @@ def test_evaluate_direction_emits_numeric_component_breakdown(monkeypatch):
 
 
 def test_strategy_profiles_keep_strictness_order_after_rebalance():
-    assert strategy.SCORE_CALIBRATION_VERSION == "v8_liquidity_original_market_frequency"
+    assert strategy.SCORE_CALIBRATION_VERSION == "v9_liquidity_original_pending_entry"
 
     assert strategy.PREMIUM_PROFILE["min_rel_volume"] > strategy.PLUS_PROFILE["min_rel_volume"] > strategy.FREE_PROFILE["min_rel_volume"]
     assert strategy.PREMIUM_PROFILE["min_confirm_rel_volume"] > strategy.PLUS_PROFILE["min_confirm_rel_volume"] > strategy.FREE_PROFILE["min_confirm_rel_volume"]
