@@ -4,11 +4,13 @@ import os
 import time
 import logging
 import asyncio
+import threading
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
 from telegram import Bot
 
 from app.database import signals_collection
@@ -23,10 +25,16 @@ logger = logging.getLogger(__name__)
 BINANCE_FUTURES_API = "https://fapi.binance.com"
 
 SCAN_INTERVAL_SECONDS = int(os.getenv("SCAN_INTERVAL_SECONDS", "20"))
+SCAN_IDLE_POLL_SECONDS = float(os.getenv("SCAN_IDLE_POLL_SECONDS", "2"))
+SCAN_CLOSE_GRACE_SECONDS = float(os.getenv("SCAN_CLOSE_GRACE_SECONDS", "3"))
+SCANNER_SYMBOL_CONCURRENCY = int(os.getenv("SCANNER_SYMBOL_CONCURRENCY", "16"))
 MIN_QUOTE_VOLUME = int(os.getenv("MIN_QUOTE_VOLUME", "20000000"))
 DEDUP_MINUTES = int(os.getenv("DEDUP_MINUTES", "10"))
-REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "0.2"))
-REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "15"))
+REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "0"))
+REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "8"))
+REQUEST_CONNECT_TIMEOUT = float(os.getenv("REQUEST_CONNECT_TIMEOUT", str(min(4.0, REQUEST_TIMEOUT))))
+REQUEST_READ_TIMEOUT = float(os.getenv("REQUEST_READ_TIMEOUT", str(REQUEST_TIMEOUT)))
+HTTP_POOL_SIZE = max(8, SCANNER_SYMBOL_CONCURRENCY * 3)
 
 # Thresholds basados en raw_score real.
 PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "78"))
@@ -39,6 +47,76 @@ MAX_CLOSE_MARKET_R_PROGRESS = float(os.getenv("MAX_CLOSE_MARKET_R_PROGRESS", "0.
 SCORE_CALIBRATION_VERSION = strategy_engine.SCORE_CALIBRATION_VERSION
 ENTRY_MODEL_NAME = "liquidity_zone_offset_v1"
 SETUP_STAGE_CLOSED_CONFIRMED = "closed_confirmed"
+
+_thread_local = threading.local()
+
+
+def _http_session() -> requests.Session:
+    session = getattr(_thread_local, "session", None)
+    if session is None:
+        session = requests.Session()
+        adapter = HTTPAdapter(pool_connections=HTTP_POOL_SIZE, pool_maxsize=HTTP_POOL_SIZE, max_retries=0)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        _thread_local.session = session
+    return session
+
+
+def _http_get(url: str, *, params: Optional[Dict] = None) -> requests.Response:
+    rate_limiter.wait()
+    response = _http_session().get(
+        url,
+        params=params,
+        timeout=(REQUEST_CONNECT_TIMEOUT, REQUEST_READ_TIMEOUT),
+    )
+    response.raise_for_status()
+    return response
+
+
+def _latest_ready_15m_close(now: Optional[datetime] = None) -> datetime:
+    current = now or datetime.utcnow()
+    reference = current.replace(
+        minute=(current.minute // 15) * 15,
+        second=0,
+        microsecond=0,
+    )
+    if (current - reference).total_seconds() < SCAN_CLOSE_GRACE_SECONDS:
+        reference -= timedelta(minutes=15)
+    return reference
+
+
+def _should_scan_reference_close(last_processed_close: Optional[datetime], reference_close: datetime) -> bool:
+    return last_processed_close is None or reference_close > last_processed_close
+
+
+def _fetch_symbol_candidate(symbol: str) -> Optional[Dict]:
+    df_1h = get_klines(symbol, "1h")
+    df_15m = get_klines(symbol, "15m")
+    df_5m = get_klines(symbol, "5m")
+    return build_symbol_candidate(symbol, df_1h, df_15m, df_5m)
+
+
+async def _collect_symbol_candidates(symbols: List[str]) -> Tuple[List[Dict], int, List[str]]:
+    semaphore = asyncio.Semaphore(max(1, SCANNER_SYMBOL_CONCURRENCY))
+    candidates: List[Dict] = []
+    symbol_failures = 0
+    symbol_failure_samples: List[str] = []
+
+    async def _scan_one(symbol: str) -> None:
+        nonlocal symbol_failures
+        async with semaphore:
+            try:
+                candidate = await asyncio.to_thread(_fetch_symbol_candidate, symbol)
+                if candidate:
+                    candidates.append(candidate)
+            except Exception as exc:
+                symbol_failures += 1
+                if len(symbol_failure_samples) < 5:
+                    symbol_failure_samples.append(f"{symbol}: {exc}")
+                logger.warning("⚠️ Error procesando %s: %s", symbol, exc)
+
+    await asyncio.gather(*(_scan_one(symbol) for symbol in symbols))
+    return candidates, symbol_failures, symbol_failure_samples
 
 _PROFILE_CONFIGS = {
     "premium": dict(strategy_engine.PREMIUM_PROFILE),
@@ -264,25 +342,29 @@ def build_symbol_candidate(symbol: str, df_1h: pd.DataFrame, df_15m: pd.DataFram
 
 class RateLimiter:
     def __init__(self, delay: float):
-        self.delay = delay
+        self.delay = max(0.0, float(delay))
         self.last_request = 0.0
+        self._lock = threading.Lock()
 
     def wait(self) -> None:
-        elapsed = time.time() - self.last_request
-        if elapsed < self.delay:
-            time.sleep(self.delay - elapsed)
-        self.last_request = time.time()
+        if self.delay <= 0:
+            return
+        with self._lock:
+            now = time.monotonic()
+            elapsed = now - self.last_request
+            if elapsed < self.delay:
+                time.sleep(self.delay - elapsed)
+                now = time.monotonic()
+            self.last_request = now
 
 
 rate_limiter = RateLimiter(REQUEST_DELAY)
 
 
 def get_klines(symbol: str, interval: str, limit: int = 220) -> pd.DataFrame:
-    rate_limiter.wait()
     url = f"{BINANCE_FUTURES_API}/fapi/v1/klines"
     params = {"symbol": symbol, "interval": interval, "limit": limit}
-    response = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
-    response.raise_for_status()
+    response = _http_get(url, params=params)
 
     df = pd.DataFrame(
         response.json(),
@@ -308,10 +390,8 @@ def get_klines(symbol: str, interval: str, limit: int = 220) -> pd.DataFrame:
 
 
 def get_active_futures_symbols() -> List[str]:
-    rate_limiter.wait()
     url = f"{BINANCE_FUTURES_API}/fapi/v1/ticker/24hr"
-    response = requests.get(url, timeout=REQUEST_TIMEOUT)
-    response.raise_for_status()
+    response = _http_get(url)
 
     symbols = [
         item["symbol"]
@@ -561,32 +641,19 @@ async def scan_market_async(bot: Bot):
     )
 
     cycle_number = 0
+    last_processed_close: Optional[datetime] = None
 
     while True:
         try:
+            reference_close = _latest_ready_15m_close()
+            if not _should_scan_reference_close(last_processed_close, reference_close):
+                await asyncio.sleep(SCAN_IDLE_POLL_SECONDS)
+                continue
+
             cycle_started_at = datetime.utcnow()
+            scan_lag_seconds = round(max(0.0, (cycle_started_at - reference_close).total_seconds()), 3)
             symbols = get_active_futures_symbols()
-            candidates: List[Dict] = []
-
-            symbol_failures = 0
-            symbol_failure_samples: List[str] = []
-
-            for symbol in symbols:
-                try:
-                    df_1h = get_klines(symbol, "1h")
-                    df_15m = get_klines(symbol, "15m")
-                    df_5m = get_klines(symbol, "5m")
-
-                    candidate = build_symbol_candidate(symbol, df_1h, df_15m, df_5m)
-                    if candidate:
-                        candidates.append(candidate)
-
-                    await asyncio.sleep(0.05)
-                except Exception as e:
-                    symbol_failures += 1
-                    if len(symbol_failure_samples) < 5:
-                        symbol_failure_samples.append(f"{symbol}: {e}")
-                    logger.warning("⚠️ Error procesando %s: %s", symbol, e)
+            candidates, symbol_failures, symbol_failure_samples = await _collect_symbol_candidates(symbols)
 
             if not candidates:
                 if symbol_failures:
@@ -610,11 +677,14 @@ async def scan_market_async(bot: Bot):
                         "symbol_failures": symbol_failures,
                         "symbol_failure_samples": symbol_failure_samples,
                         "scan_interval_seconds": SCAN_INTERVAL_SECONDS,
+                        "reference_close": reference_close.isoformat(),
+                        "scan_lag_seconds": scan_lag_seconds,
                         "cycle_started_at": cycle_started_at.isoformat(),
                     },
                 )
+                last_processed_close = reference_close
                 cycle_number += 1
-                await asyncio.sleep(SCAN_INTERVAL_SECONDS)
+                await asyncio.sleep(SCAN_IDLE_POLL_SECONDS)
                 continue
 
             candidates.sort(
@@ -634,11 +704,12 @@ async def scan_market_async(bot: Bot):
             free_candidates = [c for c in candidates if _qualifies_for_free(c)]
 
             logger.info(
-                "📚 Candidatos | total=%s | premium=%s | plus=%s | free=%s",
+                "📚 Candidatos | total=%s | premium=%s | plus=%s | free=%s | lag=%ss",
                 len(candidates),
                 len(premium_candidates),
                 len(plus_candidates),
                 len(free_candidates),
+                scan_lag_seconds,
             )
 
             used_symbols: Set[str] = set()
@@ -699,17 +770,20 @@ async def scan_market_async(bot: Bot):
                     "symbol_failures": symbol_failures,
                     "symbol_failure_samples": symbol_failure_samples,
                     "scan_interval_seconds": SCAN_INTERVAL_SECONDS,
+                    "scanner_symbol_concurrency": SCANNER_SYMBOL_CONCURRENCY,
+                    "reference_close": reference_close.isoformat(),
+                    "scan_lag_seconds": scan_lag_seconds,
                     "cycle_started_at": cycle_started_at.isoformat(),
                 },
             )
+            last_processed_close = reference_close
             cycle_number += 1
-            await asyncio.sleep(SCAN_INTERVAL_SECONDS)
+            await asyncio.sleep(SCAN_IDLE_POLL_SECONDS)
 
         except Exception as exc:
             heartbeat("scanner", status="error", details={"error": str(exc), "cycle": cycle_number})
             logger.error("❌ Error crítico en scanner", exc_info=True)
             await asyncio.sleep(60)
-
 
 def scan_market(bot: Bot):
     logger.info("🚀 Iniciando scanner en thread separado")
