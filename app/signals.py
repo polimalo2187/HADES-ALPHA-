@@ -161,9 +161,17 @@ def get_current_price(symbol: str) -> float:
             time.sleep(BINANCE_RETRY_DELAY)
 
 
-def estimate_minutes_to_entry(symbol: str, entry_zone: Dict[str, float], timeframes: List[str]) -> Dict[str, int]:
+def estimate_minutes_to_entry(
+    symbol: str,
+    entry_zone: Dict[str, float],
+    timeframes: List[str],
+    *,
+    current_price: Optional[float] = None,
+) -> Dict[str, int]:
     try:
-        current_price = get_current_price(symbol)
+        if current_price is None:
+            current_price = get_current_price(symbol)
+        current_price = float(current_price)
         zone_mid = (entry_zone["low"] + entry_zone["high"]) / 2
 
         if entry_zone["low"] <= current_price <= entry_zone["high"]:
@@ -302,6 +310,7 @@ def create_base_signal(
     candidate_tier: Optional[str] = None,
     final_tier: Optional[str] = None,
     entry_model: Optional[str] = None,
+    current_market_price: Optional[float] = None,
 ) -> Dict:
 
     if telegram_signal_blocked(symbol):
@@ -309,13 +318,28 @@ def create_base_signal(
         return {}
 
     zone_low, zone_high = calculate_entry_zone(entry_price)
-    estimated_minutes = estimate_minutes_to_entry(symbol, {"low": zone_low, "high": zone_high}, timeframes)
 
-    try:
-        current_price = get_current_price(symbol)
-    except Exception as e:
-        logger.warning(f"Fallback current_price en create_base_signal: {e}")
-        current_price = entry_price
+    if current_market_price is not None:
+        try:
+            current_price = float(current_market_price)
+        except Exception:
+            current_price = None
+    else:
+        current_price = None
+
+    if current_price is None or current_price <= 0:
+        try:
+            current_price = get_current_price(symbol)
+        except Exception as e:
+            logger.warning(f"Fallback current_price en create_base_signal: {e}")
+            current_price = entry_price
+
+    estimated_minutes = estimate_minutes_to_entry(
+        symbol,
+        {"low": zone_low, "high": zone_high},
+        timeframes,
+        current_price=current_price,
+    )
 
     signal = new_signal(
         symbol=symbol,
