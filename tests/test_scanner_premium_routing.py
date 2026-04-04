@@ -138,3 +138,25 @@ def test_apply_close_market_execution_rejects_late_market_chase():
     enriched = scanner._apply_close_market_execution(payload, current_price=100.45)
 
     assert enriched is None
+
+
+from datetime import datetime
+
+
+def test_latest_ready_15m_close_applies_grace_window():
+    scanner = _load_scanner()
+
+    before_grace = datetime(2026, 4, 4, 10, 0, 1)
+    after_grace = datetime(2026, 4, 4, 10, 0, 5)
+
+    assert scanner._latest_ready_15m_close(before_grace) == datetime(2026, 4, 4, 9, 45, 0)
+    assert scanner._latest_ready_15m_close(after_grace) == datetime(2026, 4, 4, 10, 0, 0)
+
+
+def test_should_scan_reference_close_only_on_new_bucket():
+    scanner = _load_scanner()
+
+    ref = datetime(2026, 4, 4, 10, 0, 0)
+    assert scanner._should_scan_reference_close(None, ref) is True
+    assert scanner._should_scan_reference_close(datetime(2026, 4, 4, 9, 45, 0), ref) is True
+    assert scanner._should_scan_reference_close(ref, ref) is False
