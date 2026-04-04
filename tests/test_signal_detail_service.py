@@ -201,3 +201,21 @@ class SignalDetailPayloadTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+
+def test_short_pending_state_waits_when_price_is_above_zone_and_marks_away_below_zone():
+    from app.signals import _tracking_entry_state
+    from datetime import datetime, timedelta
+
+    now = datetime.utcnow()
+    telegram_valid_until = now + timedelta(minutes=5)
+    evaluation_valid_until = now + timedelta(minutes=20)
+
+    waiting = _tracking_entry_state("SHORT", 101.0, 99.8, 100.2, now, telegram_valid_until, evaluation_valid_until, None, "entry_zone_pending")
+    away = _tracking_entry_state("SHORT", 99.4, 99.8, 100.2, now, telegram_valid_until, evaluation_valid_until, None, "entry_zone_pending")
+
+    assert waiting[0] == "AÚN ESPERANDO ENTRADA"
+    assert waiting[2] is True
+    assert away[0] == "ENTRADA YA ALEJADA"
+    assert away[2] is False
