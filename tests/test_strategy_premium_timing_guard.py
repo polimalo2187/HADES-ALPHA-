@@ -63,7 +63,7 @@ def test_evaluate_direction_uses_pending_entry_from_liquidity_model(monkeypatch)
     monkeypatch.setattr(strategy, "_ema_reclaim_ok", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(strategy, "_nearest_barrier_price", lambda *_args, **_kwargs: 103.8)
 
-    result = strategy._evaluate_direction(df, df_1h, "LONG", strategy.FREE_PROFILE, current_market_price=100.4)
+    result = strategy._evaluate_direction(df, df_1h, "LONG", strategy.FREE_PROFILE, current_market_price=100.2)
 
     assert result is not None
     payload, ranking = result
@@ -112,7 +112,7 @@ def test_evaluate_direction_emits_numeric_component_breakdown(monkeypatch):
     monkeypatch.setattr(strategy, "_ema_reclaim_ok", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(strategy, "_nearest_barrier_price", lambda *_args, **_kwargs: 103.8)
 
-    result = strategy._evaluate_direction(df, df_1h, "LONG", strategy.FREE_PROFILE, current_market_price=100.4)
+    result = strategy._evaluate_direction(df, df_1h, "LONG", strategy.FREE_PROFILE, current_market_price=100.2)
 
     assert result is not None
     payload, _ranking = result
@@ -124,7 +124,7 @@ def test_evaluate_direction_emits_numeric_component_breakdown(monkeypatch):
 
 
 def test_strategy_profiles_keep_strictness_order_after_rebalance():
-    assert strategy.SCORE_CALIBRATION_VERSION == "v9_liquidity_original_pending_entry"
+    assert strategy.SCORE_CALIBRATION_VERSION == "v10_liquidity_original_pending_fresh_entry"
 
     assert strategy.PREMIUM_PROFILE["min_rel_volume"] > strategy.PLUS_PROFILE["min_rel_volume"] > strategy.FREE_PROFILE["min_rel_volume"]
     assert strategy.PREMIUM_PROFILE["min_confirm_rel_volume"] > strategy.PLUS_PROFILE["min_confirm_rel_volume"] > strategy.FREE_PROFILE["min_confirm_rel_volume"]
@@ -133,3 +133,55 @@ def test_strategy_profiles_keep_strictness_order_after_rebalance():
     assert strategy.PREMIUM_PROFILE["min_barrier_rr"] > strategy.PLUS_PROFILE["min_barrier_rr"] > strategy.FREE_PROFILE["min_barrier_rr"]
     assert strategy.PREMIUM_PROFILE["max_countertrend_atr"] < strategy.PLUS_PROFILE["max_countertrend_atr"] < strategy.FREE_PROFILE["max_countertrend_atr"]
     assert strategy.PREMIUM_PROFILE["min_sweep_range_atr"] > strategy.PLUS_PROFILE["min_sweep_range_atr"] > strategy.FREE_PROFILE["min_sweep_range_atr"]
+
+
+def test_pending_entry_actionable_rejects_already_away_signals():
+    assert strategy._pending_entry_actionable("SHORT", 100.0, 99.7) is False
+    assert strategy._pending_entry_actionable("LONG", 100.0, 100.3) is False
+    assert strategy._pending_entry_actionable("SHORT", 100.0, 100.4) is True
+    assert strategy._pending_entry_actionable("LONG", 100.0, 99.6) is True
+    assert strategy._pending_entry_actionable("SHORT", 100.0, 99.9) is True
+
+
+def test_evaluate_direction_rejects_stale_pending_short_on_send(monkeypatch):
+    rows = []
+    base_time = pd.Timestamp.now(tz="UTC") - timedelta(minutes=(strategy.LIQUIDITY_LOOKBACK + 3) * 15)
+    for idx in range(strategy.LIQUIDITY_LOOKBACK + 2):
+        open_time = base_time + timedelta(minutes=idx * 15)
+        close_time = open_time + timedelta(minutes=15)
+        rows.append(
+            {
+                "open": 100.0,
+                "close": 100.8,
+                "high": 104.0,
+                "low": 99.6,
+                "volume": 1000.0,
+                "atr": 1.0,
+                "atr_pct": 0.01,
+                "rel_volume": 1.5,
+                "body": 0.8,
+                "range": 1.6,
+                "body_ratio": 0.5,
+                "upper_wick": 0.2,
+                "lower_wick": 0.2,
+                "ema20": 100.5,
+                "ema50": 100.4,
+                "open_time": open_time,
+                "close_time": close_time,
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    df_1h = pd.DataFrame(rows + rows[:30])
+
+    monkeypatch.setattr(strategy, "_higher_timeframe_context_ok", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(strategy, "_select_liquidity_zone", lambda *_args, **_kwargs: {"price": 100.1, "count": 3, "latest_index": 10})
+    monkeypatch.setattr(strategy, "_recovery_candle_ok", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(strategy, "_confirmation_candle_ok", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(strategy, "_ema_reclaim_ok", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(strategy, "_nearest_barrier_price", lambda *_args, **_kwargs: 96.0)
+    monkeypatch.setattr(strategy, "_htf_context_snapshot", lambda *_args, **_kwargs: {"ok": True})
+
+    result = strategy._evaluate_direction(df, df_1h, "SHORT", strategy.FREE_PROFILE, current_market_price=99.7)
+
+    assert result is None
