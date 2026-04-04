@@ -255,3 +255,28 @@ def test_tracking_state_does_not_claim_telegram_closed_while_window_is_still_ope
     assert payload['telegram_window_open'] is True
     assert 'MiniApp' in payload['recommendation']
     assert 'Telegram' not in payload['recommendation']
+
+
+def test_signal_analysis_payload_exposes_window_flags(monkeypatch):
+    from datetime import datetime, timedelta
+    from app.signals import get_signal_analysis_for_user
+
+    now = datetime.utcnow()
+    user_signal = {
+        'signal_id': 'sig-analysis',
+        'symbol': 'BTCUSDT',
+        'direction': 'LONG',
+        'entry_price': 100.0,
+        'profiles': {'moderado': {'stop_loss': 98.0, 'take_profits': [102.0, 104.0]}},
+        'telegram_valid_until': now + timedelta(minutes=5),
+        'evaluation_valid_until': now + timedelta(minutes=25),
+    }
+
+    monkeypatch.setattr('app.signals.get_user_signal_by_signal_id', lambda user_id, signal_id: dict(user_signal))
+    monkeypatch.setattr('app.signals.get_base_signal_by_signal_id', lambda signal_id: {})
+
+    payload = get_signal_analysis_for_user(1, 'sig-analysis', profile_name='moderado')
+
+    assert payload['telegram_window_open'] is True
+    assert payload['evaluation_window_open'] is True
+    assert payload['selected_tp1_distance_pct'] is not None
