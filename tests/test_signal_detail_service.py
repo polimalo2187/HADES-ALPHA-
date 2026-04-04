@@ -253,4 +253,5 @@ def test_tracking_state_does_not_claim_telegram_closed_while_window_is_still_ope
     assert payload['entry_state_label'] == 'ENTRADA YA ALEJADA'
     assert payload['state_label'] == 'ENTRADA YA ALEJADA'
     assert payload['telegram_window_open'] is True
-    assert 'sigue visible en Telegram' in payload['recommendation']
+    assert 'MiniApp' in payload['recommendation']
+    assert 'Telegram' not in payload['recommendation']
