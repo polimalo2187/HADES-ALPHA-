@@ -745,9 +745,14 @@ def _result_to_label(result: Optional[str]) -> str:
     return mapping.get(str(result or "").lower(), "Aún sin cierre final")
 
 
-def _tracking_entry_state(direction: str, current_price: Optional[float], zone_low: Optional[float], zone_high: Optional[float], now: datetime, telegram_valid_until: Optional[datetime], evaluation_valid_until: Optional[datetime], final_result: Optional[str]) -> tuple[str, bool, bool]:
+def _tracking_entry_state(direction: str, current_price: Optional[float], zone_low: Optional[float], zone_high: Optional[float], now: datetime, telegram_valid_until: Optional[datetime], evaluation_valid_until: Optional[datetime], final_result: Optional[str], send_mode: Optional[str] = None) -> tuple[str, bool, bool]:
     if final_result:
         return "SEÑAL CERRADA", False, False
+    mode = str(send_mode or "").strip().lower()
+    if mode == "market_on_close":
+        if isinstance(evaluation_valid_until, datetime) and evaluation_valid_until > now:
+            return "ACTIVA DESDE ENVÍO", False, True
+        return "SEÑAL FINALIZADA", False, False
     if current_price is None or zone_low is None or zone_high is None:
         return "SIN SNAPSHOT DE PRECIO", False, False
     if zone_low <= current_price <= zone_high:
@@ -755,12 +760,12 @@ def _tracking_entry_state(direction: str, current_price: Optional[float], zone_l
     direction = str(direction).upper()
     if isinstance(telegram_valid_until, datetime) and telegram_valid_until > now:
         if direction == "LONG":
-            if current_price > zone_high:
-                return "ENTRADA YA ALEJADA", False, False
-            return "AÚN ESPERANDO ENTRADA", False, True
-        if current_price < zone_low:
+            if current_price < zone_low:
+                return "AÚN ESPERANDO ENTRADA", False, True
             return "ENTRADA YA ALEJADA", False, False
-        return "AÚN ESPERANDO ENTRADA", False, True
+        if current_price > zone_high:
+            return "AÚN ESPERANDO ENTRADA", False, True
+        return "ENTRADA YA ALEJADA", False, False
     if isinstance(evaluation_valid_until, datetime) and evaluation_valid_until > now:
         return "CERRADA EN TELEGRAM / AÚN EVALUANDO", False, False
     return "SEÑAL FINALIZADA", False, False
@@ -787,6 +792,7 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
     take_profits = selected_payload.get("take_profits") or []
     evaluation_valid_until = _get_evaluation_valid_until(user_signal) or _get_evaluation_valid_until(base_signal)
     telegram_valid_until = user_signal.get("telegram_valid_until") or base_signal.get("telegram_valid_until")
+    send_mode = user_signal.get("send_mode") or base_signal.get("send_mode")
     result_doc = signal_results_collection().find_one({"base_signal_id": str(signal_id)}, sort=[("evaluated_at", -1)])
     final_result = (result_doc or {}).get("result")
 
@@ -807,6 +813,7 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
         telegram_valid_until,
         evaluation_valid_until,
         final_result,
+        send_mode,
     )
 
     stop_distance_pct = _distance_fraction(direction, entry, stop_loss)
@@ -862,11 +869,14 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
         recommendation = "El precio actual ya alcanzó TP1. La señal dejó de ser una entrada limpia."
         state_label = "EXTENDIDA"
         signal_active_for_entry = False
+    elif str(send_mode or "").strip().lower() == "market_on_close":
+        recommendation = "La señal se activó al envío. Evalúala desde el precio enviado, no esperes retrace al entry."
+        state_label = "ACTIVA DESDE ENVÍO"
     elif in_entry_zone:
         recommendation = "El precio sigue dentro de la zona base. La señal todavía es operable si tu gestión acompaña."
         state_label = "ACTIVA"
     elif signal_active_for_entry:
-        recommendation = "La señal aún no entró en zona, pero la ventana de Telegram sigue viva. Espera confirmación en entrada, no persigas precio."
+        recommendation = "La señal aún no entró en zona y la ventana de Telegram sigue viva. Espera confirmación en entrada, no persigas precio."
         state_label = "ESPERANDO ENTRADA"
     elif isinstance(evaluation_valid_until, datetime) and evaluation_valid_until > now:
         recommendation = "La señal ya salió de Telegram y sigue en evaluación. Úsala solo como referencia."
@@ -997,6 +1007,24 @@ def _entry_window_allows_new_fill(row: List[Any], entry_window_end: Optional[dat
     return True
 
 
+def _entry_zone_touched_in_candle(zone_low: float, zone_high: float, high: float, low: float) -> bool:
+    return low <= zone_high and high >= zone_low
+
+
+def _pending_entry_touched(signal_doc: Dict[str, Any], direction: str, entry_price: float, high: float, low: float) -> bool:
+    entry_zone = signal_doc.get("entry_zone") or {}
+    zone_low = entry_zone.get("low")
+    zone_high = entry_zone.get("high")
+    try:
+        if zone_low is not None and zone_high is not None:
+            zone_low = float(zone_low)
+            zone_high = float(zone_high)
+            return _entry_zone_touched_in_candle(zone_low, zone_high, high, low)
+    except Exception:
+        pass
+    return _entry_touched_in_candle(direction, entry_price, high, low)
+
+
 def _entry_touched_in_candle(direction: str, entry_price: float, high: float, low: float) -> bool:
     if direction == "LONG":
         return low <= entry_price
@@ -1114,8 +1142,19 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
         if entry_window_end > valid_until:
             entry_window_end = valid_until
 
-    entry_touched = False
-    entry_touched_at: Optional[datetime] = None
+    send_mode = str(signal_doc.get("send_mode") or "").strip().lower()
+    if send_mode == "market_on_close":
+        entry_touched = True
+        entry_touched_at: Optional[datetime] = created_at if isinstance(created_at, datetime) else None
+        sent_entry = signal_doc.get("entry_sent_price")
+        if sent_entry is not None:
+            try:
+                entry_price = float(sent_entry)
+            except Exception:
+                pass
+    else:
+        entry_touched = False
+        entry_touched_at = None
     tp1_progress_max_pct = 0.0
     max_favorable_excursion_r = 0.0
     max_adverse_excursion_r = 0.0
@@ -1141,8 +1180,8 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
         except Exception:
             continue
 
-        if not entry_touched and _entry_window_allows_new_fill(row, entry_window_end):
-            if _entry_touched_in_candle(direction, entry_price, high, low):
+        if send_mode != "market_on_close" and not entry_touched and _entry_window_allows_new_fill(row, entry_window_end):
+            if _pending_entry_touched(signal_doc, direction, entry_price, high, low):
                 entry_touched = True
                 entry_touched_at = _ms_to_dt(row[0])
 
