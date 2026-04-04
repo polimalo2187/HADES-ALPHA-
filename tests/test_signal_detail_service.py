@@ -219,3 +219,38 @@ def test_short_pending_state_waits_when_price_is_above_zone_and_marks_away_below
     assert waiting[2] is True
     assert away[0] == "ENTRADA YA ALEJADA"
     assert away[2] is False
+
+
+def test_tracking_state_does_not_claim_telegram_closed_while_window_is_still_open(monkeypatch):
+    from datetime import datetime, timedelta
+    from app.signals import get_signal_tracking_for_user
+
+    now = datetime.utcnow()
+    user_signal = {
+        'signal_id': 'sig-away',
+        'symbol': 'ETHUSDT',
+        'direction': 'LONG',
+        'entry_price': 100.0,
+        'entry_zone': {'low': 99.85, 'high': 100.15},
+        'profiles': {'moderado': {'stop_loss': 98.0, 'take_profits': [101.0, 102.0]}},
+        'telegram_valid_until': now + timedelta(minutes=10),
+        'evaluation_valid_until': now + timedelta(minutes=40),
+        'send_mode': 'entry_zone_pending',
+    }
+
+    monkeypatch.setattr('app.signals.get_user_signal_by_signal_id', lambda user_id, signal_id: dict(user_signal))
+    monkeypatch.setattr('app.signals.get_base_signal_by_signal_id', lambda signal_id: {})
+    monkeypatch.setattr('app.signals.get_current_price', lambda symbol: 100.8)
+
+    class DummyResults:
+        def find_one(self, *args, **kwargs):
+            return None
+
+    monkeypatch.setattr('app.signals.signal_results_collection', lambda: DummyResults())
+
+    payload = get_signal_tracking_for_user(1, 'sig-away', profile_name='moderado')
+
+    assert payload['entry_state_label'] == 'ENTRADA YA ALEJADA'
+    assert payload['state_label'] == 'ENTRADA YA ALEJADA'
+    assert payload['telegram_window_open'] is True
+    assert 'sigue visible en Telegram' in payload['recommendation']
