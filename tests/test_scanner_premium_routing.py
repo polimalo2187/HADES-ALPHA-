@@ -105,3 +105,31 @@ def test_build_symbol_candidate_passes_reference_market_price_when_strategy_supp
     assert result is None
     assert captured["reference_market_price"] == 123.45
     assert captured["debug_counts"] == {}
+
+
+def test_scanner_disables_request_delay_when_concurrent():
+    scanner = _load_scanner()
+    assert scanner.SCANNER_SYMBOL_CONCURRENCY >= 1
+    if scanner.SCANNER_SYMBOL_CONCURRENCY > 1 and not scanner.SCANNER_FORCE_REQUEST_DELAY:
+        assert scanner.EFFECTIVE_REQUEST_DELAY == 0.0
+
+
+def test_build_symbol_candidate_uses_reference_close_when_5m_disabled(monkeypatch):
+    import app.scanner as scanner
+
+    captured = {}
+
+    def fake_strategy(*, df_1h, df_15m, df_5m=None, reference_market_price=None, debug_counts=None):
+        captured["reference_market_price"] = reference_market_price
+        return None
+
+    monkeypatch.setattr(scanner.strategy_engine, "mtf_strategy", fake_strategy)
+
+    ts = pd.Timestamp.now(tz="UTC")
+    df_15m = pd.DataFrame([{"close_time": ts, "close": 120.0}])
+    df_1h = pd.DataFrame([{"close_time": ts, "close": 121.0}])
+
+    result = scanner.build_symbol_candidate("BTCUSDT", df_1h, df_15m, None, debug_counts={})
+
+    assert result is None
+    assert captured["reference_market_price"] == 120.0
