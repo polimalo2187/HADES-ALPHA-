@@ -519,6 +519,13 @@ def _closed_15m_frame(df_15m: pd.DataFrame) -> pd.DataFrame:
     return closed if not closed.empty else df_15m.iloc[:-1].copy()
 
 
+
+
+def _debug_fail(debug_counts: Optional[Dict[str, int]], reason: str) -> None:
+    if debug_counts is None:
+        return
+    debug_counts[reason] = int(debug_counts.get(reason, 0)) + 1
+
 def _market_entry_candidate(
     current_price: float,
     stop_loss: float,
@@ -702,44 +709,54 @@ def _evaluate_direction(
     direction: str,
     profile: Dict,
     current_market_price: Optional[float] = None,
+    debug_counts: Optional[Dict[str, int]] = None,
 ) -> Optional[Tuple[Dict, Tuple]]:
     sweep_candle = df.iloc[-2]
     confirm_candle = df.iloc[-1]
     historical = df.iloc[:-2].tail(LIQUIDITY_LOOKBACK)
 
     if len(historical) < LIQUIDITY_LOOKBACK:
+        _debug_fail(debug_counts, "history")
         return None
 
     atr = float(sweep_candle["atr"])
     atr_pct = float(sweep_candle["atr_pct"])
     if atr <= 0 or not (float(profile["atr_pct_min"]) <= atr_pct <= float(profile["atr_pct_max"])):
+        _debug_fail(debug_counts, "atr_pct")
         return None
 
     rel_volume = max(float(sweep_candle["rel_volume"]), float(confirm_candle["rel_volume"]))
     if rel_volume < float(profile["min_rel_volume"]):
+        _debug_fail(debug_counts, "rel_volume")
         return None
 
     sweep_range_atr = float(sweep_candle["range"]) / atr
     if not (float(profile["min_sweep_range_atr"]) <= sweep_range_atr <= float(profile["max_sweep_range_atr"])):
+        _debug_fail(debug_counts, "sweep_range")
         return None
 
     htf_snapshot = _htf_context_snapshot(df_1h, direction, profile)
     if not bool(htf_snapshot.get("ok")):
+        _debug_fail(debug_counts, "htf_context")
         return None
 
     zone = _select_liquidity_zone(historical, direction, sweep_candle, profile)
     if not zone:
+        _debug_fail(debug_counts, "liquidity_zone")
         return None
 
     zone_price = float(zone["price"])
 
     if not _recovery_candle_ok(sweep_candle, direction, profile, zone_price):
+        _debug_fail(debug_counts, "recovery_close")
         return None
 
     if not _confirmation_candle_ok(confirm_candle, sweep_candle, direction, profile):
+        _debug_fail(debug_counts, "confirmation_candle")
         return None
 
     if not _ema_reclaim_ok(confirm_candle, direction, profile):
+        _debug_fail(debug_counts, "ema_reclaim")
         return None
 
     entry_offset = atr * float(profile["entry_offset_atr"])
@@ -754,14 +771,17 @@ def _evaluate_direction(
 
     risk = abs(stop_loss - model_entry)
     if risk <= 0:
+        _debug_fail(debug_counts, "risk_invalid")
         return None
 
     risk_pct = risk / max(model_entry, 1e-9)
     if risk_pct > float(profile["max_risk_pct"]):
+        _debug_fail(debug_counts, "risk_pct")
         return None
 
     room_rr = _room_to_target(model_entry, stop_loss, structure_target, direction)
     if room_rr < float(profile["min_rr"]):
+        _debug_fail(debug_counts, "rr_filter")
         return None
 
     model_nearest_barrier = _nearest_barrier_price(historical, df_1h, model_entry, direction)
@@ -769,6 +789,7 @@ def _evaluate_direction(
     if model_nearest_barrier is not None:
         model_barrier_rr = _room_to_target(model_entry, stop_loss, model_nearest_barrier, direction)
         if model_barrier_rr < float(profile["min_barrier_rr"]):
+            _debug_fail(debug_counts, "barrier_room")
             return None
 
     market_price = float(current_market_price) if current_market_price is not None else float(confirm_candle["close"])
@@ -782,6 +803,7 @@ def _evaluate_direction(
         profile=profile,
     )
     if market_candidate is None:
+        _debug_fail(debug_counts, "market_entry")
         return None
 
     entry_price, trade_profiles, active_room_rr, active_barrier_rr = market_candidate
@@ -845,12 +867,13 @@ def _evaluate_profile(
     df_1h: pd.DataFrame,
     profile: Dict,
     current_market_price: Optional[float] = None,
+    debug_counts: Optional[Dict[str, int]] = None,
 ) -> Optional[Dict]:
     best_result: Optional[Dict] = None
     best_rank: Optional[Tuple] = None
 
     for direction in ("SHORT", "LONG"):
-        evaluated = _evaluate_direction(df, df_1h, direction, profile, current_market_price=current_market_price)
+        evaluated = _evaluate_direction(df, df_1h, direction, profile, current_market_price=current_market_price, debug_counts=debug_counts)
         if not evaluated:
             continue
 
@@ -870,6 +893,8 @@ def liquidity_sweep_reversal_strategy(
     df_1h: pd.DataFrame,
     df_15m: pd.DataFrame,
     df_5m: Optional[pd.DataFrame] = None,
+    reference_market_price: Optional[float] = None,
+    debug_counts: Optional[Dict[str, int]] = None,
 ) -> Optional[Dict]:
     closed_15m = _closed_15m_frame(df_15m)
     if len(closed_15m) < MIN_HISTORY_BARS or len(df_1h) < 60:
@@ -883,14 +908,19 @@ def liquidity_sweep_reversal_strategy(
         return None
 
     current_market_price: Optional[float] = None
-    if df_5m is not None and len(df_5m) > 0:
+    if reference_market_price is not None:
+        try:
+            current_market_price = float(reference_market_price)
+        except Exception:
+            current_market_price = None
+    if current_market_price is None and df_5m is not None and len(df_5m) > 0:
         try:
             current_market_price = float(df_5m.iloc[-1]["close"])
         except Exception:
             current_market_price = None
 
     for profile in PROFILES:
-        result = _evaluate_profile(df, df_1h, profile, current_market_price=current_market_price)
+        result = _evaluate_profile(df, df_1h, profile, current_market_price=current_market_price, debug_counts=debug_counts)
         if result:
             return result
 
@@ -907,6 +937,14 @@ def liquidity_sweep_reversal_strategy(
 def mtf_strategy(
     df_1h: pd.DataFrame,
     df_15m: pd.DataFrame,
-    df_5m: pd.DataFrame,
+    df_5m: Optional[pd.DataFrame] = None,
+    reference_market_price: Optional[float] = None,
+    debug_counts: Optional[Dict[str, int]] = None,
 ) -> Optional[Dict]:
-    return liquidity_sweep_reversal_strategy(df_1h, df_15m, df_5m)
+    return liquidity_sweep_reversal_strategy(
+        df_1h,
+        df_15m,
+        df_5m,
+        reference_market_price=reference_market_price,
+        debug_counts=debug_counts,
+    )
