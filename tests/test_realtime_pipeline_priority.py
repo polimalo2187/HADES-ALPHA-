@@ -86,3 +86,45 @@ def test_pipeline_does_not_retry_when_push_succeeds_but_user_sync_fails(monkeypa
     assert retry_calls == []
     assert any(update[0][1].get("$set", {}).get("status") == "completed" for update in jobs.updates)
     assert deliveries.updates
+
+
+class _RecordingUpdateOne:
+    def __init__(self, flt, update, upsert=False):
+        self.filter = flt
+        self.update = update
+        self.upsert = upsert
+
+
+def test_delivery_upserts_do_not_repeat_mutable_fields(monkeypatch):
+    pipeline = _load_pipeline()
+
+    monkeypatch.setattr(pipeline, "UpdateOne", _RecordingUpdateOne)
+
+    inserts = []
+
+    class _BulkCollection:
+        def bulk_write(self, ops, ordered=False):
+            inserts.extend(ops)
+
+    monkeypatch.setattr(pipeline, "signal_deliveries_collection", lambda: _BulkCollection())
+
+    pipeline._ensure_delivery_records("sig-1", "free", [101])
+    assert inserts
+    op = inserts[0]
+    assert "updated_at" not in op.update["$setOnInsert"]
+    assert "status" not in op.update["$setOnInsert"]
+
+    updates = []
+
+    class _UpdateCollection:
+        def update_one(self, flt, update, upsert=False):
+            updates.append((flt, update, upsert))
+
+    monkeypatch.setattr(pipeline, "signal_deliveries_collection", lambda: _UpdateCollection())
+    pipeline._update_delivery_results("sig-1", "free", {"results": [{"user_id": 101, "status": "sent", "sent_at": datetime.utcnow(), "error": None}]})
+
+    assert updates
+    _flt, update, _upsert = updates[0]
+    assert "updated_at" not in update["$setOnInsert"]
+    assert "status" not in update["$setOnInsert"]
+    assert update["$set"]["status"] == "sent"
