@@ -5,8 +5,9 @@ import inspect
 import time
 import logging
 import asyncio
+import threading
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 import requests
@@ -21,33 +22,6 @@ from app import strategy as strategy_engine
 
 logger = logging.getLogger(__name__)
 
-def _strategy_call_kwargs(df_1h: pd.DataFrame, df_15m: pd.DataFrame, df_5m: pd.DataFrame) -> Dict:
-    kwargs: Dict = {
-        "df_1h": df_1h,
-        "df_15m": df_15m,
-        "df_5m": df_5m,
-    }
-    try:
-        signature = inspect.signature(strategy_engine.mtf_strategy)
-        parameters = signature.parameters
-    except (TypeError, ValueError):
-        return kwargs
-
-    if "reference_market_price" in parameters:
-        reference_price = None
-        try:
-            if df_5m is not None and len(df_5m) > 0:
-                reference_price = float(df_5m.iloc[-1]["close"])
-        except Exception:
-            reference_price = None
-        kwargs["reference_market_price"] = reference_price
-
-    if "debug_counts" in parameters:
-        kwargs["debug_counts"] = {}
-
-    return kwargs
-
-
 BINANCE_FUTURES_API = "https://fapi.binance.com"
 
 SCAN_INTERVAL_SECONDS = int(os.getenv("SCAN_INTERVAL_SECONDS", "20"))
@@ -55,12 +29,18 @@ MIN_QUOTE_VOLUME = int(os.getenv("MIN_QUOTE_VOLUME", "20000000"))
 DEDUP_MINUTES = int(os.getenv("DEDUP_MINUTES", "10"))
 REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "0.2"))
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "15"))
+SCANNER_SYMBOL_CONCURRENCY = max(1, int(os.getenv("SCANNER_SYMBOL_CONCURRENCY", "24")))
+SCANNER_FORCE_REQUEST_DELAY = str(os.getenv("SCANNER_FORCE_REQUEST_DELAY", "false")).strip().lower() in {"1", "true", "yes", "on"}
+SCANNER_FETCH_5M = str(os.getenv("SCANNER_FETCH_5M", "false")).strip().lower() in {"1", "true", "yes", "on"}
+KLINE_LIMIT_1H = int(os.getenv("SCANNER_KLINE_LIMIT_1H", "96"))
+KLINE_LIMIT_15M = int(os.getenv("SCANNER_KLINE_LIMIT_15M", "96"))
+KLINE_LIMIT_5M = int(os.getenv("SCANNER_KLINE_LIMIT_5M", "64"))
+EFFECTIVE_REQUEST_DELAY = REQUEST_DELAY if (SCANNER_FORCE_REQUEST_DELAY or SCANNER_SYMBOL_CONCURRENCY <= 1) else 0.0
 
 # Thresholds basados en raw_score real.
 PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "78"))
 PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "72"))
 FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "64"))
-
 
 MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT = float(os.getenv("MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT", "15"))
 MAX_CLOSE_MARKET_R_PROGRESS = float(os.getenv("MAX_CLOSE_MARKET_R_PROGRESS", "0.15"))
@@ -76,6 +56,34 @@ _PROFILE_CONFIGS = {
 _PROFILE_SCORE_MAP = {
     round(float(cfg.get("score", 0.0)), 2): name for name, cfg in _PROFILE_CONFIGS.items()
 }
+
+
+def _strategy_call_kwargs(
+    df_1h: pd.DataFrame,
+    df_15m: pd.DataFrame,
+    df_5m: Optional[pd.DataFrame],
+    *,
+    reference_market_price: Optional[float],
+    debug_counts: Optional[Dict[str, int]],
+) -> Dict:
+    kwargs: Dict = {
+        "df_1h": df_1h,
+        "df_15m": df_15m,
+        "df_5m": df_5m,
+    }
+    try:
+        signature = inspect.signature(strategy_engine.mtf_strategy)
+        parameters = signature.parameters
+    except (TypeError, ValueError):
+        return kwargs
+
+    if "reference_market_price" in parameters:
+        kwargs["reference_market_price"] = reference_market_price
+
+    if "debug_counts" in parameters:
+        kwargs["debug_counts"] = debug_counts if debug_counts is not None else {}
+
+    return kwargs
 
 
 def _closed_15m_frame(df_15m: pd.DataFrame) -> pd.DataFrame:
@@ -166,6 +174,10 @@ def _apply_close_market_execution(result: Dict, current_price: float) -> Optiona
         return None
 
     enriched = dict(result)
+    if str(enriched.get("send_mode") or "").strip().lower() == "market_on_close":
+        # La estrategia actual ya viene emitida a mercado. Evitar doble repricing/discard.
+        return enriched
+
     direction = str(enriched.get("direction") or "").upper().strip()
     if direction not in {"LONG", "SHORT"}:
         return None
@@ -232,28 +244,53 @@ def _apply_close_market_execution(result: Dict, current_price: float) -> Optiona
     return enriched
 
 
-def build_symbol_candidate(symbol: str, df_1h: pd.DataFrame, df_15m: pd.DataFrame, df_5m: pd.DataFrame) -> Optional[Dict]:
+def build_symbol_candidate(symbol: str, df_1h: pd.DataFrame, df_15m: pd.DataFrame, df_5m: Optional[pd.DataFrame], *, debug_counts: Optional[Dict[str, int]] = None) -> Optional[Dict]:
     closed_15m = _closed_15m_frame(df_15m)
-    strategy_kwargs = _strategy_call_kwargs(df_1h=df_1h, df_15m=closed_15m, df_5m=df_5m)
+    reference_price = None
+    try:
+        if df_5m is not None and len(df_5m) > 0:
+            reference_price = float(df_5m.iloc[-1]["close"])
+        elif not closed_15m.empty:
+            reference_price = float(closed_15m.iloc[-1]["close"])
+    except Exception:
+        reference_price = None
+
+    strategy_kwargs = _strategy_call_kwargs(
+        df_1h=df_1h,
+        df_15m=closed_15m,
+        df_5m=df_5m,
+        reference_market_price=reference_price,
+        debug_counts=debug_counts,
+    )
     result = strategy_engine.mtf_strategy(**strategy_kwargs)
     if not result:
         return None
-    return _build_candidate(symbol, result, df_5m)
+    price_for_candidate = reference_price
+    if price_for_candidate is None:
+        try:
+            price_for_candidate = float(result.get("entry_sent_price") or result.get("entry_price") or 0.0)
+        except Exception:
+            price_for_candidate = 0.0
+    return _build_candidate(symbol, result, price_for_candidate)
 
 
 class RateLimiter:
     def __init__(self, delay: float):
-        self.delay = delay
+        self.delay = max(0.0, float(delay))
         self.last_request = 0.0
+        self._lock = threading.Lock()
 
     def wait(self) -> None:
-        elapsed = time.time() - self.last_request
-        if elapsed < self.delay:
-            time.sleep(self.delay - elapsed)
-        self.last_request = time.time()
+        if self.delay <= 0:
+            return
+        with self._lock:
+            elapsed = time.time() - self.last_request
+            if elapsed < self.delay:
+                time.sleep(self.delay - elapsed)
+            self.last_request = time.time()
 
 
-rate_limiter = RateLimiter(REQUEST_DELAY)
+rate_limiter = RateLimiter(EFFECTIVE_REQUEST_DELAY)
 
 
 def get_klines(symbol: str, interval: str, limit: int = 220) -> pd.DataFrame:
@@ -336,39 +373,28 @@ def _safe_ratio(num: float, den: float) -> float:
         return 0.0
 
 
-def _entry_quality(df_5m: pd.DataFrame, direction: str) -> float:
-    """
-    Bonus suave por entrada menos tardía.
-    10 = entrada fresca.
-    0 = entrada demasiado perseguida.
-    """
+def _entry_quality(reference_price: float, direction: str, entry_price: float, stop_loss: float) -> float:
+    """Bonus suave por entrada menos tardía usando precio de referencia."""
     try:
-        last = df_5m.iloc[-1]
-        close = float(last["close"])
-        high = float(last["high"])
-        low = float(last["low"])
-
-        candle_range = max(high - low, 1e-9)
-
+        risk = abs(entry_price - stop_loss)
+        if risk <= 1e-9:
+            return 0.0
         if direction == "LONG":
-            progress = _safe_ratio(close - low, candle_range)
+            progress = max(0.0, reference_price - entry_price) / risk
         else:
-            progress = _safe_ratio(high - close, candle_range)
-
+            progress = max(0.0, entry_price - reference_price) / risk
         freshness = max(0.0, min(1.0, 1.0 - progress))
         return round(freshness * 10.0, 2)
     except Exception:
         return 0.0
 
 
-def _volume_quality(df_5m: pd.DataFrame) -> float:
-    """
-    Bonus suave de volumen entre 0 y 5.
-    """
+def _volume_quality(df_15m: pd.DataFrame) -> float:
+    """Bonus suave de volumen entre 0 y 5."""
     try:
-        last = df_5m.iloc[-1]
+        last = df_15m.iloc[-1]
         volume = float(last["volume"])
-        vol_ma = float(df_5m["volume"].tail(20).mean())
+        vol_ma = float(df_15m["volume"].tail(20).mean())
 
         if vol_ma <= 0:
             return 0.0
@@ -498,20 +524,17 @@ def _select_dispatchable_signal(
     return None
 
 
-def _build_candidate(symbol: str, result: Dict, df_5m: pd.DataFrame) -> Optional[Dict]:
-    current_price = float(df_5m.iloc[-1]["close"])
-    executed = _apply_close_market_execution(result, current_price)
+def _build_candidate(symbol: str, result: Dict, reference_price: float) -> Optional[Dict]:
+    executed = _apply_close_market_execution(result, reference_price)
     if not executed:
         return None
 
     direction = str(executed["direction"]).upper()
     raw_score = _raw_score(executed)
     normalized_score = _normalized_score(executed)
-    entry_quality = _entry_quality(df_5m, direction)
-    volume_quality = _volume_quality(df_5m)
-
+    entry_quality = _entry_quality(reference_price, direction, float(executed.get("entry_price") or 0.0), float(executed.get("stop_loss") or 0.0))
     final_score = round(
-        normalized_score + (entry_quality * 0.35) + (volume_quality * 0.40),
+        normalized_score + (entry_quality * 0.35),
         2,
     )
 
@@ -521,14 +544,56 @@ def _build_candidate(symbol: str, result: Dict, df_5m: pd.DataFrame) -> Optional
     candidate["raw_score"] = raw_score
     candidate["normalized_score"] = normalized_score
     candidate["entry_quality"] = entry_quality
-    candidate["volume_quality"] = volume_quality
+    candidate["volume_quality"] = 0.0
     candidate["final_score"] = final_score
     return candidate
+
+
+def _record_failure(debug_counts: Dict[str, int], reason: str) -> None:
+    if not reason:
+        reason = "unknown"
+    debug_counts[reason] = int(debug_counts.get(reason, 0)) + 1
+
+
+def _merge_debug_counts(total: Dict[str, int], local: Dict[str, int]) -> None:
+    for key, value in (local or {}).items():
+        total[key] = int(total.get(key, 0)) + int(value)
+
+
+def _extract_failure_reason(local: Dict[str, int]) -> Optional[str]:
+    if not local:
+        return None
+    return max(local.items(), key=lambda item: item[1])[0]
+
+
+def _process_symbol(symbol: str) -> Tuple[Optional[Dict], Optional[str], Optional[str]]:
+    local_debug: Dict[str, int] = {}
+    try:
+        df_1h = get_klines(symbol, "1h", limit=KLINE_LIMIT_1H)
+        df_15m = get_klines(symbol, "15m", limit=KLINE_LIMIT_15M)
+        df_5m = get_klines(symbol, "5m", limit=KLINE_LIMIT_5M) if SCANNER_FETCH_5M else None
+        candidate = build_symbol_candidate(symbol, df_1h, df_15m, df_5m, debug_counts=local_debug)
+        if candidate:
+            return candidate, None, None
+        return None, _extract_failure_reason(local_debug), None
+    except Exception as exc:
+        return None, None, f"{symbol}: {exc}"
 
 
 async def scan_market_async(bot: Bot):
     logger.info(
         "📡 Scanner iniciado — clasificación exclusiva por plan + ranking con normalized_score"
+    )
+    logger.info(
+        "⚙️ Scanner config | concurrency=%s | request_delay_env=%ss | effective_request_delay=%ss | force_request_delay=%s | fetch_5m=%s | kline_limits={'1h': %s, '15m': %s, '5m': %s}",
+        SCANNER_SYMBOL_CONCURRENCY,
+        REQUEST_DELAY,
+        EFFECTIVE_REQUEST_DELAY,
+        SCANNER_FORCE_REQUEST_DELAY,
+        SCANNER_FETCH_5M,
+        KLINE_LIMIT_1H,
+        KLINE_LIMIT_15M,
+        KLINE_LIMIT_5M,
     )
 
     cycle_number = 0
@@ -538,23 +603,60 @@ async def scan_market_async(bot: Bot):
             cycle_started_at = datetime.utcnow()
             symbols = get_active_futures_symbols()
             candidates: List[Dict] = []
+            reject_totals: Dict[str, int] = {}
+            failures = 0
+            failure_samples: List[str] = []
+            semaphore = asyncio.Semaphore(SCANNER_SYMBOL_CONCURRENCY)
 
-            for symbol in symbols:
-                try:
-                    df_1h = get_klines(symbol, "1h")
-                    df_15m = get_klines(symbol, "15m")
-                    df_5m = get_klines(symbol, "5m")
+            async def _run(symbol: str):
+                async with semaphore:
+                    return await asyncio.to_thread(_process_symbol, symbol)
 
-                    candidate = build_symbol_candidate(symbol, df_1h, df_15m, df_5m)
-                    if candidate:
-                        candidates.append(candidate)
+            results = await asyncio.gather(*[_run(symbol) for symbol in symbols])
+            for candidate, reject_reason, failure in results:
+                if candidate:
+                    candidates.append(candidate)
+                elif reject_reason:
+                    _record_failure(reject_totals, reject_reason)
+                if failure:
+                    failures += 1
+                    if len(failure_samples) < 5:
+                        failure_samples.append(failure)
 
-                    await asyncio.sleep(0.05)
-                except Exception as e:
-                    logger.debug("⚠️ Error procesando %s: %s", symbol, e)
+            cycle_duration = (datetime.utcnow() - cycle_started_at).total_seconds()
+
+            if failures and not candidates:
+                logger.warning(
+                    "📭 Sin oportunidades en este ciclo, pero hubo errores de scanner | cycle=%s symbols=%s failures=%s lag=n/a duration=%.3fs samples=%s",
+                    cycle_number,
+                    len(symbols),
+                    failures,
+                    cycle_duration,
+                    failure_samples,
+                )
+                heartbeat(
+                    "scanner",
+                    status="warn",
+                    details={
+                        "cycle": cycle_number,
+                        "symbols": len(symbols),
+                        "candidates": 0,
+                        "selected": 0,
+                        "failures": failures,
+                        "failure_samples": failure_samples,
+                        "duration_seconds": cycle_duration,
+                    },
+                )
+                cycle_number += 1
+                await asyncio.sleep(SCAN_INTERVAL_SECONDS)
+                continue
 
             if not candidates:
-                logger.info("📭 No hay oportunidades fuertes en este ciclo")
+                logger.info(
+                    "📭 No hay oportunidades fuertes en este ciclo | duration=%.3fs | rejects=%s",
+                    cycle_duration,
+                    reject_totals,
+                )
                 heartbeat(
                     "scanner",
                     status="ok",
@@ -563,8 +665,11 @@ async def scan_market_async(bot: Bot):
                         "symbols": len(symbols),
                         "candidates": 0,
                         "selected": 0,
+                        "failures": failures,
                         "scan_interval_seconds": SCAN_INTERVAL_SECONDS,
                         "cycle_started_at": cycle_started_at.isoformat(),
+                        "duration_seconds": cycle_duration,
+                        "rejects": reject_totals,
                     },
                 )
                 cycle_number += 1
@@ -588,11 +693,13 @@ async def scan_market_async(bot: Bot):
             free_candidates = [c for c in candidates if _qualifies_for_free(c)]
 
             logger.info(
-                "📚 Candidatos | total=%s | premium=%s | plus=%s | free=%s",
+                "📚 Candidatos | total=%s | premium=%s | plus=%s | free=%s | duration=%.3fs | rejects=%s",
                 len(candidates),
                 len(premium_candidates),
                 len(plus_candidates),
                 len(free_candidates),
+                cycle_duration,
+                reject_totals,
             )
 
             used_symbols: Set[str] = set()
@@ -650,8 +757,11 @@ async def scan_market_async(bot: Bot):
                     "plus_candidates": len(plus_candidates),
                     "free_candidates": len(free_candidates),
                     "selected": selected_count,
+                    "failures": failures,
                     "scan_interval_seconds": SCAN_INTERVAL_SECONDS,
                     "cycle_started_at": cycle_started_at.isoformat(),
+                    "duration_seconds": cycle_duration,
+                    "rejects": reject_totals,
                 },
             )
             cycle_number += 1
