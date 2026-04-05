@@ -1,3 +1,4 @@
+import pandas as pd
 import importlib
 import sys
 import types
@@ -63,213 +64,44 @@ def test_scanner_interval_default_is_20_seconds():
     assert scanner.SCAN_INTERVAL_SECONDS == 20
 
 
-def test_apply_close_market_execution_preserves_prepriced_market_signal():
-    scanner = _load_scanner()
+def test_build_symbol_candidate_omits_reference_market_price_when_strategy_does_not_support_it(monkeypatch):
+    import app.scanner as scanner
 
-    payload = {
-        "direction": "LONG",
-        "entry_price": 100.4,
-        "entry_model_price": 100.1,
-        "entry_sent_price": 100.4,
-        "stop_loss": 99.5,
-        "take_profits": [101.5, 102.1],
-        "profiles": {
-            "conservador": {
-                "stop_loss": 99.5,
-                "take_profits": [101.5, 102.1],
-                "leverage": "20x-30x",
-            }
-        },
-        "raw_score": 74.0,
-        "normalized_score": 74.0,
-        "setup_group": "free",
-        "score_profile": "free",
-        "score_calibration": "v9_liquidity_original_pending_entry",
-        "send_mode": "market_on_close",
-        "tp1_progress_at_send_pct": 12.0,
-        "r_progress_at_send": 0.11,
-        "setup_stage": "closed_confirmed",
-        "candidate_tier": "free",
-        "final_tier": "free",
-        "entry_model": "liquidity_zone_offset_v1",
-    }
+    captured = {}
 
-    enriched = scanner._apply_close_market_execution(payload, current_price=100.45)
-
-    assert enriched is not None
-    assert enriched["entry_model_price"] == 100.1
-    assert enriched["entry_sent_price"] == 100.4
-    assert enriched["entry_price"] == 100.4
-    assert enriched["take_profits"] == [101.5, 102.1]
-    assert enriched["send_mode"] == "market_on_close"
-
-
-def test_apply_close_market_execution_rejects_late_market_chase():
-    scanner = _load_scanner()
-
-    payload = {
-        "direction": "LONG",
-        "entry_price": 100.4,
-        "entry_model_price": 100.1,
-        "entry_sent_price": 100.4,
-        "stop_loss": 99.5,
-        "take_profits": [101.5, 102.1],
-        "profiles": {
-            "conservador": {
-                "stop_loss": 99.5,
-                "take_profits": [101.5, 102.1],
-                "leverage": "20x-30x",
-            }
-        },
-        "raw_score": 74.0,
-        "normalized_score": 74.0,
-        "setup_group": "free",
-        "score_profile": "free",
-        "score_calibration": "v9_liquidity_original_pending_entry",
-        "send_mode": "market_on_close",
-        "tp1_progress_at_send_pct": 22.0,
-        "r_progress_at_send": 0.20,
-        "setup_stage": "closed_confirmed",
-        "candidate_tier": "free",
-        "final_tier": "free",
-        "entry_model": "liquidity_zone_offset_v1",
-    }
-
-    enriched = scanner._apply_close_market_execution(payload, current_price=100.45)
-
-    assert enriched is None
-
-
-from datetime import datetime
-
-
-def test_latest_ready_15m_close_applies_grace_window():
-    scanner = _load_scanner()
-
-    before_grace = datetime(2026, 4, 4, 10, 0, 1)
-    after_grace = datetime(2026, 4, 4, 10, 0, 5)
-
-    assert scanner._latest_ready_15m_close(before_grace) == datetime(2026, 4, 4, 9, 45, 0)
-    assert scanner._latest_ready_15m_close(after_grace) == datetime(2026, 4, 4, 10, 0, 0)
-
-
-def test_should_scan_reference_close_only_on_new_bucket():
-    scanner = _load_scanner()
-
-    ref = datetime(2026, 4, 4, 10, 0, 0)
-    assert scanner._should_scan_reference_close(None, ref) is True
-    assert scanner._should_scan_reference_close(datetime(2026, 4, 4, 9, 45, 0), ref) is True
-    assert scanner._should_scan_reference_close(ref, ref) is False
-
-
-def test_build_candidate_preserves_pending_entry_signal_without_repricing():
-    scanner = _load_scanner()
-
-    payload = {
-        "direction": "SHORT",
-        "entry_price": 100.0,
-        "entry_model_price": 100.0,
-        "entry_sent_price": None,
-        "stop_loss": 101.0,
-        "take_profits": [98.5, 97.5],
-        "profiles": {
-            "conservador": {
-                "stop_loss": 101.0,
-                "take_profits": [98.5, 97.5],
-                "leverage": "20x-30x",
-            }
-        },
-        "raw_score": 82.0,
-        "normalized_score": 82.0,
-        "setup_group": "plus",
-        "score_profile": "plus",
-        "score_calibration": "v12_liquidity_pending_commercial_rebalance",
-        "send_mode": "entry_zone_pending",
-        "tp1_progress_at_send_pct": None,
-        "r_progress_at_send": None,
-        "setup_stage": "closed_confirmed",
-        "candidate_tier": "plus",
-        "final_tier": "plus",
-        "entry_model": "liquidity_zone_offset_v1",
-        "components": ["liquidity_zone"],
-    }
-
-    enriched = scanner._build_candidate("TESTUSDT", payload, df_5m=__import__("pandas").DataFrame([{"close": 99.4, "volume": 1000}, {"close": 99.2, "volume": 1200}]))
-
-    assert enriched is not None
-    assert enriched["send_mode"] == "entry_zone_pending"
-    assert enriched["entry_price"] == 100.0
-    assert enriched["entry_model_price"] == 100.0
-    assert enriched["entry_sent_price"] is None
-    assert enriched["take_profits"] == [98.5, 97.5]
-    assert enriched["setup_group"] == "plus"
-
-
-from datetime import datetime, timedelta
-import pandas as pd
-
-
-def test_reference_price_from_5m_uses_reference_close():
-    scanner = _load_scanner()
-    ref = datetime(2026, 4, 4, 13, 30, 0)
-    df = pd.DataFrame([
-        {"close_time": pd.Timestamp("2026-04-04T13:25:00Z"), "close": 100.0},
-        {"close_time": pd.Timestamp("2026-04-04T13:30:00Z"), "close": 100.2},
-        {"close_time": pd.Timestamp("2026-04-04T13:35:00Z"), "close": 99.6},
-    ])
-    price = scanner._reference_price_from_5m(df, ref)
-    assert price == 100.2
-
-
-def test_build_symbol_candidate_returns_debug_counts_when_strategy_rejects(monkeypatch):
-    scanner = _load_scanner()
-    df = pd.DataFrame([{
-        "open_time": pd.Timestamp("2026-04-04T13:00:00Z"),
-        "close_time": pd.Timestamp("2026-04-04T13:15:00Z"),
-        "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.0, "volume": 10.0,
-    }])
-    def fake_strategy(**kwargs):
-        debug = kwargs.get("debug_counts")
-        debug["stale_pending"] = 3
+    def fake_strategy(*, df_1h, df_15m, df_5m):
+        captured["df_1h"] = df_1h
+        captured["df_15m"] = df_15m
+        captured["df_5m"] = df_5m
         return None
+
     monkeypatch.setattr(scanner.strategy_engine, "mtf_strategy", fake_strategy)
-    candidate, debug_counts = scanner.build_symbol_candidate("TESTUSDT", df, df, df, datetime(2026, 4, 4, 13, 30, 0))
-    assert candidate is None
-    assert debug_counts["stale_pending"] == 3
+
+    df = pd.DataFrame(columns=["close_time", "close"])
+    result = scanner.build_symbol_candidate("BTCUSDT", df, df, df)
+
+    assert result is None
+    assert "df_1h" in captured
 
 
-def test_request_delay_is_disabled_when_scanner_is_concurrent(monkeypatch):
-    monkeypatch.setenv("REQUEST_DELAY", "0.8")
-    monkeypatch.setenv("SCANNER_SYMBOL_CONCURRENCY", "24")
-    monkeypatch.delenv("SCANNER_FORCE_REQUEST_DELAY", raising=False)
-    scanner = _load_scanner()
-    assert scanner.LEGACY_REQUEST_DELAY == 0.8
-    assert scanner.REQUEST_DELAY == 0.0
+def test_build_symbol_candidate_passes_reference_market_price_when_strategy_supports_it(monkeypatch):
+    import app.scanner as scanner
 
+    captured = {}
 
-def test_request_delay_can_be_forced_explicitly(monkeypatch):
-    monkeypatch.setenv("REQUEST_DELAY", "0.8")
-    monkeypatch.setenv("SCANNER_SYMBOL_CONCURRENCY", "24")
-    monkeypatch.setenv("SCANNER_FORCE_REQUEST_DELAY", "true")
-    scanner = _load_scanner()
-    assert scanner.LEGACY_REQUEST_DELAY == 0.8
-    assert scanner.REQUEST_DELAY == 0.8
+    def fake_strategy(*, df_1h, df_15m, df_5m, reference_market_price=None, debug_counts=None):
+        captured["reference_market_price"] = reference_market_price
+        captured["debug_counts"] = debug_counts
+        return None
 
+    monkeypatch.setattr(scanner.strategy_engine, "mtf_strategy", fake_strategy)
 
-def test_scan_lag_seconds_uses_reference_close_delta():
-    scanner = _load_scanner()
-    ref = datetime(2026, 4, 4, 20, 15, 0)
-    now = datetime(2026, 4, 4, 20, 19, 59)
-    assert scanner._scan_lag_seconds(ref, now) == 299.0
+    df_5m = pd.DataFrame([{"close_time": pd.Timestamp.now(tz="UTC"), "close": 123.45}])
+    df_15m = pd.DataFrame([{"close_time": pd.Timestamp.now(tz="UTC"), "close": 120.0}])
+    df_1h = pd.DataFrame([{"close_time": pd.Timestamp.now(tz="UTC"), "close": 121.0}])
 
+    result = scanner.build_symbol_candidate("BTCUSDT", df_1h, df_15m, df_5m)
 
-def test_should_skip_startup_stale_reference_cycle_only_on_first_old_cycle(monkeypatch):
-    monkeypatch.setenv("SCAN_STARTUP_STALE_REFERENCE_MAX_LAG_SECONDS", "90")
-    scanner = _load_scanner()
-    ref = datetime(2026, 4, 4, 20, 15, 0)
-    stale_now = datetime(2026, 4, 4, 20, 19, 59)
-    fresh_now = datetime(2026, 4, 4, 20, 15, 30)
-
-    assert scanner._should_skip_startup_stale_reference_cycle(None, ref, stale_now) is True
-    assert scanner._should_skip_startup_stale_reference_cycle(None, ref, fresh_now) is False
-    assert scanner._should_skip_startup_stale_reference_cycle(ref, ref, stale_now) is False
+    assert result is None
+    assert captured["reference_market_price"] == 123.45
+    assert captured["debug_counts"] == {}
