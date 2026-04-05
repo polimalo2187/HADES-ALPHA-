@@ -7,7 +7,7 @@ import queue
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from bson import ObjectId
 from pymongo import UpdateOne
@@ -168,12 +168,19 @@ def _upsert_user_signals(base_signal: Dict, user_ids: List[int]) -> None:
         logger.warning("⚠️ Bulk write de user_signals con conflictos tolerados: %s", exc.details)
 
 
+def _delivery_set_on_insert(signal_id: str, visibility: str, user_id: int) -> Dict[str, Any]:
+    doc = new_signal_delivery(signal_id=signal_id, user_id=int(user_id), visibility=visibility)
+    for mutable_field in ("status", "message_id", "error", "updated_at", "sent_at"):
+        doc.pop(mutable_field, None)
+    return doc
+
+
 def _ensure_delivery_records(signal_id: str, visibility: str, user_ids: List[int]) -> None:
     if not user_ids:
         return
     ops: List[UpdateOne] = []
     for user_id in user_ids:
-        delivery_doc = new_signal_delivery(signal_id=signal_id, user_id=int(user_id), visibility=visibility)
+        delivery_doc = _delivery_set_on_insert(signal_id, visibility, int(user_id))
         ops.append(
             UpdateOne(
                 {"signal_id": signal_id, "user_id": int(user_id)},
@@ -264,11 +271,7 @@ def _update_delivery_results(signal_id: str, visibility: str, push_results: Dict
             {"signal_id": signal_id, "user_id": user_id},
             {
                 "$set": update,
-                "$setOnInsert": new_signal_delivery(
-                    signal_id=signal_id,
-                    user_id=user_id,
-                    visibility=visibility,
-                ),
+                "$setOnInsert": _delivery_set_on_insert(signal_id, visibility, user_id),
             },
             upsert=True,
         )
