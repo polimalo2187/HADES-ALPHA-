@@ -58,8 +58,12 @@ def _price_digits(value) -> int:
     if number >= 0.1:
         return 5
     if number >= 0.01:
-        return 6
-    return 8
+        return 7
+    if number >= 0.001:
+        return 8
+    if number >= 0.0001:
+        return 10
+    return 12
 
 
 def _fmt_price(value) -> str:
