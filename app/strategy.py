@@ -206,10 +206,35 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _normalize_price(value: float, decimals: int = 8) -> float:
+def _price_digits(value: float) -> int:
+    try:
+        number = abs(float(value))
+    except Exception:
+        return 8
+    if number == 0:
+        return 8
+    if number >= 1000:
+        return 2
+    if number >= 100:
+        return 3
+    if number >= 1:
+        return 4
+    if number >= 0.1:
+        return 5
+    if number >= 0.01:
+        return 7
+    if number >= 0.001:
+        return 8
+    if number >= 0.0001:
+        return 10
+    return 12
+
+
+def _normalize_price(value: float, decimals: int | None = None) -> float:
     if value is None:
         return 0.0
-    quant = Decimal("1").scaleb(-decimals)
+    precision = _price_digits(value) if decimals is None else int(decimals)
+    quant = Decimal("1").scaleb(-precision)
     return float(Decimal(str(float(value))).quantize(quant, rounding=ROUND_HALF_UP))
 
 
