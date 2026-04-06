@@ -25,7 +25,7 @@ PIVOT_WINDOW = 3
 MIN_HISTORY_BARS = max(LIQUIDITY_LOOKBACK + 8, ATR_PERIOD + VOLUME_PERIOD + 8)
 
 STRATEGY_NAME = "LIQUIDITY_SWEEP_REVERSAL"
-SCORE_CALIBRATION_VERSION = "v16_liquidity_close_market_serious_filters"
+SCORE_CALIBRATION_VERSION = "v17_liquidity_close_market_serious_filters_stepback1"
 
 # =======================================
 # PERFILES POR PLAN
@@ -35,12 +35,12 @@ SCORE_CALIBRATION_VERSION = "v16_liquidity_close_market_serious_filters"
 PREMIUM_PROFILE = {
     "name": "premium",
     "score": 90.0,
-    "atr_pct_min": 0.0014,
-    "atr_pct_max": 0.0160,
-    "liquidity_tolerance_atr": 0.26,
-    "min_sweep_atr": 0.11,
-    "min_rel_volume": 0.95,
-    "min_confirm_rel_volume": 0.68,
+    "atr_pct_min": 0.0012,
+    "atr_pct_max": 0.0180,
+    "liquidity_tolerance_atr": 0.30,
+    "min_sweep_atr": 0.095,
+    "min_rel_volume": 0.74,
+    "min_confirm_rel_volume": 0.54,
     "min_wick_body_ratio": 1.00,
     "min_wick_range_ratio": 0.30,
     "min_confirm_body_ratio": 0.18,
@@ -70,12 +70,12 @@ PREMIUM_PROFILE = {
 PLUS_PROFILE = {
     "name": "plus",
     "score": 82.0,
-    "atr_pct_min": 0.0012,
-    "atr_pct_max": 0.0180,
-    "liquidity_tolerance_atr": 0.30,
-    "min_sweep_atr": 0.09,
-    "min_rel_volume": 0.82,
-    "min_confirm_rel_volume": 0.58,
+    "atr_pct_min": 0.0010,
+    "atr_pct_max": 0.0200,
+    "liquidity_tolerance_atr": 0.34,
+    "min_sweep_atr": 0.080,
+    "min_rel_volume": 0.62,
+    "min_confirm_rel_volume": 0.44,
     "min_wick_body_ratio": 0.82,
     "min_wick_range_ratio": 0.24,
     "min_confirm_body_ratio": 0.14,
@@ -105,12 +105,12 @@ PLUS_PROFILE = {
 FREE_PROFILE = {
     "name": "free",
     "score": 74.0,
-    "atr_pct_min": 0.0009,
-    "atr_pct_max": 0.0210,
-    "liquidity_tolerance_atr": 0.36,
-    "min_sweep_atr": 0.07,
-    "min_rel_volume": 0.68,
-    "min_confirm_rel_volume": 0.45,
+    "atr_pct_min": 0.0008,
+    "atr_pct_max": 0.0220,
+    "liquidity_tolerance_atr": 0.40,
+    "min_sweep_atr": 0.065,
+    "min_rel_volume": 0.50,
+    "min_confirm_rel_volume": 0.34,
     "min_wick_body_ratio": 0.68,
     "min_wick_range_ratio": 0.18,
     "min_confirm_body_ratio": 0.10,
