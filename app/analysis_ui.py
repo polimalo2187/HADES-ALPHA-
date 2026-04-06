@@ -42,6 +42,37 @@ def _fmt_num(value, digits: int = 4) -> str:
         return "—"
 
 
+def _price_digits(value) -> int:
+    try:
+        number = abs(float(value))
+    except Exception:
+        return 4
+    if number == 0:
+        return 4
+    if number >= 1000:
+        return 2
+    if number >= 100:
+        return 3
+    if number >= 1:
+        return 4
+    if number >= 0.1:
+        return 5
+    if number >= 0.01:
+        return 6
+    return 8
+
+
+def _fmt_price(value) -> str:
+    try:
+        digits = _price_digits(value)
+        formatted = f"{float(value):,.{digits}f}"
+        if "." in formatted:
+            formatted = formatted.rstrip("0").rstrip(".")
+        return formatted
+    except Exception:
+        return "—"
+
+
 def _fmt_fraction_pct(value) -> str:
     try:
         return f"{float(value) * 100:.2f}%"
@@ -120,9 +151,9 @@ def build_signal_analysis_text(analysis: Dict, *, plan: str = PLAN_FREE, languag
             f"• {_t(language, 'Score', 'Score')}: {analysis.get('normalized_score') if analysis.get('normalized_score') is not None else (analysis.get('score') if analysis.get('score') is not None else '—')}",
             f"• {_t(language, 'Timeframes', 'Timeframes')}: {' / '.join(analysis.get('timeframes') or []) or '—'}",
             f"• {_t(language, 'Perfil usado', 'Selected profile')}: {_profile_label(selected_profile, language)}",
-            f"• {_t(language, 'Entrada', 'Entry')}: {_fmt_num(analysis.get('entry_price'))}",
-            f"• SL: {_fmt_num(profile_payload.get('stop_loss'))}",
-            f"• TP1: {_fmt_num(take_profits[0]) if len(take_profits) > 0 else '—'}",
+            f"• {_t(language, 'Entrada', 'Entry')}: {_fmt_price(analysis.get('entry_price'))}",
+            f"• SL: {_fmt_price(profile_payload.get('stop_loss'))}",
+            f"• TP1: {_fmt_price(take_profits[0]) if len(take_profits) > 0 else '—'}",
             f"• {_t(language, 'Distancia a SL', 'Distance to SL')}: {_fmt_fraction_pct(analysis.get('selected_stop_distance_pct'))}",
             f"• ATR %: {_fmt_fraction_pct(analysis.get('atr_pct'))}",
             "",
@@ -157,10 +188,10 @@ def build_signal_analysis_text(analysis: Dict, *, plan: str = PLAN_FREE, languag
         "",
         _t(language, "Estructura operativa:", "Operational structure:"),
         f"• {_t(language, 'Perfil seleccionado', 'Selected profile')}: {_profile_label(selected_profile, language)}",
-        f"• {_t(language, 'Entrada base', 'Base entry')}: {_fmt_num(analysis.get('entry_price'))}",
-        f"• SL: {_fmt_num(profile_payload.get('stop_loss'))}",
-        f"• TP1: {_fmt_num(take_profits[0]) if len(take_profits) > 0 else '—'}",
-        f"• TP2: {_fmt_num(take_profits[1]) if len(take_profits) > 1 else '—'}",
+        f"• {_t(language, 'Entrada base', 'Base entry')}: {_fmt_price(analysis.get('entry_price'))}",
+        f"• SL: {_fmt_price(profile_payload.get('stop_loss'))}",
+        f"• TP1: {_fmt_price(take_profits[0]) if len(take_profits) > 0 else '—'}",
+        f"• TP2: {_fmt_price(take_profits[1]) if len(take_profits) > 1 else '—'}",
         f"• {_t(language, 'Leverage sugerido', 'Suggested leverage')}: {profile_payload.get('leverage', '—')}",
         f"• {_t(language, 'Distancia a SL', 'Distance to SL')}: {_fmt_fraction_pct(analysis.get('selected_stop_distance_pct'))}",
         f"• {_t(language, 'Distancia a TP1', 'Distance to TP1')}: {_fmt_fraction_pct(analysis.get('selected_tp1_distance_pct'))}",
