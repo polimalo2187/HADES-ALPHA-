@@ -880,7 +880,16 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
     tp1_hit_now = False
     tp2_hit_now = False
     stop_hit_now = False
-    if current_price is not None and entry and stop_loss:
+    resolution = str((result_doc or {}).get("resolution") or "").lower()
+    if final_result:
+        if resolution == "tp2":
+            tp1_hit_now = True
+            tp2_hit_now = True
+        elif resolution == "tp1":
+            tp1_hit_now = True
+        elif resolution == "sl":
+            stop_hit_now = True
+    elif current_price is not None and entry and stop_loss:
         try:
             cp = float(current_price)
             sl = float(stop_loss)
