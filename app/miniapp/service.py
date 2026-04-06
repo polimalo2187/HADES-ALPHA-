@@ -1653,7 +1653,8 @@ def _serialize_watchlist(symbols: Iterable[str], *, user_id: int = 0) -> List[Di
         if symbol and symbol in selected:
             ticker_by_symbol[symbol] = item
 
-    radar_rows = _safe_call(get_radar_opportunities, [], limit=max(30, len(selected_order) * 8)) or []
+    radar_fetch_limit = max(60, len(selected_order) * 12, len(tickers) or 0)
+    radar_rows = _safe_call(get_radar_opportunities, [], limit=radar_fetch_limit) or []
     radar_by_symbol = {
         str(item.get("symbol") or "").upper(): item
         for item in radar_rows
