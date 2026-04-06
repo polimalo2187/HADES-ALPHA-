@@ -41,6 +41,37 @@ def _fmt_num(value, digits: int = 4) -> str:
         return "—"
 
 
+def _price_digits(value) -> int:
+    try:
+        number = abs(float(value))
+    except Exception:
+        return 4
+    if number == 0:
+        return 4
+    if number >= 1000:
+        return 2
+    if number >= 100:
+        return 3
+    if number >= 1:
+        return 4
+    if number >= 0.1:
+        return 5
+    if number >= 0.01:
+        return 6
+    return 8
+
+
+def _fmt_price(value) -> str:
+    try:
+        digits = _price_digits(value)
+        formatted = f"{float(value):,.{digits}f}"
+        if "." in formatted:
+            formatted = formatted.rstrip("0").rstrip(".")
+        return formatted
+    except Exception:
+        return "—"
+
+
 def _fmt_pct_fraction(value) -> str:
     try:
         return f"{float(value) * 100:.2f}%"
@@ -71,8 +102,8 @@ def _yes_no(value: bool, language: str | None = "es") -> str:
 def build_signal_tracking_text(payload: Dict, *, plan: str = "free", language: str = "es") -> str:
     tier = _tracking_feature_tier(plan)
     take_profits = payload.get("take_profits") or []
-    tp1 = _fmt_num(take_profits[0]) if len(take_profits) > 0 else "—"
-    tp2 = _fmt_num(take_profits[1]) if len(take_profits) > 1 else "—"
+    tp1 = _fmt_price(take_profits[0]) if len(take_profits) > 0 else "—"
+    tp2 = _fmt_price(take_profits[1]) if len(take_profits) > 1 else "—"
 
     if tier == "basic":
         lines = [
@@ -83,9 +114,9 @@ def build_signal_tracking_text(payload: Dict, *, plan: str = "free", language: s
             f"{_t(language, 'Resultado final', 'Final result')}: {payload.get('result_label', _t(language, 'Aún sin cierre final', 'No final close yet'))}",
             "",
             _t(language, "Lectura rápida:", "Quick reading:"),
-            f"• {_t(language, 'Precio actual', 'Current price')}: {_fmt_num(payload.get('current_price'))}",
-            f"• {_t(language, 'Entrada base', 'Base entry')}: {_fmt_num(payload.get('entry_price'))}",
-            f"• SL: {_fmt_num(payload.get('stop_loss'))}",
+            f"• {_t(language, 'Precio actual', 'Current price')}: {_fmt_price(payload.get('current_price'))}",
+            f"• {_t(language, 'Entrada base', 'Base entry')}: {_fmt_price(payload.get('entry_price'))}",
+            f"• SL: {_fmt_price(payload.get('stop_loss'))}",
             f"• TP1: {tp1}",
             f"• {_t(language, 'Distancia a entrada', 'Distance to entry')}: {_fmt_pct_fraction(payload.get('distance_to_entry_pct'))}",
             f"• {_t(language, 'Distancia a SL', 'Distance to SL')}: {_fmt_pct_fraction(payload.get('stop_distance_pct'))}",
@@ -106,12 +137,12 @@ def build_signal_tracking_text(payload: Dict, *, plan: str = "free", language: s
         f"{_t(language, 'Resultado final', 'Final result')}: {payload.get('result_label', _t(language, 'Aún sin cierre final', 'No final close yet'))}",
         "",
         _t(language, "Snapshot actual:", "Current snapshot:"),
-        f"• {_t(language, 'Precio actual', 'Current price')}: {_fmt_num(payload.get('current_price'))}",
-        f"• {_t(language, 'Entrada base', 'Base entry')}: {_fmt_num(payload.get('entry_price'))}",
+        f"• {_t(language, 'Precio actual', 'Current price')}: {_fmt_price(payload.get('current_price'))}",
+        f"• {_t(language, 'Entrada base', 'Base entry')}: {_fmt_price(payload.get('entry_price'))}",
         f"• {_t(language, 'Distancia actual a entrada', 'Current distance to entry')}: {_fmt_pct_fraction(payload.get('distance_to_entry_pct'))}",
         "",
         _t(language, "Perfil operativo actual:", "Current operating profile:"),
-        f"• SL: {_fmt_num(payload.get('stop_loss'))}",
+        f"• SL: {_fmt_price(payload.get('stop_loss'))}",
         f"• TP1: {tp1}",
         f"• TP2: {tp2}",
         f"• {_t(language, 'Distancia a SL', 'Distance to SL')}: {_fmt_pct_fraction(payload.get('stop_distance_pct'))}",
@@ -153,14 +184,14 @@ def build_signal_tracking_text(payload: Dict, *, plan: str = "free", language: s
         f"{_t(language, 'Resultado final', 'Final result')}: {payload.get('result_label', _t(language, 'Aún sin cierre final', 'No final close yet'))}",
         "",
         _t(language, "Snapshot actual:", "Current snapshot:"),
-        f"• {_t(language, 'Precio actual', 'Current price')}: {_fmt_num(payload.get('current_price'))}",
-        f"• {_t(language, 'Entrada base', 'Base entry')}: {_fmt_num(payload.get('entry_price'))}",
-        f"• {_t(language, 'Zona de entrada', 'Entry zone')}: {_fmt_num(payload.get('entry_zone_low'))} → {_fmt_num(payload.get('entry_zone_high'))}",
+        f"• {_t(language, 'Precio actual', 'Current price')}: {_fmt_price(payload.get('current_price'))}",
+        f"• {_t(language, 'Entrada base', 'Base entry')}: {_fmt_price(payload.get('entry_price'))}",
+        f"• {_t(language, 'Zona de entrada', 'Entry zone')}: {_fmt_price(payload.get('entry_zone_low'))} → {_fmt_price(payload.get('entry_zone_high'))}",
         f"• {_t(language, 'Distancia actual a entrada', 'Current distance to entry')}: {_fmt_pct_fraction(payload.get('distance_to_entry_pct'))}",
         f"• {_t(language, 'Movimiento vs entrada', 'Move vs entry')}: {_fmt_pct_fraction(payload.get('current_move_pct'))}",
         "",
         _t(language, "Perfil operativo actual:", "Current operating profile:"),
-        f"• SL: {_fmt_num(payload.get('stop_loss'))}",
+        f"• SL: {_fmt_price(payload.get('stop_loss'))}",
         f"• TP1: {tp1}",
         f"• TP2: {tp2}",
         f"• {_t(language, 'Distancia a SL', 'Distance to SL')}: {_fmt_pct_fraction(payload.get('stop_distance_pct'))}",
