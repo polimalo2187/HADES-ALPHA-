@@ -476,31 +476,31 @@ def _fallback_profiles(direction: str, entry: float) -> Dict[str, Dict]:
     if direction == "LONG":
         return {
             "conservador": {
-                "stop_loss": round(entry * 0.992, 4),
-                "take_profits": [round(entry * 1.009, 4), round(entry * 1.016, 4)],
+                "stop_loss": _round_price_dynamic(entry * 0.992),
+                "take_profits": [_round_price_dynamic(entry * 1.009), _round_price_dynamic(entry * 1.016)],
             },
             "moderado": {
-                "stop_loss": round(entry * 0.9932, 4),
-                "take_profits": [round(entry * 1.008, 4), round(entry * 1.014, 4)],
+                "stop_loss": _round_price_dynamic(entry * 0.9932),
+                "take_profits": [_round_price_dynamic(entry * 1.008), _round_price_dynamic(entry * 1.014)],
             },
             "agresivo": {
-                "stop_loss": round(entry * 0.9942, 4),
-                "take_profits": [round(entry * 1.007, 4), round(entry * 1.012, 4)],
+                "stop_loss": _round_price_dynamic(entry * 0.9942),
+                "take_profits": [_round_price_dynamic(entry * 1.007), _round_price_dynamic(entry * 1.012)],
             },
         }
 
     return {
         "conservador": {
-            "stop_loss": round(entry * 1.008, 4),
-            "take_profits": [round(entry * 0.991, 4), round(entry * 0.984, 4)],
+            "stop_loss": _round_price_dynamic(entry * 1.008),
+            "take_profits": [_round_price_dynamic(entry * 0.991), _round_price_dynamic(entry * 0.984)],
         },
         "moderado": {
-            "stop_loss": round(entry * 1.0068, 4),
-            "take_profits": [round(entry * 0.992, 4), round(entry * 0.986, 4)],
+            "stop_loss": _round_price_dynamic(entry * 1.0068),
+            "take_profits": [_round_price_dynamic(entry * 0.992), _round_price_dynamic(entry * 0.986)],
         },
         "agresivo": {
-            "stop_loss": round(entry * 1.0058, 4),
-            "take_profits": [round(entry * 0.993, 4), round(entry * 0.988, 4)],
+            "stop_loss": _round_price_dynamic(entry * 1.0058),
+            "take_profits": [_round_price_dynamic(entry * 0.993), _round_price_dynamic(entry * 0.988)],
         },
     }
 
@@ -514,10 +514,10 @@ def build_user_signal_document(base_signal: Dict, user_id: int) -> Dict:
     for profile_name in ["conservador", "moderado", "agresivo"]:
         src = profiles.get(profile_name, {})
         normalized_profiles[profile_name] = {
-            "stop_loss": round(float(src.get("stop_loss", entry)), 4),
+            "stop_loss": _round_price_dynamic(float(src.get("stop_loss", entry))),
             "take_profits": [
-                round(float(src.get("take_profits", [entry, entry])[0]), 4),
-                round(float(src.get("take_profits", [entry, entry])[1]), 4),
+                _round_price_dynamic(float(src.get("take_profits", [entry, entry])[0])),
+                _round_price_dynamic(float(src.get("take_profits", [entry, entry])[1])),
             ],
             "leverage": LEVERAGE_PROFILES[profile_name],
         }
@@ -527,7 +527,7 @@ def build_user_signal_document(base_signal: Dict, user_id: int) -> Dict:
         signal_id=str(base_signal["_id"]),
         symbol=base_signal["symbol"],
         direction=direction,
-        entry_price=round(entry, 4),
+        entry_price=_round_price_dynamic(entry),
         entry_zone=dict(zip(["low", "high"], calculate_entry_zone(entry))),
         profiles=normalized_profiles,
         leverage_profiles=LEVERAGE_PROFILES,
