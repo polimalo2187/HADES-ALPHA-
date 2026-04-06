@@ -280,3 +280,38 @@ def test_signal_analysis_payload_exposes_window_flags(monkeypatch):
     assert payload['telegram_window_open'] is True
     assert payload['evaluation_window_open'] is True
     assert payload['selected_tp1_distance_pct'] is not None
+
+
+def test_closed_signal_uses_final_resolution_for_hit_flags(monkeypatch):
+    from datetime import datetime, timedelta
+    from app.signals import get_signal_tracking_for_user
+
+    now = datetime.utcnow()
+    user_signal = {
+        'signal_id': 'sig-closed',
+        'symbol': '1000PEPEUSDT',
+        'direction': 'LONG',
+        'entry_price': 0.00351,
+        'entry_zone': {'low': 0.00350, 'high': 0.00352},
+        'profiles': {'moderado': {'stop_loss': 0.00346, 'take_profits': [0.00356, 0.00361]}},
+        'telegram_valid_until': now - timedelta(minutes=5),
+        'evaluation_valid_until': now - timedelta(minutes=1),
+        'send_mode': 'market_on_close',
+    }
+
+    monkeypatch.setattr('app.signals.get_user_signal_by_signal_id', lambda user_id, signal_id: dict(user_signal))
+    monkeypatch.setattr('app.signals.get_base_signal_by_signal_id', lambda signal_id: {})
+    monkeypatch.setattr('app.signals.get_current_price', lambda symbol: 0.00362)
+
+    class DummyResults:
+        def find_one(self, *args, **kwargs):
+            return {'result': 'lost', 'resolution': 'sl'}
+
+    monkeypatch.setattr('app.signals.signal_results_collection', lambda: DummyResults())
+
+    payload = get_signal_tracking_for_user(1, 'sig-closed', profile_name='moderado')
+
+    assert payload['result_label'] == 'PERDIDA'
+    assert payload['tp1_hit_now'] is False
+    assert payload['tp2_hit_now'] is False
+    assert payload['stop_hit_now'] is True
