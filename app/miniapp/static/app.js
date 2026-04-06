@@ -215,6 +215,25 @@ function formatNumber(value, digits = 2) {
   return Number(value).toFixed(digits);
 }
 
+function priceDigits(value, minDigits = 2) {
+  const num = Math.abs(Number(value));
+  if (!Number.isFinite(num) || num === 0) return Math.max(2, Math.min(minDigits, 8));
+  let autoDigits = 4;
+  if (num >= 1000) autoDigits = 2;
+  else if (num >= 100) autoDigits = 3;
+  else if (num >= 1) autoDigits = 4;
+  else if (num >= 0.1) autoDigits = 5;
+  else if (num >= 0.01) autoDigits = 6;
+  else autoDigits = 8;
+  return Math.max(minDigits, autoDigits);
+}
+
+function formatPrice(value, minDigits = 2) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '—';
+  const digits = Math.min(priceDigits(value, minDigits), 8);
+  return Number(value).toFixed(digits).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+}
+
 function formatMoney(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return '—';
   return `${Number(value).toFixed(3)} USDT`;
@@ -1501,8 +1520,8 @@ function riskPreviewCard(preview, payload) {
         ${riskMetricCard('Buffer', formatMoney(diagnostics.capital_buffer_usdt), `Mejor RR ${escapeHtml(formatNumber(diagnostics.best_rr_net || 0, 2))}`)}
       </div>
       <div class="feature-list" style="margin-top:12px;">
-        <div class="feature-item">Entrada <strong>${escapeHtml(formatNumber(preview.entry_price, 6))}</strong></div>
-        <div class="feature-item">Stop <strong>${escapeHtml(formatNumber(preview.stop_loss, 6))}</strong></div>
+        <div class="feature-item">Entrada <strong>${escapeHtml(formatPrice(preview.entry_price, 6))}</strong></div>
+        <div class="feature-item">Stop <strong>${escapeHtml(formatPrice(preview.stop_loss, 6))}</strong></div>
         <div class="feature-item">Distancia al stop <strong>${escapeHtml(formatFractionPercent(preview.stop_distance_pct))}</strong></div>
         <div class="feature-item">Pérdida efectiva <strong>${escapeHtml(formatFractionPercent(preview.effective_loss_pct))}</strong></div>
         <div class="feature-item">Fee round-trip <strong>${escapeHtml(formatFractionPercent(preview.fee_roundtrip_pct))}</strong></div>
@@ -1516,7 +1535,7 @@ function riskPreviewCard(preview, payload) {
               <span class="plan-tag">RR ${escapeHtml(formatNumber(tp.rr_net || 0, 2))}</span>
             </div>
             <div class="inline-meta">
-              <span>Precio: ${escapeHtml(formatNumber(tp.price, 6))}</span>
+              <span>Precio: ${escapeHtml(formatPrice(tp.price, 6))}</span>
               <span>Distancia: ${escapeHtml(formatFractionPercent(tp.distance_pct))}</span>
               <span>Neto: ${escapeHtml(formatMoney(tp.net_profit_usdt))}</span>
             </div>
@@ -2239,7 +2258,7 @@ function signalCard(item) {
       </div>
       <div class="pill-row compact-pill-row">
         <span class="pill">Tier ${escapeHtml(String(item.visibility || '').toUpperCase())}</span>
-        ${item.entry_price ? `<span class="pill">Entrada ${escapeHtml(formatNumber(item.entry_price, 4))}</span>` : ''}
+        ${item.entry_price ? `<span class="pill">Entrada ${escapeHtml(formatPrice(item.entry_price, 4))}</span>` : ''}
       </div>
       <div class="inline-meta">
         <span>Emitida: ${escapeHtml(formatDate(item.created_at))}</span>
@@ -2545,7 +2564,7 @@ function renderMarket() {
       </div>
       <div class="inline-meta">
         ${item.quote_volume ? `<span>Vol: ${escapeHtml(formatCompactAmount(item.quote_volume))}</span>` : ''}
-        ${item.last_price ? `<span>Px: ${escapeHtml(formatNumber(item.last_price, 4))}</span>` : ''}
+        ${item.last_price ? `<span>Px: ${escapeHtml(formatPrice(item.last_price, 4))}</span>` : ''}
       </div>
     </div>
   `).join('') : `<div class="empty-state">${marketLoading ? 'Actualizando datos...' : (marketError ? 'Sin datos frescos por ahora.' : `Sin ${type} disponibles.`)}</div>`;
@@ -2803,7 +2822,7 @@ function renderMarket() {
                 ${(item.reasons || []).map(reason => `<span class="watchlist-reason-chip">${escapeHtml(reason)}</span>`).join('')}
               </div>
               <div class="inline-meta watchlist-inline-meta radar-inline-meta">
-                <span>Precio: ${escapeHtml(formatNumber(item.last_price, 4))}</span>
+                <span>Precio: ${escapeHtml(formatPrice(item.last_price, 4))}</span>
                 <span>Trades: ${escapeHtml(formatInteger(item.trade_count))}</span>
                 <span>Momentum: ${escapeHtml(item.momentum || '—')}</span>
                 <span>Volatilidad: ${escapeHtml(item.volatility_label || '—')}</span>
@@ -2870,7 +2889,7 @@ function renderMarket() {
                 </div>
                 <div class="watchlist-metric-box">
                   <span class="watchlist-metric-label">Precio</span>
-                  <span class="watchlist-metric-value">${escapeHtml(formatNumber(item.last_price, 4))}</span>
+                  <span class="watchlist-metric-value">${escapeHtml(formatPrice(item.last_price, 4))}</span>
                 </div>
                 <div class="watchlist-metric-box">
                   <span class="watchlist-metric-label">Rango 24h</span>
@@ -2897,7 +2916,7 @@ function renderMarket() {
                 ${(item.priority_reasons || []).map(reason => `<span class="watchlist-reason-chip">${escapeHtml(reason)}</span>`).join('')}
               </div>
               <div class="inline-meta watchlist-inline-meta">
-                <span>Cambio abs: ${escapeHtml(formatNumber(item.price_change_abs, 4))}</span>
+                <span>Cambio abs: ${escapeHtml(formatPrice(item.price_change_abs, 4))}</span>
                 <span>Trades: ${escapeHtml(formatInteger(item.trade_count))}</span>
                 <span>Volatilidad: ${escapeHtml(item.volatility_label || '—')}</span>
                 ${item.radar_momentum ? `<span>Momentum radar: ${escapeHtml(item.radar_momentum)}</span>` : ''}
@@ -3242,7 +3261,7 @@ function renderRadarDetailModal(payload) {
 
       <div class="detail-stat-grid">
         ${detailStatCard('Ranking', formatNumber(radar.ranking_score, 1))}
-        ${detailStatCard('Precio', formatNumber(radar.last_price, 4), sideClassByValue(radar.change_pct || 0))}
+        ${detailStatCard('Precio', formatPrice(radar.last_price, 4), sideClassByValue(radar.change_pct || 0))}
         ${detailStatCard('Cambio 24h', formatPercentSigned(radar.change_pct, 2), sideClassByValue(radar.change_pct || 0))}
         ${detailStatCard('Funding', formatPercentSigned(radar.funding_rate_pct, 3), sideClassByValue(radar.funding_rate_pct || 0))}
         ${detailStatCard('Open interest', formatCompactAmount(radar.open_interest))}
@@ -3283,8 +3302,8 @@ function renderRadarDetailModal(payload) {
         ${profiles.length ? `
           <div class="detail-stat-grid radar-profile-grid">
             ${profiles.map(profile => detailStatCard(
-              `${profile.label} · SL ${formatNumber(profile.stop_loss, 4)}`,
-              `TP1 ${formatNumber(profile.tp1, 4)} · TP2 ${formatNumber(profile.tp2, 4)}`,
+              `${profile.label} · SL ${formatPrice(profile.stop_loss, 4)}`,
+              `TP1 ${formatPrice(profile.tp1, 4)} · TP2 ${formatPrice(profile.tp2, 4)}`,
               '')) .join('')}
           </div>
         ` : ''}
@@ -3374,11 +3393,11 @@ function renderSignalDetailModal(payload) {
       </div>
 
       <div class="detail-stat-grid">
-        ${detailStatCard('Precio actual', formatNumber(tracking.current_price, 4), sideClassByValue(tracking.current_move_pct || 0))}
-        ${detailStatCard('Entrada', formatNumber(tracking.entry_price, 4))}
-        ${detailStatCard('SL', formatNumber(tracking.stop_loss, 4), 'negative-text')}
-        ${detailStatCard('TP1', formatNumber((tracking.take_profits || [])[0], 4), 'positive-text')}
-        ${detailStatCard('TP2', formatNumber((tracking.take_profits || [])[1], 4), 'positive-text')}
+        ${detailStatCard('Precio actual', formatPrice(tracking.current_price, 4), sideClassByValue(tracking.current_move_pct || 0))}
+        ${detailStatCard('Entrada', formatPrice(tracking.entry_price, 4))}
+        ${detailStatCard('SL', formatPrice(tracking.stop_loss, 4), 'negative-text')}
+        ${detailStatCard('TP1', formatPrice((tracking.take_profits || [])[0], 4), 'positive-text')}
+        ${detailStatCard('TP2', formatPrice((tracking.take_profits || [])[1], 4), 'positive-text')}
         ${detailStatCard('Dist. entrada', formatFractionPercent(tracking.distance_to_entry_pct))}
         ${detailStatCard('Dist. SL', formatFractionPercent(tracking.stop_distance_pct))}
         ${detailStatCard('Dist. TP1', formatFractionPercent(tracking.tp1_distance_pct))}
