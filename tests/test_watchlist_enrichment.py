@@ -55,6 +55,39 @@ class WatchlistEnrichmentTests(unittest.TestCase):
         self.assertEqual(row['latest_signal']['signal_id'], 'sig-1')
         self.assertFalse(row['has_active_signal'])
 
+
+    def test_build_watchlist_context_fetches_full_radar_set_for_selected_symbol(self):
+        ticker = {
+            'symbol': 'SIRENUSDT',
+            'lastPrice': '0.5973',
+            'priceChangePercent': '40.8',
+            'priceChange': '0.1735',
+            'quoteVolume': '580800000',
+            'volume': '972000000',
+            'highPrice': '0.6120',
+            'lowPrice': '0.4237',
+            'count': '45678',
+        }
+        radar_row = {
+            'symbol': 'SIRENUSDT',
+            'score': 43.0,
+            'final_score': 43.3,
+            'direction': 'LONG',
+            'momentum': 'Media',
+        }
+        user = {'user_id': 10, 'plan': 'free'}
+        with patch('app.miniapp.service.get_watchlist', return_value=['SIRENUSDT']), \
+             patch('app.miniapp.service.plan_status', return_value={'plan': 'free'}), \
+             patch('app.miniapp.service.get_futures_24h_tickers', return_value=[ticker]), \
+             patch('app.miniapp.service.get_radar_opportunities', return_value=[radar_row]) as radar_mock, \
+             patch('app.miniapp.service._load_watchlist_signal_context', return_value=({}, {})):
+            payload = service.build_watchlist_context(user)
+
+        row = payload['items'][0]
+        self.assertEqual(row['radar_direction'], 'LONG')
+        self.assertEqual(row['radar_score'], 43.3)
+        self.assertGreaterEqual(radar_mock.call_args.kwargs['limit'], 60)
+
     def test_build_watchlist_context_marks_active_signal_as_setup_activo(self):
         ticker = {
             'symbol': 'ETHUSDT',
