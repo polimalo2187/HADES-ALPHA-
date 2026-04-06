@@ -217,20 +217,22 @@ function formatNumber(value, digits = 2) {
 
 function priceDigits(value, minDigits = 2) {
   const num = Math.abs(Number(value));
-  if (!Number.isFinite(num) || num === 0) return Math.max(2, Math.min(minDigits, 8));
+  if (!Number.isFinite(num) || num === 0) return Math.max(2, Math.min(minDigits, 12));
   let autoDigits = 4;
   if (num >= 1000) autoDigits = 2;
   else if (num >= 100) autoDigits = 3;
   else if (num >= 1) autoDigits = 4;
   else if (num >= 0.1) autoDigits = 5;
-  else if (num >= 0.01) autoDigits = 6;
-  else autoDigits = 8;
+  else if (num >= 0.01) autoDigits = 7;
+  else if (num >= 0.001) autoDigits = 8;
+  else if (num >= 0.0001) autoDigits = 10;
+  else autoDigits = 12;
   return Math.max(minDigits, autoDigits);
 }
 
 function formatPrice(value, minDigits = 2) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return '—';
-  const digits = Math.min(priceDigits(value, minDigits), 8);
+  const digits = Math.min(priceDigits(value, minDigits), 12);
   return Number(value).toFixed(digits).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
 }
 
