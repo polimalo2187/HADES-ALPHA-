@@ -164,12 +164,36 @@ def watchlist_keyboard(symbols, lang: str | None = None):
     return InlineKeyboardMarkup(rows)
 
 
+def _price_digits(v: float) -> int:
+    try:
+        number = abs(float(v))
+    except Exception:
+        return 4
+    if number == 0:
+        return 4
+    if number >= 1000:
+        return 2
+    if number >= 100:
+        return 3
+    if number >= 1:
+        return 4
+    if number >= 0.1:
+        return 5
+    if number >= 0.01:
+        return 7
+    if number >= 0.001:
+        return 8
+    if number >= 0.0001:
+        return 10
+    return 12
+
+
 def _fmt_price(v: float) -> str:
-    if v >= 1000:
-        return f"{v:,.2f}"
-    if v >= 1:
-        return f"{v:,.4f}"
-    return f"{v:.6f}"
+    digits = _price_digits(v)
+    formatted = f"{float(v):,.{digits}f}"
+    if "." in formatted:
+        formatted = formatted.rstrip("0").rstrip(".")
+    return formatted
 
 
 def _fmt_vol(v: float) -> str:
