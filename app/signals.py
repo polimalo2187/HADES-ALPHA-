@@ -142,9 +142,33 @@ def calculate_signal_validity(
     return validity
 
 
+def _price_round_digits(value: float) -> int:
+    try:
+        number = abs(float(value))
+    except Exception:
+        return 4
+    if number == 0:
+        return 4
+    if number >= 1000:
+        return 2
+    if number >= 100:
+        return 3
+    if number >= 1:
+        return 4
+    if number >= 0.1:
+        return 5
+    if number >= 0.01:
+        return 6
+    return 8
+
+
+def _round_price_dynamic(value: float) -> float:
+    return round(float(value), _price_round_digits(value))
+
+
 def calculate_entry_zone(entry: float, pct: float = 0.0015):
-    low = round(entry * (1 - pct), 4)
-    high = round(entry * (1 + pct), 4)
+    low = _round_price_dynamic(entry * (1 - pct))
+    high = _round_price_dynamic(entry * (1 + pct))
     return low, high
 
 
