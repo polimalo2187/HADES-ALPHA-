@@ -51,7 +51,10 @@ DEDUP_MINUTES = int(os.getenv("DEDUP_MINUTES", "10"))
 TELEGRAM_SIGNAL_COOLDOWN_MINUTES = 15
 MIN_SIGNAL_VALIDITY_MINUTES = int(os.getenv("MIN_SIGNAL_VALIDITY_MINUTES", "15"))
 MAX_SIGNAL_VALIDITY_MINUTES = int(os.getenv("MAX_SIGNAL_VALIDITY_MINUTES", "45"))
-MARKET_EVALUATION_VERSION = "v3_entry_window_locked"
+MIN_ENTRY_WAIT_MINUTES = int(os.getenv("MIN_ENTRY_WAIT_MINUTES", str(TELEGRAM_SIGNAL_COOLDOWN_MINUTES)))
+MAX_ENTRY_WAIT_MINUTES = int(os.getenv("MAX_ENTRY_WAIT_MINUTES", "60"))
+ENTRY_WAIT_BUFFER_MINUTES = int(os.getenv("ENTRY_WAIT_BUFFER_MINUTES", "3"))
+MARKET_EVALUATION_VERSION = "v4_pending_entry_activation_window"
 
 # ======================================================
 # UTILIDADES
@@ -230,6 +233,18 @@ def estimate_minutes_to_entry(
         return {"min": max(1, int(base * 0.5)), "max": int(base * 1.5)}
 
 
+def calculate_entry_wait_minutes(estimated_minutes: Dict[str, int]) -> int:
+    try:
+        estimated_max = int(estimated_minutes.get("max") or 0)
+    except Exception:
+        estimated_max = 0
+    planned = estimated_max + ENTRY_WAIT_BUFFER_MINUTES
+    planned = max(MIN_ENTRY_WAIT_MINUTES, planned)
+    planned = min(MAX_ENTRY_WAIT_MINUTES, planned)
+    return int(planned)
+
+
+
 def recent_duplicate_exists(symbol: str, direction: str, visibility: str) -> bool:
     since = datetime.utcnow() - timedelta(minutes=DEDUP_MINUTES)
     return signals_collection().find_one({
@@ -393,11 +408,17 @@ def create_base_signal(
         timeframes,
         visibility=visibility,
         score=score,
-        entry_price=entry_price,
-        current_price=current_price,
         atr_pct=atr_pct,
     )
-    evaluation_valid_until = now + timedelta(minutes=market_validity_minutes)
+    send_mode_normalized = str(send_mode or "").strip().lower()
+    if send_mode_normalized == "market_on_close":
+        entry_wait_minutes = 0
+        entry_valid_until = now
+        evaluation_valid_until = now + timedelta(minutes=market_validity_minutes)
+    else:
+        entry_wait_minutes = calculate_entry_wait_minutes(estimated_minutes)
+        entry_valid_until = now + timedelta(minutes=entry_wait_minutes)
+        evaluation_valid_until = entry_valid_until + timedelta(minutes=market_validity_minutes)
     telegram_valid_until = _telegram_visibility_until(now)
 
     inserted_id = signals_collection().insert_one(signal).inserted_id
@@ -413,6 +434,8 @@ def create_base_signal(
             "telegram_valid_until": telegram_valid_until,
             "entry_zone": {"low": zone_low, "high": zone_high},
             "estimated_entry_minutes": estimated_minutes,
+            "entry_wait_minutes": entry_wait_minutes,
+            "entry_valid_until": entry_valid_until,
             "profiles": profiles if profiles else signal.get("profiles"),
             "leverage_profiles": LEVERAGE_PROFILES,
             "validity_minutes": market_validity_minutes,
@@ -448,6 +471,8 @@ def create_base_signal(
     signal["telegram_valid_until"] = telegram_valid_until
     signal["entry_zone"] = {"low": zone_low, "high": zone_high}
     signal["estimated_entry_minutes"] = estimated_minutes
+    signal["entry_wait_minutes"] = entry_wait_minutes
+    signal["entry_valid_until"] = entry_valid_until
     signal["validity_minutes"] = market_validity_minutes
     signal["market_validity_minutes"] = market_validity_minutes
     signal["telegram_visibility_minutes"] = TELEGRAM_SIGNAL_COOLDOWN_MINUTES
@@ -557,6 +582,8 @@ def build_user_signal_document(base_signal: Dict, user_id: int) -> Dict:
         evaluation_scope_version=base_signal.get("evaluation_scope_version", MARKET_EVALUATION_VERSION),
     )
     user_signal["send_mode"] = base_signal.get("send_mode")
+    user_signal["entry_valid_until"] = base_signal.get("entry_valid_until")
+    user_signal["entry_wait_minutes"] = base_signal.get("entry_wait_minutes")
     user_signal["entry_model_price"] = base_signal.get("entry_model_price")
     user_signal["entry_sent_price"] = base_signal.get("entry_sent_price")
     user_signal["tp1_progress_at_send_pct"] = base_signal.get("tp1_progress_at_send_pct")
@@ -769,8 +796,10 @@ def get_signal_analysis_for_user(user_id: int, signal_id: str, profile_name: str
 
     now = datetime.utcnow()
     telegram_valid_until = user_signal.get("telegram_valid_until") or base_signal.get("telegram_valid_until")
+    entry_valid_until = user_signal.get("entry_valid_until") or base_signal.get("entry_valid_until") or telegram_valid_until
     evaluation_valid_until = _get_evaluation_valid_until(user_signal) or _get_evaluation_valid_until(base_signal)
     telegram_window_open = isinstance(telegram_valid_until, datetime) and telegram_valid_until > now
+    entry_window_open = isinstance(entry_valid_until, datetime) and entry_valid_until > now
     evaluation_window_open = isinstance(evaluation_valid_until, datetime) and evaluation_valid_until > now
 
     analysis = {
@@ -780,6 +809,7 @@ def get_signal_analysis_for_user(user_id: int, signal_id: str, profile_name: str
         "selected_profile_payload": selected_payload,
         "warnings": warnings,
         "telegram_window_open": telegram_window_open,
+        "entry_window_open": entry_window_open,
         "evaluation_window_open": evaluation_window_open,
     }
     analysis.setdefault("normalized_score", base_signal.get("normalized_score"))
@@ -854,6 +884,7 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
     take_profits = selected_payload.get("take_profits") or []
     evaluation_valid_until = _get_evaluation_valid_until(user_signal) or _get_evaluation_valid_until(base_signal)
     telegram_valid_until = user_signal.get("telegram_valid_until") or base_signal.get("telegram_valid_until")
+    entry_valid_until = user_signal.get("entry_valid_until") or base_signal.get("entry_valid_until") or telegram_valid_until
     send_mode = user_signal.get("send_mode") or base_signal.get("send_mode")
     result_doc = signal_results_collection().find_one({"base_signal_id": str(signal_id)}, sort=[("evaluated_at", -1)])
     final_result = (result_doc or {}).get("result")
@@ -872,7 +903,7 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
         zone_low,
         zone_high,
         now,
-        telegram_valid_until,
+        entry_valid_until,
         evaluation_valid_until,
         final_result,
         send_mode,
@@ -920,6 +951,7 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
         progress_to_tp1_pct = None
 
     telegram_window_open = isinstance(telegram_valid_until, datetime) and telegram_valid_until > now
+    entry_window_open = isinstance(entry_valid_until, datetime) and entry_valid_until > now
     evaluation_window_open = isinstance(evaluation_valid_until, datetime) and evaluation_valid_until > now
 
     if final_result == "won":
@@ -998,6 +1030,7 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
         "result_doc": result_doc or {},
         "warnings": warnings,
         "telegram_window_open": telegram_window_open,
+        "entry_window_open": entry_window_open,
         "evaluation_window_open": evaluation_window_open,
     }
 
@@ -1085,6 +1118,19 @@ def _entry_window_allows_new_fill(row: List[Any], entry_window_end: Optional[dat
     if candle_open_dt >= entry_window_end:
         return False
     if candle_close_dt is not None and candle_close_dt > entry_window_end:
+        return False
+    return True
+
+
+def _candle_within_window(row: List[Any], window_end: Optional[datetime]) -> bool:
+    if window_end is None:
+        return True
+    candle_open_dt, candle_close_dt = _candle_time_bounds(row)
+    if candle_open_dt is None:
+        return False
+    if candle_open_dt >= window_end:
+        return False
+    if candle_close_dt is not None and candle_close_dt > window_end:
         return False
     return True
 
@@ -1219,12 +1265,21 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
         logger.error(f"❌ Error descargando velas para evaluar {symbol}: {e}")
         return expired_no_fill
 
-    entry_window_end = telegram_valid_until if isinstance(telegram_valid_until, datetime) else valid_until
-    if isinstance(entry_window_end, datetime) and isinstance(valid_until, datetime):
-        if entry_window_end > valid_until:
-            entry_window_end = valid_until
-
     send_mode = str(signal_doc.get("send_mode") or "").strip().lower()
+    entry_window_end = signal_doc.get("entry_valid_until")
+    if not isinstance(entry_window_end, datetime):
+        entry_window_end = telegram_valid_until if isinstance(telegram_valid_until, datetime) else valid_until
+    if isinstance(entry_window_end, datetime) and isinstance(valid_until, datetime) and entry_window_end > valid_until:
+        entry_window_end = valid_until
+
+    try:
+        market_validity_minutes = int(signal_doc.get("market_validity_minutes") or signal_doc.get("validity_minutes") or 0)
+    except Exception:
+        market_validity_minutes = 0
+    if market_validity_minutes <= 0:
+        market_validity_minutes = calculate_signal_validity(signal_doc.get("timeframes") or ["5M"])
+
+    effective_valid_until = valid_until
     if send_mode == "market_on_close":
         entry_touched = True
         entry_touched_at: Optional[datetime] = created_at if isinstance(created_at, datetime) else None
@@ -1253,6 +1308,8 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
                 max_adverse_excursion_r=max_adverse_excursion_r,
             )
         )
+        payload["effective_valid_until"] = effective_valid_until
+        payload["entry_valid_until"] = entry_window_end
         return payload
 
     for row in klines:
@@ -1265,10 +1322,18 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
         if send_mode != "market_on_close" and not entry_touched and _entry_window_allows_new_fill(row, entry_window_end):
             if _pending_entry_touched(signal_doc, direction, entry_price, high, low):
                 entry_touched = True
-                entry_touched_at = _ms_to_dt(row[0])
+                candle_open_dt, candle_close_dt = _candle_time_bounds(row)
+                entry_touched_at = candle_close_dt or candle_open_dt
+                if isinstance(entry_touched_at, datetime):
+                    effective_valid_until = entry_touched_at + timedelta(minutes=market_validity_minutes)
+                    if isinstance(valid_until, datetime) and effective_valid_until > valid_until:
+                        effective_valid_until = valid_until
 
         if not entry_touched:
             continue
+
+        if not _candle_within_window(row, effective_valid_until):
+            break
 
         excursions = _excursions_after_entry_r(direction, entry_price, stop_loss, high, low)
         max_favorable_excursion_r = max(max_favorable_excursion_r, float(excursions.get("favorable_r") or 0.0))
@@ -1476,7 +1541,8 @@ def evaluate_expired_signals(limit: int = 100) -> int:
             result = evaluation.get("result", "expired")
             evaluated_at = datetime.utcnow()
 
-            evaluation_valid_until = _get_evaluation_valid_until(s)
+            evaluation_valid_until = evaluation.get("effective_valid_until") or _get_evaluation_valid_until(s)
+            entry_valid_until = evaluation.get("entry_valid_until") or s.get("entry_valid_until") or s.get("telegram_valid_until")
 
             metrics = _result_r_metrics(s, evaluation)
             created_at = s.get("created_at")
@@ -1561,6 +1627,7 @@ def evaluate_expired_signals(limit: int = 100) -> int:
                         "evaluated_at": evaluated_at,
                         "evaluated_profile": "conservador",
                         "evaluation_scope_version": s.get("evaluation_scope_version", MARKET_EVALUATION_VERSION),
+                        "entry_valid_until": entry_valid_until,
                         "entry_touched": evaluation.get("entry_touched"),
                         "entry_touched_at": evaluation.get("entry_touched_at"),
                         "expiry_type": evaluation.get("expiry_type"),
