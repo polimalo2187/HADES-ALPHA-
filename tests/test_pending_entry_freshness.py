@@ -1,0 +1,45 @@
+import tests._bootstrap
+
+from datetime import datetime, timedelta
+
+import app.signals as signals
+
+
+def test_calculate_entry_zone_adapts_to_risk_and_is_capped():
+    low, high = signals.calculate_entry_zone(100.0, stop_loss=99.0)
+    # 1% risk * 0.22 => 0.22% zone, wider than the old fixed 0.15%
+    assert low == 99.78
+    assert high == 100.22
+
+    low2, high2 = signals.calculate_entry_zone(100.0, stop_loss=92.0)
+    # capped by ENTRY_ZONE_MAX_PCT=0.35%
+    assert low2 == 99.65
+    assert high2 == 100.35
+
+
+def test_pending_entry_guard_rejects_extended_long_signal():
+    ok, details = signals._pending_entry_is_still_actionable(
+        direction="LONG",
+        entry_price=100.0,
+        stop_loss=99.2,
+        take_profits=[100.8, 101.4],
+        current_price=100.5,
+        zone_low=99.78,
+        zone_high=100.22,
+    )
+    assert ok is False
+    assert float(details["tp1_progress_at_send_pct"]) >= 18.0
+
+
+def test_pending_entry_guard_allows_waiting_long_signal_below_zone():
+    ok, details = signals._pending_entry_is_still_actionable(
+        direction="LONG",
+        entry_price=100.0,
+        stop_loss=99.2,
+        take_profits=[100.8, 101.4],
+        current_price=99.6,
+        zone_low=99.78,
+        zone_high=100.22,
+    )
+    assert ok is True
+    assert details["zone_distance_pct"] is not None
