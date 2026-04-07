@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Optional, Dict, Tuple, List
 
+import math
 import pandas as pd
 import ta
 
@@ -20,6 +21,15 @@ BREAKOUT_LOOKBACK = 24
 MAX_SCORE = 100.0
 FREE_NORMALIZATION_PENALTY = 6.0
 SCORE_CALIBRATION_VERSION = "v2_1_strict_shared_normalization_trend_stepdown"
+
+
+def _required_history_bars() -> int:
+    """Minimum number of 5M candles required to avoid indicator warmup NaNs.
+
+    This strategy uses EMA200 + ADX/ATR + breakout lookback windows, so anything below
+    ~230 bars can silently kill signal generation (trend_structure always fails).
+    """
+    return max(EMA_SLOW + 30, BREAKOUT_LOOKBACK + 90, 260)
 
 # =======================================
 # PERFILES DE VALIDACIÓN
@@ -119,6 +129,18 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _indicators_ready(last: pd.Series) -> bool:
+    try:
+        required = ["ema20", "ema50", "ema200", "adx", "atr", "atr_pct", "body_ratio"]
+        for key in required:
+            v = float(last.get(key))
+            if math.isnan(v) or not math.isfinite(v):
+                return False
+        return True
+    except Exception:
+        return False
+
+
 # =======================================
 # HELPERS
 # =======================================
@@ -205,6 +227,11 @@ def _higher_tf_short_context_ok(df_15m: pd.DataFrame, df_1h: pd.DataFrame) -> Tu
 
     last15 = df15.iloc[-1]
     last1h = df1h.iloc[-1]
+
+    if not _indicators_ready(last15) or not _indicators_ready(last1h):
+        # If indicators are not ready on higher TFs, do not block shorts.
+        return True, {"filter_applied": 0.0, "reason": -1.0}
+
 
     dir15 = _trend_direction(last15)
     dir1h = _trend_direction(last1h)
@@ -547,6 +574,10 @@ def _evaluate_profile(
 ) -> Optional[Dict]:
     last = df.iloc[-1]
 
+    if not _indicators_ready(last):
+        _record_reject(debug_counts, 'indicator_warmup')
+        return None
+
     direction = _trend_direction(last)
     if not direction:
         _record_reject(debug_counts, "trend_structure")
@@ -627,14 +658,21 @@ def mtf_strategy(
 
     # Mantenemos la firma para no romper el scanner actual.
     # La lógica operativa final vive en 5M.
-    if len(df_5m) < BREAKOUT_LOOKBACK + 30:
+    required_bars = _required_history_bars()
+
+    if len(df_5m) < required_bars:
         _record_reject(debug_counts, "insufficient_history")
         return None
 
     df = add_indicators(df_5m)
 
-    if len(df) < BREAKOUT_LOOKBACK + 30:
+    if len(df) < required_bars:
         _record_reject(debug_counts, "insufficient_history")
+        return None
+
+    last = df.iloc[-1]
+    if not _indicators_ready(last):
+        _record_reject(debug_counts, 'indicator_warmup')
         return None
 
     # 1) Primero intenta el setup bueno compartido por PLUS y PREMIUM.
