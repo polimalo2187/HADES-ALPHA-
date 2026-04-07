@@ -240,7 +240,7 @@ def recent_duplicate_exists(symbol: str, direction: str, visibility: str) -> boo
     }) is not None
 
 
-def telegram_signal_blocked(symbol: Optional[str] = None) -> bool:
+def telegram_signal_blocked(symbol: Optional[str] = None, direction: Optional[str] = None) -> bool:
     """
     Bloquea nuevas señales mientras siga vigente una señal en TELEGRAM.
     Debe mirar telegram_valid_until, no valid_until interno.
@@ -249,6 +249,8 @@ def telegram_signal_blocked(symbol: Optional[str] = None) -> bool:
     query = {"telegram_valid_until": {"$gt": now}}
     if symbol:
         query["symbol"] = symbol
+    if direction:
+        query["direction"] = str(direction).upper()
     return signals_collection().find_one(query, sort=[("telegram_valid_until", -1)]) is not None
 
 
@@ -341,8 +343,8 @@ def create_base_signal(
     current_market_price: Optional[float] = None,
 ) -> Dict:
 
-    if telegram_signal_blocked(symbol):
-        logger.info(f"⏳ Bloqueo activo para {symbol}, no se crea nueva señal")
+    if telegram_signal_blocked(symbol, direction=direction):
+        logger.info(f"⏳ Bloqueo activo para {symbol} {direction}, no se crea nueva señal")
         return {}
 
     zone_low, zone_high = calculate_entry_zone(entry_price)
