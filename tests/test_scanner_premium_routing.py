@@ -21,8 +21,8 @@ def _load_scanner():
     sys.modules.setdefault("app.realtime_pipeline", types.SimpleNamespace(enqueue_signal_dispatch=lambda *_args, **_kwargs: None))
     sys.modules.setdefault("app.database", types.SimpleNamespace(signals_collection=lambda: None))
     sys.modules.setdefault("app.signals", types.SimpleNamespace(create_base_signal=lambda **kwargs: kwargs))
-    sys.modules.setdefault("app.observability", types.SimpleNamespace(heartbeat=lambda *_args, **_kwargs: None))
-    sys.modules.setdefault("app.plans", types.SimpleNamespace(PLAN_FREE="free", PLAN_PLUS="plus", PLAN_PREMIUM="premium"))
+    sys.modules.setdefault("app.observability", types.SimpleNamespace(heartbeat=lambda *_args, **_kwargs: None, log_event=lambda *_args, **_kwargs: None, record_audit_event=lambda *_args, **_kwargs: None))
+    sys.modules.setdefault("app.plans", types.SimpleNamespace(PLAN_FREE="free", PLAN_PLUS="plus", PLAN_PREMIUM="premium", SUBSCRIPTION_STATUS_EXPIRED="expired", normalize_plan=lambda value: str(value).lower(), activate_plan_purchase=lambda *args, **kwargs: None, get_plan_price=lambda *args, **kwargs: 0, validate_plan_duration=lambda *args, **kwargs: True))
     sys.modules.pop("app.scanner", None)
     return importlib.import_module("app.scanner")
 
