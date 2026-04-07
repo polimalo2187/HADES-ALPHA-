@@ -2376,7 +2376,8 @@ function paymentInstructions(order, focus = null) {
 function renderHome() {
   const me = state.payload.me || {};
   const dashboard = state.payload.dashboard || {};
-  const summary = dashboard.summary_7d || {};
+  const summary = dashboard.home_summary || dashboard.summary_7d || {};
+  const summaryLabel = dashboard.home_summary_label || '7D';
   const market = state.payload.market || {};
   const activeOrder = dashboard.active_payment_order;
   const recentSignals = dashboard.recent_signals || [];
@@ -2400,7 +2401,7 @@ function renderHome() {
           </div>
           <div class="hero-side ${metricToneClass('winrate', summary.winrate || 0)}">
             <div class="hero-side-value">${escapeHtml(formatNumber(summary.winrate || 0))}%</div>
-            <div class="hero-side-label">Win rate 7D resuelto</div>
+            <div class="hero-side-label">Win rate ${escapeHtml(summaryLabel)} resuelto</div>
             <div class="hero-side-meta">Actualizado: ${escapeHtml(formatDate(generatedAt))}</div>
           </div>
         </div>
