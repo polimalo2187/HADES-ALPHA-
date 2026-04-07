@@ -38,43 +38,50 @@ def _required_history_bars() -> int:
 # PERFILES DE VALIDACIÓN
 # =======================================
 # SHARED_PROFILE:
-#   setup bueno, usado para PLUS y PREMIUM.
+#   benchmark comparable entre perfiles. Lo usamos para normalizar score,
+#   y además sirve como base del perfil PLUS.
 # FREE_PROFILE:
-#   setup más flexible, usado como capa adicional para FREE.
+#   setup más flexible, pero ahora un poco más exigente que antes.
+# PREMIUM_PROFILE:
+#   mismo ADN breakout + reset, pero con puertas algo más estrictas que PLUS.
 
 SHARED_PROFILE = {
     "name": "shared",
-    "adx_min": 17.0,
-    "atr_pct_min": 0.0024,
-    "atr_pct_max": 0.0125,
-    "retest_tol_atr": 0.48,
-    "min_body_ratio_breakout": 0.30,
-    "min_body_ratio_continuation": 0.22,
+    "adx_min": 17.8,
+    "atr_pct_min": 0.0026,
+    "atr_pct_max": 0.0121,
+    "retest_tol_atr": 0.44,
+    "min_body_ratio_breakout": 0.32,
+    "min_body_ratio_continuation": 0.24,
 }
 
 FREE_PROFILE = {
     "name": "free",
-    "adx_min": 15.0,
-    "atr_pct_min": 0.0020,
-    "atr_pct_max": 0.0140,
-    "retest_tol_atr": 0.62,
-    "min_body_ratio_breakout": 0.22,
-    "min_body_ratio_continuation": 0.16,
-    "score": 74.0,
-}
-
-# Adaptación mínima para la MiniApp / scanner actual.
-# No cambia filtros: PLUS y PREMIUM comparten exactamente el mismo setup bueno.
-PREMIUM_PROFILE = {
-    **SHARED_PROFILE,
-    "name": "premium",
-    "score": 90.0,
+    "adx_min": 16.0,
+    "atr_pct_min": 0.0022,
+    "atr_pct_max": 0.0136,
+    "retest_tol_atr": 0.58,
+    "min_body_ratio_breakout": 0.24,
+    "min_body_ratio_continuation": 0.18,
+    "score": 76.0,
 }
 
 PLUS_PROFILE = {
     **SHARED_PROFILE,
     "name": "plus",
-    "score": 82.0,
+    "score": 84.0,
+}
+
+PREMIUM_PROFILE = {
+    **SHARED_PROFILE,
+    "name": "premium",
+    "adx_min": 18.8,
+    "atr_pct_min": 0.0028,
+    "atr_pct_max": 0.0116,
+    "retest_tol_atr": 0.40,
+    "min_body_ratio_breakout": 0.35,
+    "min_body_ratio_continuation": 0.26,
+    "score": 90.0,
 }
 
 # =======================================
@@ -711,36 +718,65 @@ def mtf_strategy(
         _record_reject(debug_counts, 'indicator_warmup')
         return None
 
-    # 1) Primero intenta el setup bueno compartido por PLUS y PREMIUM.
-    shared_result = _evaluate_profile(df, SHARED_PROFILE, df_15m=df_15m, df_1h=df_1h, debug_counts=debug_counts)
-    if shared_result:
+    # 1) PREMIUM primero: misma estrategia, pero con puertas algo más altas que PLUS.
+    premium_result = _evaluate_profile(df, PREMIUM_PROFILE, df_15m=df_15m, df_1h=df_1h, debug_counts=debug_counts)
+    if premium_result:
         return {
-            "direction": shared_result["direction"],
-            "entry_price": shared_result["entry_price"],
-            "stop_loss": shared_result["trade_profiles"]["conservador"]["stop_loss"],
-            "take_profits": list(shared_result["trade_profiles"]["conservador"]["take_profits"]),
-            "profiles": shared_result["trade_profiles"],
-            "score": shared_result["score"],
-            "raw_score": shared_result["raw_score"],
-            "normalized_score": shared_result["normalized_score"],
-            "components": shared_result["components"],
-            "raw_components": shared_result["raw_components"],
-            "normalized_components": shared_result["normalized_components"],
+            "direction": premium_result["direction"],
+            "entry_price": premium_result["entry_price"],
+            "stop_loss": premium_result["trade_profiles"]["conservador"]["stop_loss"],
+            "take_profits": list(premium_result["trade_profiles"]["conservador"]["take_profits"]),
+            "profiles": premium_result["trade_profiles"],
+            "score": premium_result["score"],
+            "raw_score": premium_result["raw_score"],
+            "normalized_score": premium_result["normalized_score"],
+            "components": premium_result["components"],
+            "raw_components": premium_result["raw_components"],
+            "normalized_components": premium_result["normalized_components"],
             "timeframes": ["5M"],
-            "setup_group": "plus",
-            "atr_pct": shared_result["atr_pct"],
-            "score_profile": "plus",
-            "score_calibration": shared_result["score_calibration"],
-            "higher_tf_context": shared_result["higher_tf_context"],
-            "send_mode": shared_result["send_mode"],
-            "setup_stage": shared_result["setup_stage"],
-            "entry_model": shared_result["entry_model"],
-            "entry_model_price": shared_result["entry_model_price"],
-            "reset_level": shared_result["reset_level"],
-            "reset_close_price": shared_result["reset_close_price"],
+            "setup_group": "premium",
+            "atr_pct": premium_result["atr_pct"],
+            "score_profile": "premium",
+            "score_calibration": premium_result["score_calibration"],
+            "higher_tf_context": premium_result["higher_tf_context"],
+            "send_mode": premium_result["send_mode"],
+            "setup_stage": premium_result["setup_stage"],
+            "entry_model": premium_result["entry_model"],
+            "entry_model_price": premium_result["entry_model_price"],
+            "reset_level": premium_result["reset_level"],
+            "reset_close_price": premium_result["reset_close_price"],
         }
 
-    # 2) Si no pasa el setup bueno, intenta el más flexible para FREE.
+    # 2) PLUS después: sigue siendo setup bueno, pero algo menos exigente que PREMIUM.
+    plus_result = _evaluate_profile(df, PLUS_PROFILE, df_15m=df_15m, df_1h=df_1h, debug_counts=debug_counts)
+    if plus_result:
+        return {
+            "direction": plus_result["direction"],
+            "entry_price": plus_result["entry_price"],
+            "stop_loss": plus_result["trade_profiles"]["conservador"]["stop_loss"],
+            "take_profits": list(plus_result["trade_profiles"]["conservador"]["take_profits"]),
+            "profiles": plus_result["trade_profiles"],
+            "score": plus_result["score"],
+            "raw_score": plus_result["raw_score"],
+            "normalized_score": plus_result["normalized_score"],
+            "components": plus_result["components"],
+            "raw_components": plus_result["raw_components"],
+            "normalized_components": plus_result["normalized_components"],
+            "timeframes": ["5M"],
+            "setup_group": "plus",
+            "atr_pct": plus_result["atr_pct"],
+            "score_profile": "plus",
+            "score_calibration": plus_result["score_calibration"],
+            "higher_tf_context": plus_result["higher_tf_context"],
+            "send_mode": plus_result["send_mode"],
+            "setup_stage": plus_result["setup_stage"],
+            "entry_model": plus_result["entry_model"],
+            "entry_model_price": plus_result["entry_model_price"],
+            "reset_level": plus_result["reset_level"],
+            "reset_close_price": plus_result["reset_close_price"],
+        }
+
+    # 3) Si no pasa premium/plus, intenta el perfil flexible de FREE.
     free_result = _evaluate_profile(df, FREE_PROFILE, df_15m=df_15m, df_1h=df_1h, debug_counts=debug_counts)
     if free_result:
         return {
