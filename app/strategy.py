@@ -20,7 +20,10 @@ BREAKOUT_LOOKBACK = 24
 
 MAX_SCORE = 100.0
 FREE_NORMALIZATION_PENALTY = 6.0
-SCORE_CALIBRATION_VERSION = "v2_1_strict_shared_normalization_trend_stepdown"
+SCORE_CALIBRATION_VERSION = "v2_2_breakout_reset_pending_entry"
+ENTRY_MODEL_NAME = "breakout_reset_retest_pending_v1"
+SETUP_STAGE_RESET_CONFIRMED_WAITING_ENTRY = "reset_confirmed_waiting_entry"
+SEND_MODE_PENDING_ENTRY = "entry_zone_pending"
 
 
 def _required_history_bars() -> int:
@@ -456,6 +459,32 @@ def _entry_freshness_score(level: float, close_price: float, atr: float) -> floa
 
 
 
+def _reset_entry_price(level: float, last: pd.Series, direction: str) -> float:
+    """
+    Entry model for breakout + reset.
+
+    We send the alert after the reset candle is confirmed, but the operational
+    entry must stay close to the reclaimed breakout level. That keeps the signal
+    consistent with a retest entry instead of chasing the close.
+    """
+    close_price = float(last["close"])
+    atr = max(float(last["atr"]), 1e-9)
+
+    if direction == "LONG":
+        reset_extreme = float(last["low"])
+        reclaim_distance = max(0.0, reset_extreme - level)
+        entry = level + min(reclaim_distance * 0.35, atr * 0.18)
+        entry = min(entry, close_price)
+    else:
+        reset_extreme = float(last["high"])
+        reclaim_distance = max(0.0, level - reset_extreme)
+        entry = level - min(reclaim_distance * 0.35, atr * 0.18)
+        entry = max(entry, close_price)
+
+    return round(float(entry), 8)
+
+
+
 def _build_trade_profiles(entry_price: float, direction: str) -> Dict[str, Dict]:
     profiles: Dict[str, Dict] = {}
 
@@ -612,8 +641,9 @@ def _evaluate_profile(
     level = float(quality["level"])
     close_price = float(last["close"])
 
-    # Entrada menos perseguida: más cerca del nivel de retest que del cierre.
-    entry_price = level + ((close_price - level) * 0.25)
+    # Breakout + reset real: la entrada debe quedar anclada al nivel reclamado,
+    # no perseguir el cierre de confirmación.
+    entry_price = _reset_entry_price(level, last, direction)
     trade_profiles = _build_trade_profiles(entry_price, direction)
 
     raw_score, raw_components = _compute_raw_score(df, direction, profile, quality)
@@ -639,6 +669,12 @@ def _evaluate_profile(
         "score_profile": str(profile["name"]),
         "score_calibration": SCORE_CALIBRATION_VERSION,
         "higher_tf_context": higher_tf_context,
+        "send_mode": SEND_MODE_PENDING_ENTRY,
+        "setup_stage": SETUP_STAGE_RESET_CONFIRMED_WAITING_ENTRY,
+        "entry_model": ENTRY_MODEL_NAME,
+        "entry_model_price": round(float(entry_price), 8),
+        "reset_level": round(float(level), 8),
+        "reset_close_price": round(float(close_price), 8),
     }
 
 
@@ -696,6 +732,12 @@ def mtf_strategy(
             "score_profile": "plus",
             "score_calibration": shared_result["score_calibration"],
             "higher_tf_context": shared_result["higher_tf_context"],
+            "send_mode": shared_result["send_mode"],
+            "setup_stage": shared_result["setup_stage"],
+            "entry_model": shared_result["entry_model"],
+            "entry_model_price": shared_result["entry_model_price"],
+            "reset_level": shared_result["reset_level"],
+            "reset_close_price": shared_result["reset_close_price"],
         }
 
     # 2) Si no pasa el setup bueno, intenta el más flexible para FREE.
@@ -719,6 +761,12 @@ def mtf_strategy(
             "score_profile": "free",
             "score_calibration": free_result["score_calibration"],
             "higher_tf_context": free_result["higher_tf_context"],
+            "send_mode": free_result["send_mode"],
+            "setup_stage": free_result["setup_stage"],
+            "entry_model": free_result["entry_model"],
+            "entry_model_price": free_result["entry_model_price"],
+            "reset_level": free_result["reset_level"],
+            "reset_close_price": free_result["reset_close_price"],
         }
 
     return None
