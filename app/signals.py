@@ -55,6 +55,11 @@ MIN_ENTRY_WAIT_MINUTES = int(os.getenv("MIN_ENTRY_WAIT_MINUTES", str(TELEGRAM_SI
 MAX_ENTRY_WAIT_MINUTES = int(os.getenv("MAX_ENTRY_WAIT_MINUTES", "60"))
 ENTRY_WAIT_BUFFER_MINUTES = int(os.getenv("ENTRY_WAIT_BUFFER_MINUTES", "3"))
 MARKET_EVALUATION_VERSION = "v4_pending_entry_activation_window"
+ENTRY_ZONE_MIN_PCT = float(os.getenv("ENTRY_ZONE_MIN_PCT", "0.0015"))
+ENTRY_ZONE_MAX_PCT = float(os.getenv("ENTRY_ZONE_MAX_PCT", "0.0035"))
+ENTRY_ZONE_RISK_FRACTION = float(os.getenv("ENTRY_ZONE_RISK_FRACTION", "0.22"))
+PENDING_ENTRY_MAX_PROGRESS_TO_TP1_PCT = float(os.getenv("PENDING_ENTRY_MAX_PROGRESS_TO_TP1_PCT", "18"))
+PENDING_ENTRY_MAX_R_PROGRESS = float(os.getenv("PENDING_ENTRY_MAX_R_PROGRESS", "0.25"))
 
 # ======================================================
 # UTILIDADES
@@ -173,7 +178,18 @@ def _round_price_dynamic(value: float) -> float:
     return round(float(value), _price_round_digits(value))
 
 
-def calculate_entry_zone(entry: float, pct: float = 0.0015):
+def calculate_entry_zone(entry: float, stop_loss: Optional[float] = None, pct: Optional[float] = None):
+    entry = float(entry)
+    if pct is None:
+        adaptive_pct = ENTRY_ZONE_MIN_PCT
+        try:
+            if stop_loss is not None:
+                risk_pct = abs(entry - float(stop_loss)) / max(abs(entry), 1e-9)
+                adaptive_pct = max(ENTRY_ZONE_MIN_PCT, min(ENTRY_ZONE_MAX_PCT, risk_pct * ENTRY_ZONE_RISK_FRACTION))
+        except Exception:
+            adaptive_pct = ENTRY_ZONE_MIN_PCT
+        pct = adaptive_pct
+    pct = max(ENTRY_ZONE_MIN_PCT, min(ENTRY_ZONE_MAX_PCT, float(pct)))
     low = _round_price_dynamic(entry * (1 - pct))
     high = _round_price_dynamic(entry * (1 + pct))
     return low, high
@@ -242,6 +258,86 @@ def calculate_entry_wait_minutes(estimated_minutes: Dict[str, int]) -> int:
     planned = max(MIN_ENTRY_WAIT_MINUTES, planned)
     planned = min(MAX_ENTRY_WAIT_MINUTES, planned)
     return int(planned)
+
+
+def _tp1_progress_from_entry(direction: str, entry_price: float, tp1: float, current_price: float) -> float:
+    denominator = abs(tp1 - entry_price)
+    if denominator <= 1e-9:
+        return 0.0
+    if str(direction).upper() == "LONG":
+        moved = max(0.0, current_price - entry_price)
+    else:
+        moved = max(0.0, entry_price - current_price)
+    return round((moved / denominator) * 100.0, 2)
+
+
+def _r_progress_from_entry(direction: str, entry_price: float, stop_loss: float, current_price: float) -> float:
+    denominator = abs(entry_price - stop_loss)
+    if denominator <= 1e-9:
+        return 0.0
+    if str(direction).upper() == "LONG":
+        moved = current_price - entry_price
+    else:
+        moved = entry_price - current_price
+    return round(moved / denominator, 4)
+
+
+def _pending_entry_is_still_actionable(
+    direction: str,
+    entry_price: float,
+    stop_loss: float,
+    take_profits: List[float],
+    current_price: float,
+    zone_low: float,
+    zone_high: float,
+) -> tuple[bool, Dict[str, Optional[float]]]:
+    details: Dict[str, Optional[float]] = {
+        "tp1_progress_at_send_pct": None,
+        "r_progress_at_send": None,
+        "zone_distance_pct": None,
+    }
+    try:
+        direction = str(direction).upper()
+        entry_price = float(entry_price)
+        stop_loss = float(stop_loss)
+        current_price = float(current_price)
+        zone_low = float(zone_low)
+        zone_high = float(zone_high)
+    except Exception:
+        return False, details
+
+    if current_price <= 0 or entry_price <= 0 or stop_loss <= 0:
+        return False, details
+
+    if zone_low <= current_price <= zone_high:
+        details["zone_distance_pct"] = 0.0
+        return True, details
+
+    if direction == "LONG":
+        if current_price < zone_low:
+            details["zone_distance_pct"] = round(max(0.0, (zone_low - current_price) / max(current_price, 1e-9)) * 100.0, 4)
+            return True, details
+        if take_profits:
+            details["tp1_progress_at_send_pct"] = _tp1_progress_from_entry(direction, entry_price, float(take_profits[0]), current_price)
+        details["r_progress_at_send"] = _r_progress_from_entry(direction, entry_price, stop_loss, current_price)
+        details["zone_distance_pct"] = round(max(0.0, (current_price - zone_high) / max(entry_price, 1e-9)) * 100.0, 4)
+    else:
+        if current_price > zone_high:
+            details["zone_distance_pct"] = round(max(0.0, (current_price - zone_high) / max(current_price, 1e-9)) * 100.0, 4)
+            return True, details
+        if take_profits:
+            details["tp1_progress_at_send_pct"] = _tp1_progress_from_entry(direction, entry_price, float(take_profits[0]), current_price)
+        details["r_progress_at_send"] = _r_progress_from_entry(direction, entry_price, stop_loss, current_price)
+        details["zone_distance_pct"] = round(max(0.0, (zone_low - current_price) / max(entry_price, 1e-9)) * 100.0, 4)
+
+    tp1_progress = float(details["tp1_progress_at_send_pct"] or 0.0)
+    r_progress = float(details["r_progress_at_send"] or 0.0)
+
+    if tp1_progress >= PENDING_ENTRY_MAX_PROGRESS_TO_TP1_PCT:
+        return False, details
+    if r_progress >= PENDING_ENTRY_MAX_R_PROGRESS:
+        return False, details
+    return True, details
 
 
 
@@ -362,7 +458,7 @@ def create_base_signal(
         logger.info(f"⏳ Bloqueo activo para {symbol} {direction}, no se crea nueva señal")
         return {}
 
-    zone_low, zone_high = calculate_entry_zone(entry_price)
+    zone_low, zone_high = calculate_entry_zone(entry_price, stop_loss=stop_loss)
 
     if current_market_price is not None:
         try:
@@ -378,6 +474,34 @@ def create_base_signal(
         except Exception as e:
             logger.warning(f"Fallback current_price en create_base_signal: {e}")
             current_price = entry_price
+
+    send_mode_normalized = str(send_mode or "").strip().lower()
+
+    if send_mode_normalized != "market_on_close":
+        actionable, pending_details = _pending_entry_is_still_actionable(
+            direction=direction,
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            take_profits=take_profits,
+            current_price=current_price,
+            zone_low=zone_low,
+            zone_high=zone_high,
+        )
+        tp1_progress_at_send_pct = pending_details.get("tp1_progress_at_send_pct")
+        r_progress_at_send = pending_details.get("r_progress_at_send")
+        if not actionable:
+            logger.info(
+                "⏭️ Señal pendiente descartada por tardía | %s %s | price=%s | entry=%s | zone=%s→%s | tp1_progress_at_send_pct=%s | r_progress_at_send=%s",
+                symbol,
+                direction,
+                current_price,
+                entry_price,
+                zone_low,
+                zone_high,
+                tp1_progress_at_send_pct,
+                r_progress_at_send,
+            )
+            return {}
 
     estimated_minutes = estimate_minutes_to_entry(
         symbol,
@@ -410,7 +534,6 @@ def create_base_signal(
         score=score,
         atr_pct=atr_pct,
     )
-    send_mode_normalized = str(send_mode or "").strip().lower()
     if send_mode_normalized == "market_on_close":
         entry_wait_minutes = 0
         entry_valid_until = now
@@ -559,7 +682,7 @@ def build_user_signal_document(base_signal: Dict, user_id: int) -> Dict:
         symbol=base_signal["symbol"],
         direction=direction,
         entry_price=_round_price_dynamic(entry),
-        entry_zone=dict(zip(["low", "high"], calculate_entry_zone(entry))),
+        entry_zone=base_signal.get("entry_zone") or dict(zip(["low", "high"], calculate_entry_zone(entry, stop_loss=normalized_profiles.get("conservador", {}).get("stop_loss")))),
         profiles=normalized_profiles,
         leverage_profiles=LEVERAGE_PROFILES,
         timeframes=base_signal["timeframes"],
