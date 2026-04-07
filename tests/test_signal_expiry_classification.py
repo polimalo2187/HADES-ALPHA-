@@ -143,3 +143,72 @@ def test_pending_short_zone_that_never_retraces_cannot_finish_as_sl():
     assert evaluation["result"] == "expired"
     assert evaluation["resolution"] == "expired_no_fill"
     assert evaluation["entry_touched"] is False
+
+
+
+def test_pending_signal_post_fill_window_starts_from_entry_touch():
+    now = datetime.utcnow()
+    created_at = now - timedelta(minutes=40)
+    entry_touch_at = created_at + timedelta(minutes=18)
+    tp1_at = entry_touch_at + timedelta(minutes=8)
+    signal = {
+        **_base_signal("LONG"),
+        "created_at": created_at,
+        "entry_price": 100.0,
+        "entry_zone": {"low": 99.85, "high": 100.15},
+        "signal_market_price": 101.2,
+        "send_mode": "entry_zone_pending",
+        "entry_valid_until": created_at + timedelta(minutes=20),
+        "market_validity_minutes": 10,
+        "evaluation_valid_until": created_at + timedelta(minutes=30),
+    }
+    pre_close = created_at + timedelta(minutes=5)
+    entry_open = entry_touch_at - timedelta(minutes=1)
+    tp1_open = tp1_at - timedelta(minutes=1)
+    klines = [
+        [int((pre_close - timedelta(minutes=1)).timestamp() * 1000), 100.9, 101.0, 100.4, 100.7, 0, int(pre_close.timestamp() * 1000)],
+        [int(entry_open.timestamp() * 1000), 100.7, 100.9, 99.95, 100.2, 0, int(entry_touch_at.timestamp() * 1000)],
+        [int(tp1_open.timestamp() * 1000), 100.2, 102.3, 100.1, 101.9, 0, int(tp1_at.timestamp() * 1000)],
+    ]
+
+    with patch('app.signals._fetch_klines_between', return_value=klines):
+        evaluation = _evaluate_signal_result(signal)
+
+    assert evaluation["result"] == "won"
+    assert evaluation["resolution"] == "tp1"
+    assert evaluation["entry_touched"] is True
+    assert evaluation["entry_touched_at"] is not None
+    assert abs((evaluation["effective_valid_until"] - (entry_touch_at + timedelta(minutes=10))).total_seconds()) < 1
+
+
+
+def test_pending_signal_does_not_score_tp_after_post_fill_window_expires():
+    now = datetime.utcnow()
+    created_at = now - timedelta(minutes=40)
+    entry_touch_at = created_at + timedelta(minutes=18)
+    signal = {
+        **_base_signal("LONG"),
+        "created_at": created_at,
+        "entry_price": 100.0,
+        "entry_zone": {"low": 99.85, "high": 100.15},
+        "signal_market_price": 101.2,
+        "send_mode": "entry_zone_pending",
+        "entry_valid_until": created_at + timedelta(minutes=20),
+        "market_validity_minutes": 5,
+        "evaluation_valid_until": created_at + timedelta(minutes=25),
+    }
+    entry_open = entry_touch_at - timedelta(minutes=1)
+    late_tp_open = entry_touch_at + timedelta(minutes=7)
+    late_tp_close = entry_touch_at + timedelta(minutes=8)
+    klines = [
+        [int(entry_open.timestamp() * 1000), 100.7, 100.8, 99.95, 100.2, 0, int(entry_touch_at.timestamp() * 1000)],
+        [int(late_tp_open.timestamp() * 1000), 100.2, 102.4, 100.1, 102.1, 0, int(late_tp_close.timestamp() * 1000)],
+    ]
+
+    with patch('app.signals._fetch_klines_between', return_value=klines):
+        evaluation = _evaluate_signal_result(signal)
+
+    assert evaluation["result"] == "expired"
+    assert evaluation["resolution"] == "expired_after_entry"
+    assert evaluation["entry_touched"] is True
+    assert abs((evaluation["effective_valid_until"] - (entry_touch_at + timedelta(minutes=5))).total_seconds()) < 1
