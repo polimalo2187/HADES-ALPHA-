@@ -17,9 +17,9 @@ if 'telegram' not in sys.modules:
 if 'app.realtime_pipeline' not in sys.modules:
     sys.modules['app.realtime_pipeline'] = types.SimpleNamespace(enqueue_signal_dispatch=lambda *_args, **_kwargs: None)
 if 'app.observability' not in sys.modules:
-    sys.modules['app.observability'] = types.SimpleNamespace(heartbeat=lambda *_args, **_kwargs: None)
+    sys.modules['app.observability'] = types.SimpleNamespace(heartbeat=lambda *_args, **_kwargs: None, log_event=lambda *_args, **_kwargs: None, record_audit_event=lambda *_args, **_kwargs: None)
 if 'app.plans' not in sys.modules:
-    sys.modules['app.plans'] = types.SimpleNamespace(PLAN_FREE='free', PLAN_PLUS='plus', PLAN_PREMIUM='premium')
+    sys.modules['app.plans'] = types.SimpleNamespace(PLAN_FREE='free', PLAN_PLUS='plus', PLAN_PREMIUM='premium', SUBSCRIPTION_STATUS_EXPIRED='expired', normalize_plan=lambda value: str(value).lower(), activate_plan_purchase=lambda *args, **kwargs: None, get_plan_price=lambda *args, **kwargs: 0, validate_plan_duration=lambda *args, **kwargs: True)
 
 
 
