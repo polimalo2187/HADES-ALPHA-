@@ -56,6 +56,27 @@ class MiniAppDashboardServiceTests(unittest.TestCase):
         self.assertEqual(payload["home_summary_label"], "30D")
         self.assertEqual(payload["home_summary"]["resolved"], 5)
 
+
+    def test_dashboard_payload_serializes_non_finite_metrics(self):
+        user = {"user_id": 123, "plan": "premium"}
+        snapshot = {
+            "summary_7d": {"resolved": 5, "winrate": 60.0, "profit_factor": float("inf"), "expectancy_r": float("nan")},
+            "summary_30d": {"resolved": 0, "winrate": 0.0},
+        }
+        with patch("app.miniapp.service.get_performance_snapshot", return_value=snapshot), \
+             patch("app.miniapp.service.user_signals_collection") as user_signals, \
+             patch("app.miniapp.service.get_history_entries_for_user", return_value=[]), \
+             patch("app.miniapp.service.get_active_payment_order_for_user", return_value=None), \
+             patch("app.miniapp.service.watchlists_collection") as watchlists:
+            user_signals.return_value.find.return_value.sort.return_value.limit.side_effect = [[], []]
+            user_signals.return_value.count_documents.return_value = 0
+            watchlists.return_value.find_one.return_value = {"symbols": []}
+            payload = build_dashboard_payload(user)
+        self.assertIsNone(payload["summary_7d"]["profit_factor"])
+        self.assertTrue(payload["summary_7d"]["profit_factor_infinite"])
+        self.assertEqual(payload["summary_7d"]["expectancy_r"], 0.0)
+        self.assertIsNone(payload["home_summary"]["profit_factor"])
+
     def test_dashboard_payload_falls_back_to_total_when_short_windows_empty(self):
         user = {"user_id": 123, "plan": "premium"}
         snapshot = {
