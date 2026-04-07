@@ -46,10 +46,8 @@ def test_apply_close_market_execution_rejects_late_entry():
     assert scanner._apply_close_market_execution(result, current_price=101.0) is None
 
 
-def test_build_candidate_keeps_market_execution_metadata():
-    df_5m = pd.DataFrame([
-        {'open': 100.2, 'high': 100.2, 'low': 100.0, 'close': 100.1, 'volume': 1200.0},
-    ] * 25)
+def test_build_candidate_preserves_pending_entry_metadata():
+    reference_price = 100.1
     result = {
         'direction': 'SHORT',
         'entry_price': 100.0,
@@ -61,12 +59,19 @@ def test_build_candidate_keeps_market_execution_metadata():
             'agresivo': {'stop_loss': 100.8, 'take_profits': [98.36, 97.8], 'leverage': '40x-50x'},
         },
         'score': 90.0,
+        'raw_score': 90.0,
+        'normalized_score': 90.0,
+        'setup_group': 'premium',
+        'score_profile': 'premium',
+        'send_mode': 'entry_zone_pending',
         'components': ['liquidity_zone'],
     }
 
-    candidate = scanner._build_candidate('BTCUSDT', result, df_5m)
+    candidate = scanner._build_candidate('BTCUSDT', result, reference_price)
 
     assert candidate is not None
     assert candidate['symbol'] == 'BTCUSDT'
     assert candidate['setup_group'] == 'premium'
-    assert candidate['send_mode'] == 'market_on_close'
+    assert candidate['send_mode'] == 'entry_zone_pending'
+    assert candidate['entry_price'] == 100.0
+    assert candidate['signal_market_price'] == reference_price
