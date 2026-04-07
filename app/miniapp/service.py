@@ -1793,6 +1793,25 @@ def _safe_call(fn, default, *args, **kwargs):
         return default
 
 
+def _safe_serialize_items(items: List[Dict[str, Any]], serializer) -> List[Dict[str, Any]]:
+    serialized: List[Dict[str, Any]] = []
+    for item in items or []:
+        try:
+            serialized.append(serializer(item))
+        except Exception:
+            continue
+    return serialized
+
+
+def _safe_serialize_optional(item: Optional[Dict[str, Any]], serializer) -> Optional[Dict[str, Any]]:
+    if not item:
+        return None
+    try:
+        return serializer(item)
+    except Exception:
+        return None
+
+
 def _empty_summary() -> Dict[str, Any]:
     return {
         "total": 0,
@@ -2882,9 +2901,9 @@ def build_dashboard_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         "summary_7d": summary_7d,
         "summary_30d": summary_30d,
         "active_signals_count": active_count,
-        "recent_signals": [_serialize_signal(doc) for doc in active_signals],
-        "recent_history": [_serialize_history(doc) for doc in recent_history],
-        "active_payment_order": serialize_order_public(active_order),
+        "recent_signals": _safe_serialize_items(active_signals, _serialize_signal),
+        "recent_history": _safe_serialize_items(recent_history, _serialize_history),
+        "active_payment_order": _safe_serialize_optional(active_order, serialize_order_public),
         "watchlist_count": len(watchlist_doc.get("symbols") or []),
         "signal_mix": signal_mix,
         "active_mix": active_mix,
