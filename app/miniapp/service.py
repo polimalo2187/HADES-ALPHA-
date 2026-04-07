@@ -1838,6 +1838,33 @@ def _empty_summary() -> Dict[str, Any]:
     }
 
 
+def _resolved_count(summary: Any) -> int:
+    if not isinstance(summary, dict):
+        return 0
+    try:
+        return int(summary.get("resolved") or 0)
+    except Exception:
+        return 0
+
+
+def _select_dashboard_summary(snapshot: Dict[str, Any]) -> tuple[Dict[str, Any], str]:
+    summary_7d = snapshot.get("summary_7d") if isinstance(snapshot.get("summary_7d"), dict) else None
+    summary_30d = snapshot.get("summary_30d") if isinstance(snapshot.get("summary_30d"), dict) else None
+
+    if _resolved_count(summary_7d) > 0:
+        return summary_7d or _empty_summary(), "7D"
+    if _resolved_count(summary_30d) > 0:
+        return summary_30d or _empty_summary(), "30D"
+
+    total_materialized = _safe_call(lambda: get_materialized_window(3650), None)
+    total_payload = total_materialized or (_safe_call(lambda: build_performance_window(3650), None) or {})
+    total_summary = total_payload.get("summary") if isinstance(total_payload, dict) else None
+    if _resolved_count(total_summary) > 0:
+        return total_summary or _empty_summary(), "Total"
+
+    return (summary_7d or summary_30d or _empty_summary()), "7D"
+
+
 
 def _tracking_feature_tier(plan: str) -> str:
     plan_value = normalize_plan(plan)
@@ -2856,6 +2883,7 @@ def build_dashboard_payload(user: Dict[str, Any]) -> Dict[str, Any]:
     snapshot = _safe_call(get_performance_snapshot, {}) or {}
     summary_7d = snapshot.get("summary_7d") or _empty_summary()
     summary_30d = snapshot.get("summary_30d") or _empty_summary()
+    home_summary, home_summary_label = _select_dashboard_summary(snapshot)
 
     active_query = {"user_id": user_id, "telegram_valid_until": {"$gte": datetime.utcnow()}}
     active_signals = _safe_call(
@@ -2900,6 +2928,8 @@ def build_dashboard_payload(user: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "summary_7d": summary_7d,
         "summary_30d": summary_30d,
+        "home_summary": home_summary,
+        "home_summary_label": home_summary_label,
         "active_signals_count": active_count,
         "recent_signals": _safe_serialize_items(active_signals, _serialize_signal),
         "recent_history": _safe_serialize_items(recent_history, _serialize_history),
