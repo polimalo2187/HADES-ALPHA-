@@ -87,8 +87,8 @@ FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "64"))
 
 MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT = float(os.getenv("MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT", "15"))
 MAX_CLOSE_MARKET_R_PROGRESS = float(os.getenv("MAX_CLOSE_MARKET_R_PROGRESS", "0.15"))
-SCORE_CALIBRATION_VERSION = "v6_liquidity_original_close_market"
-ENTRY_MODEL_NAME = "liquidity_zone_offset_v1"
+SCORE_CALIBRATION_VERSION = "v7_breakout_reset_pending_entry"
+ENTRY_MODEL_NAME = "breakout_reset_retest_pending_v1"
 SETUP_STAGE_CLOSED_CONFIRMED = "closed_confirmed"
 
 _PROFILE_CONFIGS = {
@@ -605,6 +605,10 @@ def _build_base_signal(signal: Dict, visibility: str) -> Optional[Dict]:
         tp1_progress_at_send_pct=signal.get("tp1_progress_at_send_pct"),
         r_progress_at_send=signal.get("r_progress_at_send"),
         setup_stage=signal.get("setup_stage"),
+        candidate_tier=signal.get("candidate_tier"),
+        final_tier=signal.get("final_tier"),
+        entry_model=signal.get("entry_model"),
+        current_market_price=signal.get("signal_market_price"),
     )
 
 
@@ -639,20 +643,27 @@ def _select_dispatchable_signal(
 
 
 def _build_candidate(symbol: str, result: Dict, reference_price: float) -> Optional[Dict]:
-    executed = _apply_close_market_execution(result, reference_price)
-    if not executed:
+    if not result:
         return None
 
-    direction = str(executed["direction"]).upper()
-    raw_score = _raw_score(executed)
-    normalized_score = _normalized_score(executed)
-    entry_quality = _entry_quality(reference_price, direction, float(executed.get("entry_price") or 0.0), float(executed.get("stop_loss") or 0.0))
+    candidate = dict(result)
+    direction = str(candidate.get("direction") or "").upper().strip()
+    if direction not in {"LONG", "SHORT"}:
+        return None
+
+    raw_score = _raw_score(candidate)
+    normalized_score = _normalized_score(candidate)
+    entry_quality = _entry_quality(
+        reference_price,
+        direction,
+        float(candidate.get("entry_price") or 0.0),
+        float(candidate.get("stop_loss") or 0.0),
+    )
     final_score = round(
         normalized_score + (entry_quality * 0.35),
         2,
     )
 
-    candidate = dict(executed)
     candidate["symbol"] = symbol
     candidate["direction"] = direction
     candidate["raw_score"] = raw_score
@@ -660,6 +671,10 @@ def _build_candidate(symbol: str, result: Dict, reference_price: float) -> Optio
     candidate["entry_quality"] = entry_quality
     candidate["volume_quality"] = 0.0
     candidate["final_score"] = final_score
+    candidate["signal_market_price"] = round(float(reference_price or 0.0), 8) if reference_price else None
+    candidate.setdefault("send_mode", "entry_zone_pending")
+    candidate.setdefault("candidate_tier", candidate.get("setup_group"))
+    candidate.setdefault("final_tier", candidate.get("setup_group"))
     return candidate
 
 
