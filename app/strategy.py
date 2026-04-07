@@ -1,8 +1,5 @@
-from __future__ import annotations
-
-from typing import Optional, Dict, Tuple, List
-
 import pandas as pd
+from typing import Optional, Dict, Tuple, List
 import ta
 
 # =======================================
@@ -47,22 +44,14 @@ FREE_PROFILE = {
     "retest_tol_atr": 0.62,
     "min_body_ratio_breakout": 0.22,
     "min_body_ratio_continuation": 0.16,
-    "score": 74.0,
 }
 
-# Adaptación mínima para la MiniApp / scanner actual.
-# No cambia filtros: PLUS y PREMIUM comparten exactamente el mismo setup bueno.
-PREMIUM_PROFILE = {
-    **SHARED_PROFILE,
-    "name": "premium",
-    "score": 90.0,
-}
-
-PLUS_PROFILE = {
-    **SHARED_PROFILE,
-    "name": "plus",
-    "score": 82.0,
-}
+# Compatibilidad mínima con el scanner actual. No cambia filtros.
+PLUS_PROFILE = dict(SHARED_PROFILE)
+PLUS_PROFILE.update({"name": "plus", "score": 82.0})
+PREMIUM_PROFILE = dict(SHARED_PROFILE)
+PREMIUM_PROFILE.update({"name": "premium", "score": 90.0})
+FREE_PROFILE["score"] = 74.0
 
 # =======================================
 # PERFILES DE TRADING POR APALANCAMIENTO
@@ -88,7 +77,6 @@ TRADING_PROFILES = {
         "tp2_pct": 0.0120,
     },
 }
-
 
 # =======================================
 # INDICADORES
@@ -124,17 +112,14 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
 # =======================================
 
 
-def _record_reject(debug_counts: Optional[Dict[str, int]], reason: str) -> None:
+def _record_reject(debug_counts: Optional[Dict[str, int]], key: str) -> None:
     if debug_counts is None:
         return
-    key = str(reason or "unknown").strip() or "unknown"
     debug_counts[key] = int(debug_counts.get(key, 0)) + 1
-
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
-
 
 
 def breakout_level(df: pd.DataFrame, direction: str) -> float:
@@ -146,14 +131,12 @@ def breakout_level(df: pd.DataFrame, direction: str) -> float:
     return float(ref["low"].min())
 
 
-
 def _trend_direction(last: pd.Series) -> Optional[str]:
     if float(last["ema20"]) > float(last["ema50"]) > float(last["ema200"]):
         return "LONG"
     if float(last["ema20"]) < float(last["ema50"]) < float(last["ema200"]):
         return "SHORT"
     return None
-
 
 
 def _trend_strength_score(last: pd.Series) -> float:
@@ -170,7 +153,6 @@ def _trend_strength_score(last: pd.Series) -> float:
     return _clamp((total_sep / 0.022) * 18.0, 0.0, 18.0)
 
 
-
 def _higher_tf_short_context_ok(df_15m: pd.DataFrame, df_1h: pd.DataFrame) -> Tuple[bool, Dict[str, float]]:
     """
     Filtro contextual LIVIANO solo para SHORT.
@@ -182,8 +164,6 @@ def _higher_tf_short_context_ok(df_15m: pd.DataFrame, df_1h: pd.DataFrame) -> Tu
     diag: Dict[str, float] = {}
 
     if len(df_15m) < 220 or len(df_1h) < 220:
-        # Si falta contexto suficiente, no vetamos el short. Preferimos no romper
-        # cobertura por falta de histórico en timeframes superiores.
         return True, {"filter_applied": 0.0, "reason": 0.0}
 
     df15 = add_indicators(df_15m)
@@ -221,8 +201,6 @@ def _higher_tf_short_context_ok(df_15m: pd.DataFrame, df_1h: pd.DataFrame) -> Tu
         "ema20_gt_ema50_1h": bullish_bias_1h,
     }
 
-    # Veto fuerte: ambos marcos siguen claramente largos y además el precio se
-    # sostiene por encima de EMA20. Ahí el short en 5M suele carecer de follow-through.
     if (
         dir15 == "LONG"
         and dir1h == "LONG"
@@ -235,8 +213,6 @@ def _higher_tf_short_context_ok(df_15m: pd.DataFrame, df_1h: pd.DataFrame) -> Tu
         diag["block_reason"] = 1.0
         return False, diag
 
-    # Veto intermedio: el 1H está claramente alcista y el 15M no muestra debilidad
-    # suficiente todavía. Esto reduce shorts correctivos dentro de impulsos mayores.
     if (
         dir1h == "LONG"
         and strength1h >= 9.0
@@ -253,11 +229,8 @@ def _higher_tf_short_context_ok(df_15m: pd.DataFrame, df_1h: pd.DataFrame) -> Tu
     return True, diag
 
 
-
 def _adx_score(adx_value: float, adx_min: float) -> float:
-    # Pleno puntaje alrededor de adx_min + 18.
     return _clamp(((adx_value - adx_min) / 18.0) * 16.0, 0.0, 16.0)
-
 
 
 def _atr_score(atr_pct: float, profile: Dict) -> float:
@@ -265,11 +238,8 @@ def _atr_score(atr_pct: float, profile: Dict) -> float:
     hi = float(profile["atr_pct_max"])
     mid = (lo + hi) / 2.0
     half = max((hi - lo) / 2.0, 1e-9)
-
-    # Máximo cerca del centro del rango. Penaliza extremos.
     distance = abs(atr_pct - mid) / half
     return _clamp((1.0 - distance) * 12.0, 0.0, 12.0)
-
 
 
 def _volume_score(last: pd.Series) -> float:
@@ -292,7 +262,6 @@ def _volume_score(last: pd.Series) -> float:
     if ratio >= 1.0:
         return 2.5
     return 0.0
-
 
 
 def _confirm_breakout_retest(df: pd.DataFrame, direction: str, profile: Dict) -> Tuple[bool, Dict[str, float]]:
@@ -347,7 +316,6 @@ def _confirm_breakout_retest(df: pd.DataFrame, direction: str, profile: Dict) ->
     return True, quality
 
 
-
 def _continuation_ok(last: pd.Series, direction: str, profile: Dict) -> bool:
     if direction == "LONG":
         if float(last["close"]) <= float(last["open"]):
@@ -362,14 +330,12 @@ def _continuation_ok(last: pd.Series, direction: str, profile: Dict) -> bool:
     return True
 
 
-
 def _breakout_score(quality: Dict[str, float], profile: Dict) -> float:
     body = quality["breakout_body_ratio"]
     min_body = float(profile["min_body_ratio_breakout"])
     body_quality = _clamp((body - min_body) / max(0.40, 1e-9), 0.0, 1.0)
 
     overshoot_atr = quality["overshoot_atr"]
-    # Mejor cuando rompe entre 0.08 y 0.70 ATR. Exceso o falta penalizan.
     if overshoot_atr < 0.08:
         overshoot_quality = overshoot_atr / 0.08
     elif overshoot_atr <= 0.70:
@@ -380,13 +346,11 @@ def _breakout_score(quality: Dict[str, float], profile: Dict) -> float:
     return _clamp(((body_quality * 0.6) + (overshoot_quality * 0.4)) * 18.0, 0.0, 18.0)
 
 
-
 def _retest_score(quality: Dict[str, float], profile: Dict) -> float:
     retest_dist = quality["retest_distance_atr"]
     tol = float(profile["retest_tol_atr"])
     retest_quality = _clamp(1.0 - (retest_dist / max(tol, 1e-9)), 0.0, 1.0)
     return retest_quality * 16.0
-
 
 
 def _continuation_score(last: pd.Series, profile: Dict) -> float:
@@ -396,14 +360,12 @@ def _continuation_score(last: pd.Series, profile: Dict) -> float:
     return body_quality * 10.0
 
 
-
 def _entry_freshness_score(level: float, close_price: float, atr: float) -> float:
     if atr <= 0:
         return 0.0
 
     extension_atr = abs(close_price - level) / atr
 
-    # Cerca del nivel = más fresco. Muy extendido penaliza.
     if extension_atr <= 0.25:
         quality = 1.0
     elif extension_atr <= 0.90:
@@ -412,7 +374,6 @@ def _entry_freshness_score(level: float, close_price: float, atr: float) -> floa
         quality = 0.0
 
     return _clamp(quality * 10.0, 0.0, 10.0)
-
 
 
 def _build_trade_profiles(entry_price: float, direction: str) -> Dict[str, Dict]:
@@ -439,7 +400,6 @@ def _build_trade_profiles(entry_price: float, direction: str) -> Dict[str, Dict]
         }
 
     return profiles
-
 
 
 def _build_score_components(
@@ -475,10 +435,8 @@ def _build_score_components(
     ]
 
 
-
 def _sum_components(components: List[Tuple[str, float]]) -> float:
     return round(_clamp(sum(points for _, points in components), 0.0, MAX_SCORE), 2)
-
 
 
 def _compute_raw_score(
@@ -491,24 +449,12 @@ def _compute_raw_score(
     return _sum_components(components), components
 
 
-
 def _compute_normalized_score(
     df: pd.DataFrame,
     direction: str,
     setup_group: str,
     quality: Dict[str, float],
 ) -> Tuple[float, List[Tuple[str, float]]]:
-    """
-    Produce un score comparable entre perfiles.
-
-    Regla de calibración:
-    - siempre se evalúa con el perfil estricto SHARED_PROFILE
-    - si la señal viene del perfil FREE, se aplica además una penalización
-      fija porque ya sabemos que falló al menos una puerta del shared
-
-    Así evitamos comparar como equivalentes dos señales aprobadas con
-    criterios distintos.
-    """
     comparable_components = _build_score_components(df, direction, SHARED_PROFILE, quality)
     normalized_score = _sum_components(comparable_components)
 
@@ -521,7 +467,6 @@ def _compute_normalized_score(
         normalized_score = _clamp(normalized_score - profile_penalty, 0.0, MAX_SCORE)
 
     return round(normalized_score, 2), normalization_components
-
 
 
 def _evaluate_profile(
@@ -567,7 +512,6 @@ def _evaluate_profile(
     level = float(quality["level"])
     close_price = float(last["close"])
 
-    # Entrada menos perseguida: más cerca del nivel de retest que del cierre.
     entry_price = level + ((close_price - level) * 0.25)
     trade_profiles = _build_trade_profiles(entry_price, direction)
 
@@ -597,24 +541,16 @@ def _evaluate_profile(
     }
 
 
-# =======================================
-# ESTRATEGIA 5M
-# =======================================
-
-
 def mtf_strategy(
     df_1h: pd.DataFrame,
     df_15m: pd.DataFrame,
-    df_5m: pd.DataFrame,
+    df_5m: Optional[pd.DataFrame],
     reference_market_price: Optional[float] = None,
     debug_counts: Optional[Dict[str, int]] = None,
 ) -> Optional[Dict]:
-    del reference_market_price  # Adaptación mínima: el scanner puede pasarlo, esta estrategia no lo usa.
-
-    # Mantenemos la firma para no romper el scanner actual.
-    # La lógica operativa final vive en 5M.
-    if len(df_5m) < BREAKOUT_LOOKBACK + 30:
-        _record_reject(debug_counts, "insufficient_history")
+    _ = reference_market_price
+    if df_5m is None or len(df_5m) < BREAKOUT_LOOKBACK + 30:
+        _record_reject(debug_counts, "missing_5m")
         return None
 
     df = add_indicators(df_5m)
@@ -623,7 +559,6 @@ def mtf_strategy(
         _record_reject(debug_counts, "insufficient_history")
         return None
 
-    # 1) Primero intenta el setup bueno compartido por PLUS y PREMIUM.
     shared_result = _evaluate_profile(df, SHARED_PROFILE, df_15m=df_15m, df_1h=df_1h, debug_counts=debug_counts)
     if shared_result:
         return {
@@ -641,12 +576,11 @@ def mtf_strategy(
             "timeframes": ["5M"],
             "setup_group": "plus",
             "atr_pct": shared_result["atr_pct"],
-            "score_profile": "plus",
+            "score_profile": shared_result["score_profile"],
             "score_calibration": shared_result["score_calibration"],
             "higher_tf_context": shared_result["higher_tf_context"],
         }
 
-    # 2) Si no pasa el setup bueno, intenta el más flexible para FREE.
     free_result = _evaluate_profile(df, FREE_PROFILE, df_15m=df_15m, df_1h=df_1h, debug_counts=debug_counts)
     if free_result:
         return {
@@ -662,9 +596,9 @@ def mtf_strategy(
             "raw_components": free_result["raw_components"],
             "normalized_components": free_result["normalized_components"],
             "timeframes": ["5M"],
-            "setup_group": "free",
+            "setup_group": free_result["setup_group"],
             "atr_pct": free_result["atr_pct"],
-            "score_profile": "free",
+            "score_profile": free_result["score_profile"],
             "score_calibration": free_result["score_calibration"],
             "higher_tf_context": free_result["higher_tf_context"],
         }
