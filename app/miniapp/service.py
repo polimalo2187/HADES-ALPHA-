@@ -2881,9 +2881,10 @@ def build_account_center_payload(user: Dict[str, Any]) -> Dict[str, Any]:
 def build_dashboard_payload(user: Dict[str, Any]) -> Dict[str, Any]:
     user_id = int(user.get("user_id") or 0)
     snapshot = _safe_call(get_performance_snapshot, {}) or {}
-    summary_7d = snapshot.get("summary_7d") or _empty_summary()
-    summary_30d = snapshot.get("summary_30d") or _empty_summary()
-    home_summary, home_summary_label = _select_dashboard_summary(snapshot)
+    summary_7d = _serialize_performance_summary(snapshot.get("summary_7d"))
+    summary_30d = _serialize_performance_summary(snapshot.get("summary_30d"))
+    home_summary_raw, home_summary_label = _select_dashboard_summary(snapshot)
+    home_summary = _serialize_performance_summary(home_summary_raw)
 
     active_query = {"user_id": user_id, "telegram_valid_until": {"$gte": datetime.utcnow()}}
     active_signals = _safe_call(
