@@ -24,20 +24,61 @@ logger = logging.getLogger(__name__)
 
 BINANCE_FUTURES_API = "https://fapi.binance.com"
 
+# ==============================
+# Scanner runtime config
+# ==============================
+
 SCAN_INTERVAL_SECONDS = int(os.getenv("SCAN_INTERVAL_SECONDS", "20"))
 MIN_QUOTE_VOLUME = int(os.getenv("MIN_QUOTE_VOLUME", "20000000"))
 DEDUP_MINUTES = int(os.getenv("DEDUP_MINUTES", "10"))
+
+# Networking / rate limiting
 REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "0.2"))
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "15"))
+REQUEST_MAX_RETRIES = max(1, int(os.getenv("REQUEST_MAX_RETRIES", "4")))
+REQUEST_RETRY_BASE_SLEEP = float(os.getenv("REQUEST_RETRY_BASE_SLEEP", "0.6"))
+
+# Concurrency: how many symbols we process in parallel.
 SCANNER_SYMBOL_CONCURRENCY = max(1, int(os.getenv("SCANNER_SYMBOL_CONCURRENCY", "24")))
+
+# Force a global inter-request delay (serializes requests); keep false by default.
 SCANNER_FORCE_REQUEST_DELAY = str(os.getenv("SCANNER_FORCE_REQUEST_DELAY", "false")).strip().lower() in {"1", "true", "yes", "on"}
+
+# Optional: soft QPS limiter (token-bucket). Defaults are conservative to avoid Binance bans.
+SCANNER_MAX_REQUESTS_PER_SECOND = float(os.getenv("SCANNER_MAX_REQUESTS_PER_SECOND", "8"))
+SCANNER_MAX_BURST = int(os.getenv("SCANNER_MAX_BURST", "16"))
+
+# 5m fetching.
 SCANNER_FETCH_5M_ENV = str(os.getenv("SCANNER_FETCH_5M", "false")).strip().lower() in {"1", "true", "yes", "on"}
 # Esta estrategia adaptada es 5M-nativa; forzar 5M evita pasar df_5m=None a mtf_strategy().
 SCANNER_FETCH_5M = True
-KLINE_LIMIT_1H = int(os.getenv("SCANNER_KLINE_LIMIT_1H", "96"))
-KLINE_LIMIT_15M = int(os.getenv("SCANNER_KLINE_LIMIT_15M", "96"))
-KLINE_LIMIT_5M = int(os.getenv("SCANNER_KLINE_LIMIT_5M", "64"))
-EFFECTIVE_REQUEST_DELAY = REQUEST_DELAY if (SCANNER_FORCE_REQUEST_DELAY or SCANNER_SYMBOL_CONCURRENCY <= 1) else 0.0
+
+# Kline limits: IMPORTANT — must be large enough for the slowest indicator (EMA200).
+# Defaults are intentionally >= 260 to ensure warm-up and to enable the HTF context gate (>= 220).
+KLINE_LIMIT_1H = int(os.getenv("SCANNER_KLINE_LIMIT_1H", "260"))
+KLINE_LIMIT_15M = int(os.getenv("SCANNER_KLINE_LIMIT_15M", "260"))
+KLINE_LIMIT_5M = int(os.getenv("SCANNER_KLINE_LIMIT_5M", "260"))
+
+# Some strategies export these constants; if present, enforce minimums to avoid NaN/indicator-warmup outages.
+_STRATEGY_EMA_SLOW = int(getattr(strategy_engine, "EMA_SLOW", 200))
+_STRATEGY_LOOKBACK = int(getattr(strategy_engine, "BREAKOUT_LOOKBACK", 24))
+_MIN_5M_BARS = max(_STRATEGY_EMA_SLOW + 30, _STRATEGY_LOOKBACK + 90, 260)
+_MIN_HTF_BARS = 220
+
+if KLINE_LIMIT_5M < _MIN_5M_BARS:
+    logger.warning("⚠️ SCANNER_KLINE_LIMIT_5M=%s es insuficiente para EMA_SLOW=%s; subiendo a %s para evitar NaNs y bloqueo por trend_structure", KLINE_LIMIT_5M, _STRATEGY_EMA_SLOW, _MIN_5M_BARS)
+    KLINE_LIMIT_5M = _MIN_5M_BARS
+
+if KLINE_LIMIT_15M < _MIN_HTF_BARS:
+    logger.warning("⚠️ SCANNER_KLINE_LIMIT_15M=%s < %s; el filtro HTF de shorts queda deshabilitado. Subiendo a %s.", KLINE_LIMIT_15M, _MIN_HTF_BARS, _MIN_HTF_BARS)
+    KLINE_LIMIT_15M = _MIN_HTF_BARS
+
+if KLINE_LIMIT_1H < _MIN_HTF_BARS:
+    logger.warning("⚠️ SCANNER_KLINE_LIMIT_1H=%s < %s; el filtro HTF de shorts queda deshabilitado. Subiendo a %s.", KLINE_LIMIT_1H, _MIN_HTF_BARS, _MIN_HTF_BARS)
+    KLINE_LIMIT_1H = _MIN_HTF_BARS
+
+# Global inter-request delay (serializes requests across threads). Use only if you really need to.
+EFFECTIVE_REQUEST_DELAY = REQUEST_DELAY if SCANNER_FORCE_REQUEST_DELAY else 0.0
 
 # Thresholds basados en raw_score real.
 PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "78"))
@@ -171,6 +212,21 @@ def _reprice_profiles(model_profiles: Dict[str, Dict], model_entry: float, stop_
     return repriced
 
 
+def _coerce_reference_price(current_price) -> float:
+    try:
+        if isinstance(current_price, pd.DataFrame):
+            if current_price.empty or "close" not in current_price.columns:
+                return 0.0
+            return float(current_price.iloc[-1]["close"])
+        if isinstance(current_price, pd.Series):
+            if "close" in current_price.index:
+                return float(current_price["close"])
+            return 0.0
+        return float(current_price or 0.0)
+    except Exception:
+        return 0.0
+
+
 def _apply_close_market_execution(result: Dict, current_price: float) -> Optional[Dict]:
     if not result:
         return None
@@ -186,7 +242,7 @@ def _apply_close_market_execution(result: Dict, current_price: float) -> Optiona
 
     model_entry = float(enriched.get("entry_price") or 0.0)
     stop_loss = float(enriched.get("stop_loss") or 0.0)
-    market_entry = float(current_price or 0.0)
+    market_entry = _coerce_reference_price(current_price)
     if market_entry <= 0 or stop_loss <= 0 or model_entry <= 0:
         return None
 
@@ -295,15 +351,73 @@ class RateLimiter:
 rate_limiter = RateLimiter(EFFECTIVE_REQUEST_DELAY)
 
 
+class TokenBucket:
+    """Thread-safe token bucket to cap request rate without serializing all work.
+
+    This avoids the previous "delay=0" + high concurrency situation that can silently
+    trigger upstream rate-limits and starve the scanner.
+    """
+
+    def __init__(self, rate: float, capacity: int):
+        self.rate = max(0.1, float(rate))
+        self.capacity = max(1, int(capacity))
+        self.tokens = float(self.capacity)
+        self.updated_at = time.time()
+        self._lock = threading.Lock()
+
+    def acquire(self, tokens: float = 1.0) -> None:
+        need = max(0.0, float(tokens))
+        if need <= 0:
+            return
+        while True:
+            with self._lock:
+                now = time.time()
+                elapsed = now - self.updated_at
+                if elapsed > 0:
+                    self.tokens = min(self.capacity, self.tokens + (elapsed * self.rate))
+                    self.updated_at = now
+                if self.tokens >= need:
+                    self.tokens -= need
+                    return
+                missing = need - self.tokens
+                wait_s = missing / self.rate if self.rate > 0 else 0.25
+            time.sleep(max(0.01, min(wait_s, 1.0)))
+
+
+_token_bucket = TokenBucket(SCANNER_MAX_REQUESTS_PER_SECOND, SCANNER_MAX_BURST)
+
+
+def _request_json(url: str, *, params: dict | None = None, timeout: int = REQUEST_TIMEOUT):
+    """Requests wrapper with retries + rate limiting."""
+    last_exc: Exception | None = None
+    for attempt in range(REQUEST_MAX_RETRIES):
+        try:
+            _token_bucket.acquire(1.0)
+            rate_limiter.wait()
+            resp = requests.get(url, params=params, timeout=timeout)
+            if resp.status_code in (418, 429):
+                raise RuntimeError(f"binance_rate_limited status={resp.status_code} body={resp.text[:120]}")
+            if 500 <= resp.status_code < 600:
+                raise RuntimeError(f"binance_5xx status={resp.status_code} body={resp.text[:120]}")
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as exc:
+            last_exc = exc
+            sleep_s = min(8.0, REQUEST_RETRY_BASE_SLEEP * (2 ** attempt))
+            # tiny jitter to reduce lockstep retries
+            sleep_s = sleep_s + (0.05 * (attempt + 1))
+            time.sleep(sleep_s)
+    raise last_exc or RuntimeError('request_failed')
+
+
+
 def get_klines(symbol: str, interval: str, limit: int = 220) -> pd.DataFrame:
-    rate_limiter.wait()
     url = f"{BINANCE_FUTURES_API}/fapi/v1/klines"
-    params = {"symbol": symbol, "interval": interval, "limit": limit}
-    response = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
-    response.raise_for_status()
+    params = {"symbol": symbol, "interval": interval, "limit": int(limit)}
+    payload = _request_json(url, params=params, timeout=REQUEST_TIMEOUT)
 
     df = pd.DataFrame(
-        response.json(),
+        payload,
         columns=[
             "open_time",
             "open",
@@ -326,16 +440,14 @@ def get_klines(symbol: str, interval: str, limit: int = 220) -> pd.DataFrame:
 
 
 def get_active_futures_symbols() -> List[str]:
-    rate_limiter.wait()
     url = f"{BINANCE_FUTURES_API}/fapi/v1/ticker/24hr"
-    response = requests.get(url, timeout=REQUEST_TIMEOUT)
-    response.raise_for_status()
+    payload = _request_json(url, timeout=REQUEST_TIMEOUT)
 
     symbols = [
         item["symbol"]
-        for item in response.json()
-        if item["symbol"].endswith("USDT")
-        and float(item["quoteVolume"]) >= MIN_QUOTE_VOLUME
+        for item in payload
+        if str(item.get("symbol", "")).endswith("USDT")
+        and float(item.get("quoteVolume", 0.0) or 0.0) >= MIN_QUOTE_VOLUME
     ]
     logger.info("📊 %s símbolos activos con volumen suficiente", len(symbols))
     return symbols
@@ -562,24 +674,32 @@ def _merge_debug_counts(total: Dict[str, int], local: Dict[str, int]) -> None:
         total[key] = int(total.get(key, 0)) + int(value)
 
 
+def _compact_rejects(rejects: Dict[str, int], limit: int = 10) -> Dict[str, int]:
+    items = sorted((rejects or {}).items(), key=lambda kv: kv[1], reverse=True)
+    compact = {k: int(v) for k, v in items[: max(1, int(limit))]}
+    other = sum(int(v) for _k, v in items[max(1, int(limit)) :])
+    if other:
+        compact["__other__"] = other
+    return compact
+
+
+
 def _extract_failure_reason(local: Dict[str, int]) -> Optional[str]:
     if not local:
         return None
     return max(local.items(), key=lambda item: item[1])[0]
 
 
-def _process_symbol(symbol: str) -> Tuple[Optional[Dict], Optional[str], Optional[str]]:
+def _process_symbol(symbol: str) -> Tuple[Optional[Dict], Dict[str, int], Optional[str]]:
     local_debug: Dict[str, int] = {}
     try:
         df_1h = get_klines(symbol, "1h", limit=KLINE_LIMIT_1H)
         df_15m = get_klines(symbol, "15m", limit=KLINE_LIMIT_15M)
         df_5m = get_klines(symbol, "5m", limit=KLINE_LIMIT_5M) if SCANNER_FETCH_5M else None
         candidate = build_symbol_candidate(symbol, df_1h, df_15m, df_5m, debug_counts=local_debug)
-        if candidate:
-            return candidate, None, None
-        return None, _extract_failure_reason(local_debug), None
+        return candidate, local_debug, None
     except Exception as exc:
-        return None, None, f"{symbol}: {exc}"
+        return None, local_debug, f"{symbol}: {exc}"
 
 
 async def scan_market_async(bot: Bot):
@@ -615,11 +735,11 @@ async def scan_market_async(bot: Bot):
                     return await asyncio.to_thread(_process_symbol, symbol)
 
             results = await asyncio.gather(*[_run(symbol) for symbol in symbols])
-            for candidate, reject_reason, failure in results:
+            for candidate, local_debug, failure in results:
                 if candidate:
                     candidates.append(candidate)
-                elif reject_reason:
-                    _record_failure(reject_totals, reject_reason)
+                else:
+                    _merge_debug_counts(reject_totals, local_debug)
                 if failure:
                     failures += 1
                     if len(failure_samples) < 5:
@@ -657,7 +777,7 @@ async def scan_market_async(bot: Bot):
                 logger.info(
                     "📭 No hay oportunidades fuertes en este ciclo | duration=%.3fs | rejects=%s",
                     cycle_duration,
-                    reject_totals,
+                    _compact_rejects(reject_totals),
                 )
                 heartbeat(
                     "scanner",
@@ -701,7 +821,7 @@ async def scan_market_async(bot: Bot):
                 len(plus_candidates),
                 len(free_candidates),
                 cycle_duration,
-                reject_totals,
+                _compact_rejects(reject_totals),
             )
 
             used_symbols: Set[str] = set()
