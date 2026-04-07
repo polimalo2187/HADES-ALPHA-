@@ -85,6 +85,11 @@ PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "80"))
 PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "74"))
 FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "66"))
 
+# Freshness guard for pending-entry signals.
+# If the price already advanced too much from the intended reset entry, the alert must not be sent.
+PENDING_ENTRY_MAX_PROGRESS_TO_TP1_PCT = float(os.getenv("PENDING_ENTRY_MAX_PROGRESS_TO_TP1_PCT", "18"))
+PENDING_ENTRY_MAX_R_PROGRESS = float(os.getenv("PENDING_ENTRY_MAX_R_PROGRESS", "0.25"))
+
 MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT = float(os.getenv("MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT", "15"))
 MAX_CLOSE_MARKET_R_PROGRESS = float(os.getenv("MAX_CLOSE_MARKET_R_PROGRESS", "0.15"))
 SCORE_CALIBRATION_VERSION = "v7_breakout_reset_pending_entry"
@@ -629,10 +634,17 @@ def _select_dispatchable_signal(
         base_signal = _build_base_signal(signal, visibility)
         if not base_signal:
             logger.info(
-                "⏭️ Señal descartada al crear base_signal: %s %s (%s)",
+                "⏭️ Señal descartada al crear base_signal: %s %s (%s) | setup=%s | raw_score=%s | normalized_score=%s | signal_market_price=%s | entry=%s | tp1_progress_at_send_pct=%s | r_progress_at_send=%s",
                 symbol,
                 direction,
                 visibility,
+                signal.get("setup_group"),
+                signal.get("raw_score"),
+                signal.get("normalized_score"),
+                signal.get("signal_market_price"),
+                signal.get("entry_price"),
+                signal.get("tp1_progress_at_send_pct"),
+                signal.get("r_progress_at_send"),
             )
             continue
 
@@ -672,6 +684,25 @@ def _build_candidate(symbol: str, result: Dict, reference_price: float) -> Optio
     candidate["volume_quality"] = 0.0
     candidate["final_score"] = final_score
     candidate["signal_market_price"] = round(float(reference_price or 0.0), 8) if reference_price else None
+    try:
+        conservative_profile = (candidate.get("profiles") or {}).get("conservador") or {}
+        conservative_tps = list(conservative_profile.get("take_profits") or candidate.get("take_profits") or [])
+        if conservative_tps:
+            candidate["tp1_progress_at_send_pct"] = _progress_from_model_to_tp1_pct(
+                float(candidate.get("entry_price") or 0.0),
+                float(conservative_tps[0]),
+                float(reference_price or 0.0),
+                direction,
+            )
+        candidate["r_progress_at_send"] = _r_progress_from_model_entry(
+            float(candidate.get("entry_price") or 0.0),
+            float(candidate.get("stop_loss") or 0.0),
+            float(reference_price or 0.0),
+            direction,
+        )
+    except Exception:
+        candidate.setdefault("tp1_progress_at_send_pct", None)
+        candidate.setdefault("r_progress_at_send", None)
     candidate.setdefault("send_mode", "entry_zone_pending")
     candidate.setdefault("candidate_tier", candidate.get("setup_group"))
     candidate.setdefault("final_tier", candidate.get("setup_group"))
@@ -785,7 +816,7 @@ async def scan_market_async(bot: Bot):
                     },
                 )
                 cycle_number += 1
-                await asyncio.sleep(SCAN_INTERVAL_SECONDS)
+                await asyncio.sleep(max(0.0, SCAN_INTERVAL_SECONDS - cycle_duration))
                 continue
 
             if not candidates:
@@ -810,7 +841,7 @@ async def scan_market_async(bot: Bot):
                     },
                 )
                 cycle_number += 1
-                await asyncio.sleep(SCAN_INTERVAL_SECONDS)
+                await asyncio.sleep(max(0.0, SCAN_INTERVAL_SECONDS - cycle_duration))
                 continue
 
             candidates.sort(
@@ -902,7 +933,7 @@ async def scan_market_async(bot: Bot):
                 },
             )
             cycle_number += 1
-            await asyncio.sleep(SCAN_INTERVAL_SECONDS)
+            await asyncio.sleep(max(0.0, SCAN_INTERVAL_SECONDS - cycle_duration))
 
         except Exception as exc:
             heartbeat("scanner", status="error", details={"error": str(exc), "cycle": cycle_number})
