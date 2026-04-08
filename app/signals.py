@@ -960,6 +960,156 @@ def _result_to_label(result: Optional[str]) -> str:
     return mapping.get(str(result or "").lower(), "Aún sin cierre final")
 
 
+def _observe_live_signal_progress(signal_doc: Dict[str, Any], as_of: datetime) -> Dict[str, Any]:
+    direction = str(signal_doc.get("direction") or "").upper()
+    symbol = signal_doc.get("symbol")
+    stop_loss = signal_doc.get("stop_loss")
+    take_profits = list(signal_doc.get("take_profits") or [])
+    entry_price = signal_doc.get("entry_price")
+    created_at = signal_doc.get("created_at")
+    valid_until = _get_evaluation_valid_until(signal_doc)
+    telegram_valid_until = signal_doc.get("telegram_valid_until")
+    send_mode = str(signal_doc.get("send_mode") or "").strip().lower()
+
+    snapshot: Dict[str, Any] = {
+        "entry_touched": False,
+        "entry_touched_at": None,
+        "tp1_hit": False,
+        "tp1_touched_at": None,
+        "tp2_hit": False,
+        "tp2_touched_at": None,
+        "stop_hit": False,
+        "stop_touched_at": None,
+        "tp1_progress_max_pct": 0.0,
+        "max_favorable_excursion_r": 0.0,
+        "max_adverse_excursion_r": 0.0,
+        "effective_valid_until": valid_until,
+        "entry_valid_until": None,
+    }
+
+    tp1 = take_profits[0] if len(take_profits) > 0 else None
+    tp2 = take_profits[1] if len(take_profits) > 1 else None
+
+    if not symbol or not direction or stop_loss is None or tp1 is None or entry_price is None or not created_at:
+        return snapshot
+
+    live_end = as_of
+    if isinstance(valid_until, datetime) and valid_until < live_end:
+        live_end = valid_until
+    if not isinstance(live_end, datetime) or live_end <= created_at:
+        return snapshot
+
+    try:
+        entry_price = float(entry_price)
+        stop_loss = float(stop_loss)
+        tp1 = float(tp1)
+        tp2 = float(tp2) if tp2 is not None else None
+    except Exception:
+        return snapshot
+
+    entry_window_end = signal_doc.get("entry_valid_until")
+    if not isinstance(entry_window_end, datetime):
+        entry_window_end = telegram_valid_until if isinstance(telegram_valid_until, datetime) else valid_until
+    if isinstance(entry_window_end, datetime) and isinstance(valid_until, datetime) and entry_window_end > valid_until:
+        entry_window_end = valid_until
+    snapshot["entry_valid_until"] = entry_window_end
+
+    try:
+        market_validity_minutes = int(signal_doc.get("market_validity_minutes") or signal_doc.get("validity_minutes") or 0)
+    except Exception:
+        market_validity_minutes = 0
+    if market_validity_minutes <= 0:
+        market_validity_minutes = calculate_signal_validity(signal_doc.get("timeframes") or ["5M"])
+
+    try:
+        klines = _fetch_klines_between(symbol, created_at, live_end, interval="1m")
+    except Exception:
+        return snapshot
+
+    entry_touched = False
+    entry_touched_at: Optional[datetime] = None
+    effective_valid_until = valid_until if isinstance(valid_until, datetime) else live_end
+
+    if send_mode == "market_on_close":
+        entry_touched = True
+        entry_touched_at = created_at if isinstance(created_at, datetime) else None
+        sent_entry = signal_doc.get("entry_sent_price")
+        if sent_entry is not None:
+            try:
+                entry_price = float(sent_entry)
+            except Exception:
+                pass
+
+    for row in klines:
+        try:
+            high = float(row[2])
+            low = float(row[3])
+        except Exception:
+            continue
+
+        if send_mode != "market_on_close" and not entry_touched and _entry_window_allows_new_fill(row, entry_window_end):
+            if _pending_entry_touched(signal_doc, direction, entry_price, high, low):
+                entry_touched = True
+                candle_open_dt, candle_close_dt = _candle_time_bounds(row)
+                entry_touched_at = candle_close_dt or candle_open_dt
+                if isinstance(entry_touched_at, datetime):
+                    effective_valid_until = entry_touched_at + timedelta(minutes=market_validity_minutes)
+                    if isinstance(valid_until, datetime) and effective_valid_until > valid_until:
+                        effective_valid_until = valid_until
+
+        if not entry_touched:
+            continue
+
+        if not _candle_within_window(row, effective_valid_until):
+            break
+
+        excursions = _excursions_after_entry_r(direction, entry_price, stop_loss, high, low)
+        snapshot["max_favorable_excursion_r"] = max(float(snapshot["max_favorable_excursion_r"] or 0.0), float(excursions.get("favorable_r") or 0.0))
+        snapshot["max_adverse_excursion_r"] = max(float(snapshot["max_adverse_excursion_r"] or 0.0), float(excursions.get("adverse_r") or 0.0))
+        progress = _tp1_progress_pct(direction, entry_price, tp1, high, low)
+        if progress is not None:
+            snapshot["tp1_progress_max_pct"] = max(float(snapshot["tp1_progress_max_pct"] or 0.0), float(progress))
+
+        candle_open_dt, candle_close_dt = _candle_time_bounds(row)
+        touched_at = candle_close_dt or candle_open_dt
+
+        if direction == "LONG":
+            tp1_hit = high >= tp1
+            tp2_hit = tp2 is not None and high >= tp2
+            sl_hit = low <= stop_loss
+        else:
+            tp1_hit = low <= tp1
+            tp2_hit = tp2 is not None and low <= tp2
+            sl_hit = high >= stop_loss
+
+        if sl_hit and (tp2_hit or tp1_hit):
+            snapshot["stop_hit"] = True
+            snapshot["stop_touched_at"] = touched_at
+            break
+        if tp2_hit:
+            snapshot["tp1_hit"] = True
+            snapshot["tp1_touched_at"] = touched_at
+            snapshot["tp2_hit"] = True
+            snapshot["tp2_touched_at"] = touched_at
+            break
+        if tp1_hit:
+            snapshot["tp1_hit"] = True
+            snapshot["tp1_touched_at"] = touched_at
+            break
+        if sl_hit:
+            snapshot["stop_hit"] = True
+            snapshot["stop_touched_at"] = touched_at
+            break
+
+    snapshot["entry_touched"] = entry_touched
+    snapshot["entry_touched_at"] = entry_touched_at
+    snapshot["effective_valid_until"] = effective_valid_until
+    snapshot["tp1_progress_max_pct"] = round(float(snapshot["tp1_progress_max_pct"] or 0.0), 2)
+    snapshot["max_favorable_excursion_r"] = round(float(snapshot["max_favorable_excursion_r"] or 0.0), 4)
+    snapshot["max_adverse_excursion_r"] = round(float(snapshot["max_adverse_excursion_r"] or 0.0), 4)
+    return snapshot
+
+
 def _tracking_entry_state(direction: str, current_price: Optional[float], zone_low: Optional[float], zone_high: Optional[float], now: datetime, telegram_valid_until: Optional[datetime], evaluation_valid_until: Optional[datetime], final_result: Optional[str], send_mode: Optional[str] = None) -> tuple[str, bool, bool]:
     if final_result:
         return "SEÑAL CERRADA", False, False
@@ -1032,6 +1182,33 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
         send_mode,
     )
 
+    live_progress: Dict[str, Any] = {}
+    if not final_result:
+        live_signal_doc = {
+            **base_signal,
+            **user_signal,
+            "direction": direction,
+            "entry_price": entry,
+            "entry_zone": entry_zone,
+            "stop_loss": stop_loss,
+            "take_profits": take_profits,
+            "created_at": user_signal.get("created_at") or base_signal.get("created_at"),
+            "evaluation_valid_until": evaluation_valid_until,
+            "entry_valid_until": entry_valid_until,
+            "telegram_valid_until": telegram_valid_until,
+            "send_mode": send_mode,
+        }
+        try:
+            live_progress = _observe_live_signal_progress(live_signal_doc, now)
+        except Exception as exc:
+            warnings.append(f"No pude reconstruir el tracking intrabar: {exc}")
+            live_progress = {}
+
+    if live_progress.get("entry_touched"):
+        entry_state_label = "RESET EJECUTADO"
+        in_entry_zone = False
+        signal_active_for_entry = False
+
     stop_distance_pct = _distance_fraction(direction, entry, stop_loss)
     tp1_distance_pct = _distance_fraction(direction, entry, take_profits[0] if len(take_profits) > 0 else None)
     current_move_pct = _distance_fraction(direction, entry, current_price) if current_price is not None else None
@@ -1049,6 +1226,10 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
             tp1_hit_now = True
         elif resolution == "sl":
             stop_hit_now = True
+    elif live_progress:
+        tp1_hit_now = bool(live_progress.get("tp1_hit"))
+        tp2_hit_now = bool(live_progress.get("tp2_hit"))
+        stop_hit_now = bool(live_progress.get("stop_hit"))
     elif current_price is not None and entry and stop_loss:
         try:
             cp = float(current_price)
@@ -1072,6 +1253,8 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
         progress_to_tp1_pct = round(max(0.0, min(1.5, float(current_move_pct) / float(tp1_distance_pct))) * 100, 2)
     else:
         progress_to_tp1_pct = None
+    if live_progress and live_progress.get("entry_touched"):
+        progress_to_tp1_pct = live_progress.get("tp1_progress_max_pct")
 
     telegram_window_open = isinstance(telegram_valid_until, datetime) and telegram_valid_until > now
     entry_window_open = isinstance(entry_valid_until, datetime) and entry_valid_until > now
@@ -1087,16 +1270,24 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
         recommendation = "La ventana de mercado terminó sin objetivo claro. Úsala solo como referencia histórica."
         state_label = "FINALIZADA"
     elif stop_hit_now:
-        recommendation = "El precio actual ya invalidó el SL del perfil elegido. No es una entrada sana."
-        state_label = "INVALIDADA EN PRECIO ACTUAL"
+        recommendation = "La señal ya tocó el SL del perfil elegido durante el seguimiento. Espera el cierre final para la consolidación del resultado."
+        state_label = "SL TOCADO"
         signal_active_for_entry = False
     elif tp2_hit_now:
-        recommendation = "El precio actual ya alcanzó o superó TP2. El movimiento está demasiado extendido para perseguirlo."
+        recommendation = "La señal ya alcanzó TP2 durante el seguimiento. Espera el cierre final para consolidar el resultado."
         state_label = "MUY EXTENDIDA"
         signal_active_for_entry = False
     elif tp1_hit_now:
-        recommendation = "El precio actual ya alcanzó TP1. La señal dejó de ser una entrada limpia."
+        recommendation = "La señal ya alcanzó TP1 durante el seguimiento y sigue en evaluación hasta el cierre final."
         state_label = "EXTENDIDA"
+        signal_active_for_entry = False
+    elif live_progress.get("entry_touched") and evaluation_window_open:
+        recommendation = "El reset ya tocó la entrada y la señal está en evaluación. Ahora importa la continuación posterior al reset."
+        state_label = "EN EVALUACIÓN"
+        signal_active_for_entry = False
+    elif live_progress.get("entry_touched"):
+        recommendation = "El reset ya tocó la entrada. La ventana operativa terminó; úsala solo como referencia histórica."
+        state_label = "RESET EJECUTADO"
         signal_active_for_entry = False
     elif str(send_mode or "").strip().lower() == "market_on_close":
         recommendation = "La señal se activó al envío. Evalúala desde el precio enviado, no esperes retrace al entry."
@@ -1143,6 +1334,11 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
         "tp1_hit_now": tp1_hit_now,
         "tp2_hit_now": tp2_hit_now,
         "stop_hit_now": stop_hit_now,
+        "entry_touched": bool(live_progress.get("entry_touched") or (result_doc or {}).get("entry_touched")),
+        "entry_touched_at": live_progress.get("entry_touched_at") or (result_doc or {}).get("entry_touched_at"),
+        "tp1_touched_at": live_progress.get("tp1_touched_at"),
+        "tp2_touched_at": live_progress.get("tp2_touched_at"),
+        "stop_touched_at": live_progress.get("stop_touched_at"),
         "in_entry_zone": in_entry_zone,
         "is_operable_now": signal_active_for_entry,
         "entry_state_label": entry_state_label,
