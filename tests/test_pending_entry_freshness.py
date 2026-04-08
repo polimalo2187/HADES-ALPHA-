@@ -31,7 +31,7 @@ def test_pending_entry_guard_rejects_extended_long_signal():
     assert float(details["tp1_progress_at_send_pct"]) >= 18.0
 
 
-def test_pending_entry_guard_allows_waiting_long_signal_below_zone():
+def test_pending_entry_guard_rejects_long_signal_before_breakout_extension():
     ok, details = signals._pending_entry_is_still_actionable(
         direction="LONG",
         entry_price=100.0,
@@ -41,5 +41,19 @@ def test_pending_entry_guard_allows_waiting_long_signal_below_zone():
         zone_low=99.78,
         zone_high=100.22,
     )
+    assert ok is False
+    assert details["actionability_reason"] == "pre_reset_not_armed"
+
+
+def test_pending_entry_guard_allows_armed_long_signal_above_zone():
+    ok, details = signals._pending_entry_is_still_actionable(
+        direction="LONG",
+        entry_price=100.0,
+        stop_loss=99.2,
+        take_profits=[100.8, 101.4],
+        current_price=100.12,
+        zone_low=99.75,
+        zone_high=100.05,
+    )
     assert ok is True
-    assert details["zone_distance_pct"] is not None
+    assert details["actionability_reason"] == "armed_waiting_reset"
