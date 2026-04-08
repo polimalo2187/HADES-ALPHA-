@@ -58,10 +58,6 @@ MARKET_EVALUATION_VERSION = "v4_pending_entry_activation_window"
 ENTRY_ZONE_MIN_PCT = float(os.getenv("ENTRY_ZONE_MIN_PCT", "0.0015"))
 ENTRY_ZONE_MAX_PCT = float(os.getenv("ENTRY_ZONE_MAX_PCT", "0.0035"))
 ENTRY_ZONE_RISK_FRACTION = float(os.getenv("ENTRY_ZONE_RISK_FRACTION", "0.22"))
-PENDING_ENTRY_MAX_PROGRESS_TO_TP1_PCT = float(os.getenv("PENDING_ENTRY_MAX_PROGRESS_TO_TP1_PCT", "18"))
-PENDING_ENTRY_MAX_R_PROGRESS = float(os.getenv("PENDING_ENTRY_MAX_R_PROGRESS", "0.25"))
-PENDING_ENTRY_MIN_PROGRESS_TO_TP1_PCT = float(os.getenv("PENDING_ENTRY_MIN_PROGRESS_TO_TP1_PCT", "4"))
-PENDING_ENTRY_MIN_R_PROGRESS = float(os.getenv("PENDING_ENTRY_MIN_R_PROGRESS", "0.05"))
 
 # ======================================================
 # UTILIDADES
@@ -338,19 +334,6 @@ def _pending_entry_is_still_actionable(
             details["actionability_reason"] = "pre_reset_not_armed"
             return False, details
         details["zone_distance_pct"] = round(max(0.0, (zone_low - current_price) / max(entry_price, 1e-9)) * 100.0, 4)
-
-    tp1_progress = float(details["tp1_progress_at_send_pct"] or 0.0)
-    r_progress = float(details["r_progress_at_send"] or 0.0)
-
-    if tp1_progress >= PENDING_ENTRY_MAX_PROGRESS_TO_TP1_PCT:
-        details["actionability_reason"] = "too_extended_to_tp1"
-        return False, details
-    if r_progress >= PENDING_ENTRY_MAX_R_PROGRESS:
-        details["actionability_reason"] = "too_extended_in_r"
-        return False, details
-    if tp1_progress < PENDING_ENTRY_MIN_PROGRESS_TO_TP1_PCT and r_progress < PENDING_ENTRY_MIN_R_PROGRESS:
-        details["actionability_reason"] = "extension_too_shallow"
-        return False, details
 
     details["actionability_reason"] = "armed_waiting_reset"
     return True, details
