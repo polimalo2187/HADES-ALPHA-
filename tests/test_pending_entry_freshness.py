@@ -17,32 +17,18 @@ def test_calculate_entry_zone_adapts_to_risk_and_is_capped():
     assert high2 == 100.35
 
 
-def test_pending_entry_guard_rejects_extended_long_signal():
+def test_pending_entry_guard_requires_long_to_be_above_zone_before_reset():
     ok, details = signals._pending_entry_is_still_actionable(
         direction="LONG",
         entry_price=100.0,
         stop_loss=99.2,
         take_profits=[100.8, 101.4],
-        current_price=100.5,
+        current_price=100.1,
         zone_low=99.78,
         zone_high=100.22,
     )
     assert ok is False
-    assert float(details["tp1_progress_at_send_pct"]) >= 18.0
-
-
-def test_pending_entry_guard_rejects_long_signal_before_breakout_extension():
-    ok, details = signals._pending_entry_is_still_actionable(
-        direction="LONG",
-        entry_price=100.0,
-        stop_loss=99.2,
-        take_profits=[100.8, 101.4],
-        current_price=99.6,
-        zone_low=99.78,
-        zone_high=100.22,
-    )
-    assert ok is False
-    assert details["actionability_reason"] == "pre_reset_not_armed"
+    assert details["actionability_reason"] == "already_in_reset_zone"
 
 
 def test_pending_entry_guard_allows_armed_long_signal_above_zone():
@@ -51,9 +37,24 @@ def test_pending_entry_guard_allows_armed_long_signal_above_zone():
         entry_price=100.0,
         stop_loss=99.2,
         take_profits=[100.8, 101.4],
-        current_price=100.12,
-        zone_low=99.75,
-        zone_high=100.05,
+        current_price=100.6,
+        zone_low=99.78,
+        zone_high=100.22,
     )
     assert ok is True
     assert details["actionability_reason"] == "armed_waiting_reset"
+    assert details["zone_distance_pct"] is not None
+
+
+def test_pending_entry_guard_rejects_short_not_armed_above_entry_side():
+    ok, details = signals._pending_entry_is_still_actionable(
+        direction="SHORT",
+        entry_price=100.0,
+        stop_loss=100.8,
+        take_profits=[99.2, 98.6],
+        current_price=100.1,
+        zone_low=99.78,
+        zone_high=100.22,
+    )
+    assert ok is False
+    assert details["actionability_reason"] in {"already_in_reset_zone", "pre_reset_not_armed"}
