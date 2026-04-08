@@ -44,6 +44,11 @@ SCANNER_SYMBOL_CONCURRENCY = max(1, int(os.getenv("SCANNER_SYMBOL_CONCURRENCY", 
 # Force a global inter-request delay (serializes requests); keep false by default.
 SCANNER_FORCE_REQUEST_DELAY = str(os.getenv("SCANNER_FORCE_REQUEST_DELAY", "false")).strip().lower() in {"1", "true", "yes", "on"}
 
+# MTF cache: 15M/1H only refresh when a new candle bucket opens.
+# 5M remains uncached by default because the live breakout/reset setup is decided there.
+SCANNER_ENABLE_HTF_CACHE = str(os.getenv("SCANNER_ENABLE_HTF_CACHE", "true")).strip().lower() in {"1", "true", "yes", "on"}
+SCANNER_5M_CACHE_SECONDS = max(0.0, float(os.getenv("SCANNER_5M_CACHE_SECONDS", "0")))
+
 # Optional: soft QPS limiter (token-bucket). Defaults are conservative to avoid Binance bans.
 SCANNER_MAX_REQUESTS_PER_SECOND = float(os.getenv("SCANNER_MAX_REQUESTS_PER_SECOND", "8"))
 SCANNER_MAX_BURST = int(os.getenv("SCANNER_MAX_BURST", "16"))
@@ -134,16 +139,46 @@ def _strategy_call_kwargs(
     return kwargs
 
 
-def _closed_15m_frame(df_15m: pd.DataFrame) -> pd.DataFrame:
-    if df_15m.empty or "close_time" not in df_15m.columns:
-        return df_15m.copy()
+def _now_ts() -> float:
+    return time.time()
+
+
+def _closed_timeframe_frame(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "close_time" not in df.columns:
+        return df.copy()
     now_utc = pd.Timestamp.now(tz="UTC")
-    closed = df_15m[df_15m["close_time"] <= now_utc].copy()
+    closed = df[df["close_time"] <= now_utc].copy()
     if not closed.empty:
         return closed
-    if len(df_15m) > 1:
-        return df_15m.iloc[:-1].copy()
-    return df_15m.copy()
+    if len(df) > 1:
+        return df.iloc[:-1].copy()
+    return df.copy()
+
+
+def _closed_15m_frame(df_15m: pd.DataFrame) -> pd.DataFrame:
+    return _closed_timeframe_frame(df_15m)
+
+
+def _timeframe_bucket_id(interval: str, now_ts: Optional[float] = None) -> Optional[int]:
+    interval_key = str(interval or "").strip().lower()
+    seconds = {
+        "5m": 5 * 60,
+        "15m": 15 * 60,
+        "1h": 60 * 60,
+    }.get(interval_key)
+    if seconds is None:
+        return None
+    current_ts = _now_ts() if now_ts is None else float(now_ts)
+    return int(current_ts // seconds)
+
+
+def _cache_enabled_for_interval(interval: str) -> bool:
+    interval_key = str(interval or "").strip().lower()
+    if interval_key in {"15m", "1h"}:
+        return SCANNER_ENABLE_HTF_CACHE
+    if interval_key == "5m":
+        return SCANNER_5M_CACHE_SECONDS > 0.0
+    return False
 
 
 def _infer_setup_group(signal: Dict) -> str:
@@ -308,7 +343,8 @@ def _apply_close_market_execution(result: Dict, current_price: float) -> Optiona
 
 
 def build_symbol_candidate(symbol: str, df_1h: pd.DataFrame, df_15m: pd.DataFrame, df_5m: Optional[pd.DataFrame], *, debug_counts: Optional[Dict[str, int]] = None) -> Optional[Dict]:
-    closed_15m = _closed_15m_frame(df_15m)
+    closed_1h = _closed_timeframe_frame(df_1h)
+    closed_15m = _closed_timeframe_frame(df_15m)
     reference_price = None
     try:
         if df_5m is not None and len(df_5m) > 0:
@@ -319,7 +355,7 @@ def build_symbol_candidate(symbol: str, df_1h: pd.DataFrame, df_15m: pd.DataFram
         reference_price = None
 
     strategy_kwargs = _strategy_call_kwargs(
-        df_1h=df_1h,
+        df_1h=closed_1h,
         df_15m=closed_15m,
         df_5m=df_5m,
         reference_market_price=reference_price,
@@ -335,6 +371,84 @@ def build_symbol_candidate(symbol: str, df_1h: pd.DataFrame, df_15m: pd.DataFram
         except Exception:
             price_for_candidate = 0.0
     return _build_candidate(symbol, result, price_for_candidate)
+
+
+class TimeframeKlineCache:
+    def __init__(self):
+        self._entries: Dict[Tuple[str, str, int], Dict] = {}
+        self._lock = threading.Lock()
+        self._stats = {
+            "hits": 0,
+            "misses": 0,
+            "stores": 0,
+            "bypasses": 0,
+            "evictions": 0,
+        }
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+            for key in list(self._stats.keys()):
+                self._stats[key] = 0
+
+    def snapshot(self) -> Dict[str, int]:
+        with self._lock:
+            snap = dict(self._stats)
+            snap["entries"] = len(self._entries)
+            return snap
+
+    def delta(self, before: Dict[str, int]) -> Dict[str, int]:
+        after = self.snapshot()
+        keys = set(after) | set(before or {})
+        return {key: int(after.get(key, 0)) - int((before or {}).get(key, 0)) for key in keys}
+
+    def get(self, symbol: str, interval: str, limit: int) -> Optional[pd.DataFrame]:
+        interval_key = str(interval or "").strip().lower()
+        if not _cache_enabled_for_interval(interval_key):
+            with self._lock:
+                self._stats["bypasses"] += 1
+            return None
+        key = (str(symbol).upper(), interval_key, int(limit))
+        now_ts = _now_ts()
+        with self._lock:
+            entry = self._entries.get(key)
+            if not entry:
+                self._stats["misses"] += 1
+                return None
+            if interval_key in {"15m", "1h"}:
+                current_bucket = _timeframe_bucket_id(interval_key, now_ts=now_ts)
+                if entry.get("bucket_id") == current_bucket:
+                    self._stats["hits"] += 1
+                    return entry["df"].copy(deep=False)
+                self._entries.pop(key, None)
+                self._stats["evictions"] += 1
+                self._stats["misses"] += 1
+                return None
+            max_age = float(entry.get("max_age_seconds", 0.0) or 0.0)
+            age = now_ts - float(entry.get("fetched_at", now_ts))
+            if age <= max_age:
+                self._stats["hits"] += 1
+                return entry["df"].copy(deep=False)
+            self._entries.pop(key, None)
+            self._stats["evictions"] += 1
+            self._stats["misses"] += 1
+            return None
+
+    def set(self, symbol: str, interval: str, limit: int, df: pd.DataFrame) -> None:
+        interval_key = str(interval or "").strip().lower()
+        if not _cache_enabled_for_interval(interval_key):
+            return
+        now_ts = _now_ts()
+        entry = {
+            "df": df.copy(deep=False),
+            "fetched_at": now_ts,
+            "bucket_id": _timeframe_bucket_id(interval_key, now_ts=now_ts),
+            "max_age_seconds": SCANNER_5M_CACHE_SECONDS if interval_key == "5m" else 0.0,
+        }
+        key = (str(symbol).upper(), interval_key, int(limit))
+        with self._lock:
+            self._entries[key] = entry
+            self._stats["stores"] += 1
 
 
 class RateLimiter:
@@ -354,6 +468,7 @@ class RateLimiter:
 
 
 rate_limiter = RateLimiter(EFFECTIVE_REQUEST_DELAY)
+_kline_cache = TimeframeKlineCache()
 
 
 class TokenBucket:
@@ -417,8 +532,13 @@ def _request_json(url: str, *, params: dict | None = None, timeout: int = REQUES
 
 
 def get_klines(symbol: str, interval: str, limit: int = 220) -> pd.DataFrame:
+    interval_key = str(interval or "").strip().lower()
+    cached = _kline_cache.get(symbol, interval_key, limit)
+    if cached is not None:
+        return cached
+
     url = f"{BINANCE_FUTURES_API}/fapi/v1/klines"
-    params = {"symbol": symbol, "interval": interval, "limit": int(limit)}
+    params = {"symbol": symbol, "interval": interval_key, "limit": int(limit)}
     payload = _request_json(url, params=params, timeout=REQUEST_TIMEOUT)
 
     df = pd.DataFrame(
@@ -441,7 +561,9 @@ def get_klines(symbol: str, interval: str, limit: int = 220) -> pd.DataFrame:
     df[["open", "high", "low", "close", "volume"]] = df[["open", "high", "low", "close", "volume"]].astype(float)
     df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
     df["close_time"] = pd.to_datetime(df["close_time"], unit="ms", utc=True)
-    return df[["open_time", "close_time", "open", "high", "low", "close", "volume"]]
+    df = df[["open_time", "close_time", "open", "high", "low", "close", "volume"]]
+    _kline_cache.set(symbol, interval_key, limit, df)
+    return df
 
 
 def get_active_futures_symbols() -> List[str]:
@@ -753,12 +875,14 @@ async def scan_market_async(bot: Bot):
         "📡 Scanner iniciado — clasificación exclusiva por plan + ranking con normalized_score"
     )
     logger.info(
-        "⚙️ Scanner config | concurrency=%s | request_delay_env=%ss | effective_request_delay=%ss | force_request_delay=%s | fetch_5m=%s | kline_limits={'1h': %s, '15m': %s, '5m': %s}",
+        "⚙️ Scanner config | concurrency=%s | request_delay_env=%ss | effective_request_delay=%ss | force_request_delay=%s | fetch_5m=%s | htf_cache=%s | 5m_cache_seconds=%s | kline_limits={'1h': %s, '15m': %s, '5m': %s}",
         SCANNER_SYMBOL_CONCURRENCY,
         REQUEST_DELAY,
         EFFECTIVE_REQUEST_DELAY,
         SCANNER_FORCE_REQUEST_DELAY,
         SCANNER_FETCH_5M,
+        SCANNER_ENABLE_HTF_CACHE,
+        SCANNER_5M_CACHE_SECONDS,
         KLINE_LIMIT_1H,
         KLINE_LIMIT_15M,
         KLINE_LIMIT_5M,
@@ -769,6 +893,7 @@ async def scan_market_async(bot: Bot):
     while True:
         try:
             cycle_started_at = datetime.utcnow()
+            cache_stats_before = _kline_cache.snapshot()
             symbols = get_active_futures_symbols()
             candidates: List[Dict] = []
             reject_totals: Dict[str, int] = {}
@@ -792,15 +917,17 @@ async def scan_market_async(bot: Bot):
                         failure_samples.append(failure)
 
             cycle_duration = (datetime.utcnow() - cycle_started_at).total_seconds()
+            cache_stats = _kline_cache.delta(cache_stats_before)
 
             if failures and not candidates:
                 logger.warning(
-                    "📭 Sin oportunidades en este ciclo, pero hubo errores de scanner | cycle=%s symbols=%s failures=%s lag=n/a duration=%.3fs samples=%s",
+                    "📭 Sin oportunidades en este ciclo, pero hubo errores de scanner | cycle=%s symbols=%s failures=%s lag=n/a duration=%.3fs samples=%s | cache=%s",
                     cycle_number,
                     len(symbols),
                     failures,
                     cycle_duration,
                     failure_samples,
+                    cache_stats,
                 )
                 heartbeat(
                     "scanner",
@@ -813,6 +940,7 @@ async def scan_market_async(bot: Bot):
                         "failures": failures,
                         "failure_samples": failure_samples,
                         "duration_seconds": cycle_duration,
+                        "kline_cache": cache_stats,
                     },
                 )
                 cycle_number += 1
@@ -821,9 +949,10 @@ async def scan_market_async(bot: Bot):
 
             if not candidates:
                 logger.info(
-                    "📭 No hay oportunidades fuertes en este ciclo | duration=%.3fs | rejects=%s",
+                    "📭 No hay oportunidades fuertes en este ciclo | duration=%.3fs | rejects=%s | cache=%s",
                     cycle_duration,
                     _compact_rejects(reject_totals),
+                    cache_stats,
                 )
                 heartbeat(
                     "scanner",
@@ -838,6 +967,7 @@ async def scan_market_async(bot: Bot):
                         "cycle_started_at": cycle_started_at.isoformat(),
                         "duration_seconds": cycle_duration,
                         "rejects": reject_totals,
+                        "kline_cache": cache_stats,
                     },
                 )
                 cycle_number += 1
@@ -861,13 +991,14 @@ async def scan_market_async(bot: Bot):
             free_candidates = [c for c in candidates if _qualifies_for_free(c)]
 
             logger.info(
-                "📚 Candidatos | total=%s | premium=%s | plus=%s | free=%s | duration=%.3fs | rejects=%s",
+                "📚 Candidatos | total=%s | premium=%s | plus=%s | free=%s | duration=%.3fs | rejects=%s | cache=%s",
                 len(candidates),
                 len(premium_candidates),
                 len(plus_candidates),
                 len(free_candidates),
                 cycle_duration,
                 _compact_rejects(reject_totals),
+                cache_stats,
             )
 
             used_symbols: Set[str] = set()
@@ -930,6 +1061,7 @@ async def scan_market_async(bot: Bot):
                     "cycle_started_at": cycle_started_at.isoformat(),
                     "duration_seconds": cycle_duration,
                     "rejects": reject_totals,
+                    "kline_cache": cache_stats,
                 },
             )
             cycle_number += 1
