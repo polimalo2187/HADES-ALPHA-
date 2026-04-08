@@ -1,6 +1,8 @@
 # app/scanner.py
 
 import os
+import re
+import math
 import inspect
 import time
 import logging
@@ -48,6 +50,11 @@ SCANNER_FORCE_REQUEST_DELAY = str(os.getenv("SCANNER_FORCE_REQUEST_DELAY", "fals
 # 5M remains uncached by default because the live breakout/reset setup is decided there.
 SCANNER_ENABLE_HTF_CACHE = str(os.getenv("SCANNER_ENABLE_HTF_CACHE", "true")).strip().lower() in {"1", "true", "yes", "on"}
 SCANNER_5M_CACHE_SECONDS = max(0.0, float(os.getenv("SCANNER_5M_CACHE_SECONDS", "0")))
+SCANNER_HTF_STALE_GRACE_SECONDS = max(0.0, float(os.getenv("SCANNER_HTF_STALE_GRACE_SECONDS", "900")))
+ACTIVE_SYMBOLS_CACHE_SECONDS = max(10.0, float(os.getenv("ACTIVE_SYMBOLS_CACHE_SECONDS", "300")))
+SCANNER_BOOTSTRAP_BATCH_SIZE = max(0, int(os.getenv("SCANNER_BOOTSTRAP_BATCH_SIZE", "48")))
+SCANNER_15M_REFRESH_BATCH_SIZE = max(0, int(os.getenv("SCANNER_15M_REFRESH_BATCH_SIZE", "20")))
+SCANNER_1H_REFRESH_BATCH_SIZE = max(0, int(os.getenv("SCANNER_1H_REFRESH_BATCH_SIZE", "8")))
 
 # Optional: soft QPS limiter (token-bucket). Defaults are conservative to avoid Binance bans.
 SCANNER_MAX_REQUESTS_PER_SECOND = float(os.getenv("SCANNER_MAX_REQUESTS_PER_SECOND", "8"))
@@ -345,15 +352,10 @@ def _apply_close_market_execution(result: Dict, current_price: float) -> Optiona
 def build_symbol_candidate(symbol: str, df_1h: pd.DataFrame, df_15m: pd.DataFrame, df_5m: Optional[pd.DataFrame], *, debug_counts: Optional[Dict[str, int]] = None) -> Optional[Dict]:
     closed_1h = _closed_timeframe_frame(df_1h)
     closed_15m = _closed_timeframe_frame(df_15m)
-    closed_5m = _closed_timeframe_frame(df_5m) if df_5m is not None else None
     reference_price = None
     try:
         if df_5m is not None and len(df_5m) > 0:
-            # El precio de referencia puede ser el snapshot más fresco, pero la
-            # estructura del setup debe evaluarse sobre velas 5M ya cerradas.
             reference_price = float(df_5m.iloc[-1]["close"])
-        elif closed_5m is not None and len(closed_5m) > 0:
-            reference_price = float(closed_5m.iloc[-1]["close"])
         elif not closed_15m.empty:
             reference_price = float(closed_15m.iloc[-1]["close"])
     except Exception:
@@ -362,7 +364,7 @@ def build_symbol_candidate(symbol: str, df_1h: pd.DataFrame, df_15m: pd.DataFram
     strategy_kwargs = _strategy_call_kwargs(
         df_1h=closed_1h,
         df_15m=closed_15m,
-        df_5m=closed_5m,
+        df_5m=df_5m,
         reference_market_price=reference_price,
         debug_counts=debug_counts,
     )
@@ -378,6 +380,140 @@ def build_symbol_candidate(symbol: str, df_1h: pd.DataFrame, df_15m: pd.DataFram
     return _build_candidate(symbol, result, price_for_candidate)
 
 
+class ActiveSymbolsCache:
+    def __init__(self):
+        self._symbols: List[str] = []
+        self._fetched_at: float = 0.0
+        self._lock = threading.Lock()
+        self._stats = {"hits": 0, "misses": 0, "stores": 0, "stale_hits": 0}
+
+    def clear(self) -> None:
+        with self._lock:
+            self._symbols = []
+            self._fetched_at = 0.0
+            for key in list(self._stats.keys()):
+                self._stats[key] = 0
+
+    def get(self, *, allow_stale: bool = False) -> Optional[List[str]]:
+        now_ts = _now_ts()
+        with self._lock:
+            if not self._symbols:
+                self._stats["misses"] += 1
+                return None
+            age = now_ts - self._fetched_at
+            if age <= ACTIVE_SYMBOLS_CACHE_SECONDS:
+                self._stats["hits"] += 1
+                return list(self._symbols)
+            if allow_stale:
+                self._stats["stale_hits"] += 1
+                return list(self._symbols)
+            self._stats["misses"] += 1
+            return None
+
+    def set(self, symbols: List[str]) -> None:
+        with self._lock:
+            self._symbols = list(symbols)
+            self._fetched_at = _now_ts()
+            self._stats["stores"] += 1
+
+    def snapshot(self) -> Dict[str, int]:
+        with self._lock:
+            snap = dict(self._stats)
+            snap["count"] = len(self._symbols)
+            return snap
+
+
+class BinanceRateLimitedError(RuntimeError):
+    def __init__(self, status_code: int, body: str, *, banned_until_ts: Optional[float] = None, retry_after_seconds: Optional[float] = None):
+        self.status_code = int(status_code)
+        self.body = str(body or "")
+        self.banned_until_ts = banned_until_ts
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(f"binance_rate_limited status={self.status_code} body={self.body[:120]}")
+
+
+class BinanceCooldownActiveError(RuntimeError):
+    def __init__(self, remaining_seconds: float, reason: str = ""):
+        self.remaining_seconds = max(0.0, float(remaining_seconds))
+        self.reason = str(reason or "")
+        super().__init__(f"binance_cooldown_active remaining={self.remaining_seconds:.1f}s reason={self.reason[:120]}")
+
+
+class BinanceRequestGate:
+    def __init__(self):
+        self._blocked_until = 0.0
+        self._reason = ""
+        self._lock = threading.Lock()
+
+    def clear(self) -> None:
+        with self._lock:
+            self._blocked_until = 0.0
+            self._reason = ""
+
+    def activate_until(self, until_ts: float, reason: str = "") -> None:
+        blocked_until = max(0.0, float(until_ts))
+        with self._lock:
+            if blocked_until > self._blocked_until:
+                self._blocked_until = blocked_until
+                self._reason = str(reason or self._reason)
+
+    def activate_for(self, seconds: float, reason: str = "") -> None:
+        self.activate_until(_now_ts() + max(0.0, float(seconds)), reason=reason)
+
+    def remaining_seconds(self) -> float:
+        with self._lock:
+            return max(0.0, self._blocked_until - _now_ts())
+
+    def reason(self) -> str:
+        with self._lock:
+            return self._reason
+
+    def ensure_ready(self) -> None:
+        remaining = self.remaining_seconds()
+        if remaining > 0.0:
+            raise BinanceCooldownActiveError(remaining, self.reason())
+
+
+def _parse_binance_ban_until(body: str) -> Optional[float]:
+    match = re.search(r"banned until\s+(\d{10,})", str(body or ""))
+    if not match:
+        return None
+    raw_value = match.group(1)
+    value = float(raw_value)
+    if value > 10_000_000_000:
+        value = value / 1000.0
+    return value
+
+
+def _bootstrap_total_cycles(symbol_count: int) -> int:
+    if SCANNER_BOOTSTRAP_BATCH_SIZE <= 0 or symbol_count <= 0:
+        return 0
+    return int(math.ceil(float(symbol_count) / float(SCANNER_BOOTSTRAP_BATCH_SIZE)))
+
+
+def _select_symbols_for_cycle(symbols: List[str], cycle_number: int) -> Tuple[List[str], bool]:
+    symbol_count = len(symbols)
+    total_cycles = _bootstrap_total_cycles(symbol_count)
+    if total_cycles <= 0 or cycle_number >= total_cycles:
+        return list(symbols), False
+    start = cycle_number * SCANNER_BOOTSTRAP_BATCH_SIZE
+    end = min(symbol_count, start + SCANNER_BOOTSTRAP_BATCH_SIZE)
+    return list(symbols[start:end]), True
+
+
+def _rotating_refresh_subset(symbols: List[str], batch_size: int, cycle_number: int) -> Set[str]:
+    symbol_count = len(symbols)
+    if batch_size <= 0 or symbol_count <= 0:
+        return set()
+    if batch_size >= symbol_count:
+        return set(symbols)
+    start = (cycle_number * batch_size) % symbol_count
+    selected: List[str] = []
+    for offset in range(batch_size):
+        selected.append(symbols[(start + offset) % symbol_count])
+    return set(selected)
+
+
 class TimeframeKlineCache:
     def __init__(self):
         self._entries: Dict[Tuple[str, str, int], Dict] = {}
@@ -388,6 +524,7 @@ class TimeframeKlineCache:
             "stores": 0,
             "bypasses": 0,
             "evictions": 0,
+            "stale_hits": 0,
         }
 
     def clear(self) -> None:
@@ -407,7 +544,7 @@ class TimeframeKlineCache:
         keys = set(after) | set(before or {})
         return {key: int(after.get(key, 0)) - int((before or {}).get(key, 0)) for key in keys}
 
-    def get(self, symbol: str, interval: str, limit: int) -> Optional[pd.DataFrame]:
+    def get(self, symbol: str, interval: str, limit: int, *, allow_stale: bool = False, stale_grace_seconds: float = 0.0) -> Optional[pd.DataFrame]:
         interval_key = str(interval or "").strip().lower()
         if not _cache_enabled_for_interval(interval_key):
             with self._lock:
@@ -424,6 +561,10 @@ class TimeframeKlineCache:
                 current_bucket = _timeframe_bucket_id(interval_key, now_ts=now_ts)
                 if entry.get("bucket_id") == current_bucket:
                     self._stats["hits"] += 1
+                    return entry["df"].copy(deep=False)
+                age = now_ts - float(entry.get("fetched_at", now_ts))
+                if allow_stale and age <= max(0.0, float(stale_grace_seconds)):
+                    self._stats["stale_hits"] += 1
                     return entry["df"].copy(deep=False)
                 self._entries.pop(key, None)
                 self._stats["evictions"] += 1
@@ -474,6 +615,8 @@ class RateLimiter:
 
 rate_limiter = RateLimiter(EFFECTIVE_REQUEST_DELAY)
 _kline_cache = TimeframeKlineCache()
+_active_symbols_cache = ActiveSymbolsCache()
+_request_gate = BinanceRequestGate()
 
 
 class TokenBucket:
@@ -514,31 +657,48 @@ _token_bucket = TokenBucket(SCANNER_MAX_REQUESTS_PER_SECOND, SCANNER_MAX_BURST)
 
 def _request_json(url: str, *, params: dict | None = None, timeout: int = REQUEST_TIMEOUT):
     """Requests wrapper with retries + rate limiting."""
+    _request_gate.ensure_ready()
     last_exc: Exception | None = None
     for attempt in range(REQUEST_MAX_RETRIES):
         try:
+            _request_gate.ensure_ready()
             _token_bucket.acquire(1.0)
             rate_limiter.wait()
             resp = requests.get(url, params=params, timeout=timeout)
             if resp.status_code in (418, 429):
-                raise RuntimeError(f"binance_rate_limited status={resp.status_code} body={resp.text[:120]}")
+                body = str(resp.text or "")
+                if resp.status_code == 418:
+                    banned_until_ts = _parse_binance_ban_until(body)
+                    if banned_until_ts is not None:
+                        _request_gate.activate_until(banned_until_ts, reason=body)
+                    else:
+                        _request_gate.activate_for(300.0, reason=body)
+                    raise BinanceRateLimitedError(resp.status_code, body, banned_until_ts=banned_until_ts)
+                retry_after_header = resp.headers.get("Retry-After") if getattr(resp, "headers", None) else None
+                try:
+                    retry_after_seconds = float(retry_after_header) if retry_after_header is not None else 60.0
+                except Exception:
+                    retry_after_seconds = 60.0
+                _request_gate.activate_for(retry_after_seconds, reason=body)
+                raise BinanceRateLimitedError(resp.status_code, body, retry_after_seconds=retry_after_seconds)
             if 500 <= resp.status_code < 600:
                 raise RuntimeError(f"binance_5xx status={resp.status_code} body={resp.text[:120]}")
             resp.raise_for_status()
             return resp.json()
+        except (BinanceRateLimitedError, BinanceCooldownActiveError):
+            raise
         except Exception as exc:
             last_exc = exc
             sleep_s = min(8.0, REQUEST_RETRY_BASE_SLEEP * (2 ** attempt))
-            # tiny jitter to reduce lockstep retries
             sleep_s = sleep_s + (0.05 * (attempt + 1))
             time.sleep(sleep_s)
     raise last_exc or RuntimeError('request_failed')
 
 
 
-def get_klines(symbol: str, interval: str, limit: int = 220) -> pd.DataFrame:
+def get_klines(symbol: str, interval: str, limit: int = 220, *, allow_stale: bool = False, stale_grace_seconds: float = 0.0) -> pd.DataFrame:
     interval_key = str(interval or "").strip().lower()
-    cached = _kline_cache.get(symbol, interval_key, limit)
+    cached = _kline_cache.get(symbol, interval_key, limit, allow_stale=allow_stale, stale_grace_seconds=stale_grace_seconds)
     if cached is not None:
         return cached
 
@@ -571,9 +731,21 @@ def get_klines(symbol: str, interval: str, limit: int = 220) -> pd.DataFrame:
     return df
 
 
-def get_active_futures_symbols() -> List[str]:
+def get_active_futures_symbols(*, allow_stale_on_error: bool = True) -> List[str]:
+    cached = _active_symbols_cache.get()
+    if cached is not None:
+        return cached
+
     url = f"{BINANCE_FUTURES_API}/fapi/v1/ticker/24hr"
-    payload = _request_json(url, timeout=REQUEST_TIMEOUT)
+    try:
+        payload = _request_json(url, timeout=REQUEST_TIMEOUT)
+    except (BinanceRateLimitedError, BinanceCooldownActiveError):
+        if allow_stale_on_error:
+            stale = _active_symbols_cache.get(allow_stale=True)
+            if stale is not None:
+                logger.warning("⚠️ Usando cache stale de símbolos activos por cooldown/rate-limit")
+                return stale
+        raise
 
     symbols = [
         item["symbol"]
@@ -581,6 +753,7 @@ def get_active_futures_symbols() -> List[str]:
         if str(item.get("symbol", "")).endswith("USDT")
         and float(item.get("quoteVolume", 0.0) or 0.0) >= MIN_QUOTE_VOLUME
     ]
+    _active_symbols_cache.set(symbols)
     logger.info("📊 %s símbolos activos con volumen suficiente", len(symbols))
     return symbols
 
@@ -863,11 +1036,23 @@ def _extract_failure_reason(local: Dict[str, int]) -> Optional[str]:
     return max(local.items(), key=lambda item: item[1])[0]
 
 
-def _process_symbol(symbol: str) -> Tuple[Optional[Dict], Dict[str, int], Optional[str]]:
+def _process_symbol(symbol: str, *, refresh_15m: bool = False, refresh_1h: bool = False) -> Tuple[Optional[Dict], Dict[str, int], Optional[str]]:
     local_debug: Dict[str, int] = {}
     try:
-        df_1h = get_klines(symbol, "1h", limit=KLINE_LIMIT_1H)
-        df_15m = get_klines(symbol, "15m", limit=KLINE_LIMIT_15M)
+        df_1h = get_klines(
+            symbol,
+            "1h",
+            limit=KLINE_LIMIT_1H,
+            allow_stale=not refresh_1h,
+            stale_grace_seconds=SCANNER_HTF_STALE_GRACE_SECONDS,
+        )
+        df_15m = get_klines(
+            symbol,
+            "15m",
+            limit=KLINE_LIMIT_15M,
+            allow_stale=not refresh_15m,
+            stale_grace_seconds=SCANNER_HTF_STALE_GRACE_SECONDS,
+        )
         df_5m = get_klines(symbol, "5m", limit=KLINE_LIMIT_5M) if SCANNER_FETCH_5M else None
         candidate = build_symbol_candidate(symbol, df_1h, df_15m, df_5m, debug_counts=local_debug)
         return candidate, local_debug, None
@@ -880,7 +1065,7 @@ async def scan_market_async(bot: Bot):
         "📡 Scanner iniciado — clasificación exclusiva por plan + ranking con normalized_score"
     )
     logger.info(
-        "⚙️ Scanner config | concurrency=%s | request_delay_env=%ss | effective_request_delay=%ss | force_request_delay=%s | fetch_5m=%s | htf_cache=%s | 5m_cache_seconds=%s | kline_limits={'1h': %s, '15m': %s, '5m': %s}",
+        "⚙️ Scanner config | concurrency=%s | request_delay_env=%ss | effective_request_delay=%ss | force_request_delay=%s | fetch_5m=%s | htf_cache=%s | 5m_cache_seconds=%s | htf_stale_grace=%ss | symbol_cache=%ss | bootstrap_batch=%s | 15m_refresh_batch=%s | 1h_refresh_batch=%s | kline_limits={'1h': %s, '15m': %s, '5m': %s}",
         SCANNER_SYMBOL_CONCURRENCY,
         REQUEST_DELAY,
         EFFECTIVE_REQUEST_DELAY,
@@ -888,6 +1073,11 @@ async def scan_market_async(bot: Bot):
         SCANNER_FETCH_5M,
         SCANNER_ENABLE_HTF_CACHE,
         SCANNER_5M_CACHE_SECONDS,
+        SCANNER_HTF_STALE_GRACE_SECONDS,
+        ACTIVE_SYMBOLS_CACHE_SECONDS,
+        SCANNER_BOOTSTRAP_BATCH_SIZE,
+        SCANNER_15M_REFRESH_BATCH_SIZE,
+        SCANNER_1H_REFRESH_BATCH_SIZE,
         KLINE_LIMIT_1H,
         KLINE_LIMIT_15M,
         KLINE_LIMIT_5M,
@@ -897,9 +1087,21 @@ async def scan_market_async(bot: Bot):
 
     while True:
         try:
+            cooldown_remaining = _request_gate.remaining_seconds()
+            if cooldown_remaining > 0.0:
+                wait_seconds = min(max(1.0, cooldown_remaining + 1.0), 900.0)
+                logger.warning("⏸️ Scanner en cooldown por rate-limit Binance | remaining=%.1fs | reason=%s", cooldown_remaining, _request_gate.reason()[:160])
+                heartbeat("scanner", status="warn", details={"cooldown_seconds": cooldown_remaining, "reason": _request_gate.reason()[:200]})
+                await asyncio.sleep(wait_seconds)
+                continue
+
             cycle_started_at = datetime.utcnow()
             cache_stats_before = _kline_cache.snapshot()
             symbols = get_active_futures_symbols()
+            symbols_for_cycle, bootstrap_mode = _select_symbols_for_cycle(symbols, cycle_number)
+            refresh_15m_symbols = _rotating_refresh_subset(symbols_for_cycle if bootstrap_mode else symbols, SCANNER_15M_REFRESH_BATCH_SIZE, cycle_number)
+            refresh_1h_symbols = _rotating_refresh_subset(symbols_for_cycle if bootstrap_mode else symbols, SCANNER_1H_REFRESH_BATCH_SIZE, cycle_number)
+            active_symbols = symbols_for_cycle if bootstrap_mode else symbols
             candidates: List[Dict] = []
             reject_totals: Dict[str, int] = {}
             failures = 0
@@ -908,9 +1110,14 @@ async def scan_market_async(bot: Bot):
 
             async def _run(symbol: str):
                 async with semaphore:
-                    return await asyncio.to_thread(_process_symbol, symbol)
+                    return await asyncio.to_thread(
+                        _process_symbol,
+                        symbol,
+                        refresh_15m=(symbol in refresh_15m_symbols),
+                        refresh_1h=(symbol in refresh_1h_symbols),
+                    )
 
-            results = await asyncio.gather(*[_run(symbol) for symbol in symbols])
+            results = await asyncio.gather(*[_run(symbol) for symbol in active_symbols])
             for candidate, local_debug, failure in results:
                 if candidate:
                     candidates.append(candidate)
@@ -928,7 +1135,7 @@ async def scan_market_async(bot: Bot):
                 logger.warning(
                     "📭 Sin oportunidades en este ciclo, pero hubo errores de scanner | cycle=%s symbols=%s failures=%s lag=n/a duration=%.3fs samples=%s | cache=%s",
                     cycle_number,
-                    len(symbols),
+                    len(active_symbols),
                     failures,
                     cycle_duration,
                     failure_samples,
@@ -939,13 +1146,16 @@ async def scan_market_async(bot: Bot):
                     status="warn",
                     details={
                         "cycle": cycle_number,
-                        "symbols": len(symbols),
+                        "symbols": len(active_symbols),
                         "candidates": 0,
                         "selected": 0,
                         "failures": failures,
                         "failure_samples": failure_samples,
                         "duration_seconds": cycle_duration,
                         "kline_cache": cache_stats,
+                        "bootstrap_mode": bootstrap_mode,
+                        "universe_symbols": len(symbols),
+                        "active_symbols": len(active_symbols),
                     },
                 )
                 cycle_number += 1
@@ -964,7 +1174,7 @@ async def scan_market_async(bot: Bot):
                     status="ok",
                     details={
                         "cycle": cycle_number,
-                        "symbols": len(symbols),
+                        "symbols": len(active_symbols),
                         "candidates": 0,
                         "selected": 0,
                         "failures": failures,
@@ -973,6 +1183,9 @@ async def scan_market_async(bot: Bot):
                         "duration_seconds": cycle_duration,
                         "rejects": reject_totals,
                         "kline_cache": cache_stats,
+                        "bootstrap_mode": bootstrap_mode,
+                        "universe_symbols": len(symbols),
+                        "active_symbols": len(active_symbols),
                     },
                 )
                 cycle_number += 1
@@ -996,12 +1209,15 @@ async def scan_market_async(bot: Bot):
             free_candidates = [c for c in candidates if _qualifies_for_free(c)]
 
             logger.info(
-                "📚 Candidatos | total=%s | premium=%s | plus=%s | free=%s | duration=%.3fs | rejects=%s | cache=%s",
+                "📚 Candidatos | total=%s | premium=%s | plus=%s | free=%s | duration=%.3fs | bootstrap=%s active=%s universe=%s | rejects=%s | cache=%s",
                 len(candidates),
                 len(premium_candidates),
                 len(plus_candidates),
                 len(free_candidates),
                 cycle_duration,
+                bootstrap_mode,
+                len(active_symbols),
+                len(symbols),
                 _compact_rejects(reject_totals),
                 cache_stats,
             )
@@ -1072,6 +1288,12 @@ async def scan_market_async(bot: Bot):
             cycle_number += 1
             await asyncio.sleep(max(0.0, SCAN_INTERVAL_SECONDS - cycle_duration))
 
+        except (BinanceRateLimitedError, BinanceCooldownActiveError) as exc:
+            remaining = _request_gate.remaining_seconds()
+            wait_seconds = min(max(1.0, remaining + 1.0 if remaining > 0.0 else 60.0), 900.0)
+            heartbeat("scanner", status="warn", details={"error": str(exc), "cycle": cycle_number, "cooldown_seconds": remaining})
+            logger.warning("⏸️ Scanner pausado por rate-limit Binance | wait=%.1fs | error=%s", wait_seconds, exc)
+            await asyncio.sleep(wait_seconds)
         except Exception as exc:
             heartbeat("scanner", status="error", details={"error": str(exc), "cycle": cycle_number})
             logger.error("❌ Error crítico en scanner", exc_info=True)
