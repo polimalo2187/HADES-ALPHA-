@@ -93,7 +93,7 @@ if KLINE_LIMIT_1H < _MIN_HTF_BARS:
 EFFECTIVE_REQUEST_DELAY = REQUEST_DELAY if SCANNER_FORCE_REQUEST_DELAY else 0.0
 
 # Thresholds basados en raw_score real.
-PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "80"))
+PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "84"))
 PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "74"))
 FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "66"))
 
