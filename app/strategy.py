@@ -4,7 +4,55 @@ from typing import Optional, Dict, Tuple, List
 
 import math
 import pandas as pd
-import ta
+
+try:
+    import ta  # type: ignore
+except Exception:  # pragma: no cover - fallback for constrained runtimes/tests
+    class _FallbackTrend:
+        @staticmethod
+        def ema_indicator(series: pd.Series, window: int) -> pd.Series:
+            return series.ewm(span=window, adjust=False, min_periods=window).mean()
+
+        @staticmethod
+        def adx(high: pd.Series, low: pd.Series, close: pd.Series, window: int) -> pd.Series:
+            high = high.astype(float)
+            low = low.astype(float)
+            close = close.astype(float)
+            up_move = high.diff()
+            down_move = -low.diff()
+            plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+            minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+            prev_close = close.shift(1)
+            tr = pd.concat([
+                (high - low).abs(),
+                (high - prev_close).abs(),
+                (low - prev_close).abs(),
+            ], axis=1).max(axis=1)
+            atr = tr.ewm(alpha=1 / max(window, 1), adjust=False, min_periods=window).mean()
+            plus_di = 100 * (plus_dm.ewm(alpha=1 / max(window, 1), adjust=False, min_periods=window).mean() / atr.replace(0, pd.NA))
+            minus_di = 100 * (minus_dm.ewm(alpha=1 / max(window, 1), adjust=False, min_periods=window).mean() / atr.replace(0, pd.NA))
+            dx = ((plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, pd.NA)) * 100
+            return dx.ewm(alpha=1 / max(window, 1), adjust=False, min_periods=window).mean().fillna(0.0)
+
+    class _FallbackVolatility:
+        @staticmethod
+        def average_true_range(high: pd.Series, low: pd.Series, close: pd.Series, window: int) -> pd.Series:
+            high = high.astype(float)
+            low = low.astype(float)
+            close = close.astype(float)
+            prev_close = close.shift(1)
+            tr = pd.concat([
+                (high - low).abs(),
+                (high - prev_close).abs(),
+                (low - prev_close).abs(),
+            ], axis=1).max(axis=1)
+            return tr.ewm(alpha=1 / max(window, 1), adjust=False, min_periods=window).mean()
+
+    class _FallbackTA:
+        trend = _FallbackTrend()
+        volatility = _FallbackVolatility()
+
+    ta = _FallbackTA()
 
 # =======================================
 # CONFIGURACIÓN BASE
@@ -20,9 +68,9 @@ BREAKOUT_LOOKBACK = 24
 
 MAX_SCORE = 100.0
 FREE_NORMALIZATION_PENALTY = 6.0
-SCORE_CALIBRATION_VERSION = "v2_2_breakout_reset_pending_entry"
-ENTRY_MODEL_NAME = "breakout_reset_retest_pending_v1"
-SETUP_STAGE_RESET_CONFIRMED_WAITING_ENTRY = "reset_confirmed_waiting_entry"
+SCORE_CALIBRATION_VERSION = "v3_breakout_reset_prereset_anticipation"
+ENTRY_MODEL_NAME = "breakout_reset_prereset_anticipatory_v2"
+SETUP_STAGE_PRE_RESET_WAITING_RETEST = "pre_reset_waiting_retest"
 SEND_MODE_PENDING_ENTRY = "entry_zone_pending"
 
 
@@ -50,9 +98,10 @@ SHARED_PROFILE = {
     "adx_min": 17.8,
     "atr_pct_min": 0.0026,
     "atr_pct_max": 0.0121,
-    "retest_tol_atr": 0.44,
     "min_body_ratio_breakout": 0.32,
     "min_body_ratio_continuation": 0.24,
+    "min_extension_atr": 0.18,
+    "max_extension_atr": 0.86,
 }
 
 FREE_PROFILE = {
@@ -60,9 +109,10 @@ FREE_PROFILE = {
     "adx_min": 16.0,
     "atr_pct_min": 0.0022,
     "atr_pct_max": 0.0136,
-    "retest_tol_atr": 0.58,
     "min_body_ratio_breakout": 0.24,
     "min_body_ratio_continuation": 0.18,
+    "min_extension_atr": 0.14,
+    "max_extension_atr": 0.96,
     "score": 76.0,
 }
 
@@ -78,9 +128,10 @@ PREMIUM_PROFILE = {
     "adx_min": 18.8,
     "atr_pct_min": 0.0028,
     "atr_pct_max": 0.0116,
-    "retest_tol_atr": 0.40,
     "min_body_ratio_breakout": 0.35,
     "min_body_ratio_continuation": 0.26,
+    "min_extension_atr": 0.22,
+    "max_extension_atr": 0.74,
     "score": 90.0,
 }
 
@@ -346,16 +397,32 @@ def _volume_score(last: pd.Series) -> float:
 
 
 
-def _confirm_breakout_retest(df: pd.DataFrame, direction: str, profile: Dict) -> Tuple[bool, Dict[str, float]]:
+def _confirm_breakout_prereset(
+    df: pd.DataFrame,
+    direction: str,
+    profile: Dict,
+    reference_market_price: Optional[float],
+) -> Tuple[bool, Dict[str, float]]:
+    """
+    Detecta un breakout ya confirmado y una extensión suficiente para ANTICIPAR
+    el reset futuro.
+
+    No buscamos la vela que ya hizo el retest. Buscamos exactamente lo contrario:
+    una estructura que ya rompió y se alejó del nivel, pero que todavía no ha vuelto
+    a tocar la zona donde esperamos el reset.
+    """
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
     level = breakout_level(df, direction)
     atr = float(last["atr"])
-    tol_atr = float(profile["retest_tol_atr"])
+    current_price = float(reference_market_price or last["close"] or 0.0)
 
-    if atr <= 0:
+    if atr <= 0 or current_price <= 0:
         return False, {}
+
+    min_ext = float(profile.get("min_extension_atr", 0.15))
+    max_ext = float(profile.get("max_extension_atr", 0.95))
 
     if direction == "LONG":
         breakout_ok = (
@@ -363,37 +430,43 @@ def _confirm_breakout_retest(df: pd.DataFrame, direction: str, profile: Dict) ->
             and float(prev["high"]) > level
             and float(prev["body_ratio"]) >= float(profile["min_body_ratio_breakout"])
         )
-        retest_distance = max(0.0, float(last["low"]) - level)
-        retest_ok = (
-            float(last["low"]) <= level + (atr * tol_atr)
-            and float(last["close"]) >= level
+        continuation_ok = (
+            float(last["close"]) > float(last["open"])
+            and float(last["close"]) > level
+            and float(last["body_ratio"]) >= float(profile["min_body_ratio_continuation"])
         )
-        overshoot = max(0.0, float(prev["close"]) - level)
+        no_reset_yet = float(last["low"]) > level
+        extension_atr = max(0.0, current_price - level) / atr
+        overshoot_atr = max(0.0, float(prev["close"]) - level) / atr
     else:
         breakout_ok = (
             float(prev["close"]) < level
             and float(prev["low"]) < level
             and float(prev["body_ratio"]) >= float(profile["min_body_ratio_breakout"])
         )
-        retest_distance = max(0.0, level - float(last["high"]))
-        retest_ok = (
-            float(last["high"]) >= level - (atr * tol_atr)
-            and float(last["close"]) <= level
+        continuation_ok = (
+            float(last["close"]) < float(last["open"])
+            and float(last["close"]) < level
+            and float(last["body_ratio"]) >= float(profile["min_body_ratio_continuation"])
         )
-        overshoot = max(0.0, level - float(prev["close"]))
+        no_reset_yet = float(last["high"]) < level
+        extension_atr = max(0.0, level - current_price) / atr
+        overshoot_atr = max(0.0, level - float(prev["close"])) / atr
 
-    if not breakout_ok or not retest_ok:
+    if not breakout_ok or not continuation_ok or not no_reset_yet:
         return False, {}
 
-    overshoot_atr = overshoot / atr if atr > 0 else 0.0
-    retest_distance_atr = abs(retest_distance) / atr if atr > 0 else 0.0
+    if extension_atr < min_ext or extension_atr > max_ext:
+        return False, {}
 
     quality = {
         "level": float(level),
         "breakout_body_ratio": float(prev["body_ratio"]),
         "continuation_body_ratio": float(last["body_ratio"]),
+        "extension_atr": float(extension_atr),
         "overshoot_atr": float(overshoot_atr),
-        "retest_distance_atr": float(retest_distance_atr),
+        "reference_price": float(current_price),
+        "pre_reset_space_atr": float(abs(float(last["low"]) - level) / atr) if direction == "LONG" else float(abs(level - float(last["high"])) / atr),
     }
     return True, quality
 
@@ -433,10 +506,16 @@ def _breakout_score(quality: Dict[str, float], profile: Dict) -> float:
 
 
 def _retest_score(quality: Dict[str, float], profile: Dict) -> float:
-    retest_dist = quality["retest_distance_atr"]
-    tol = float(profile["retest_tol_atr"])
-    retest_quality = _clamp(1.0 - (retest_dist / max(tol, 1e-9)), 0.0, 1.0)
-    return retest_quality * 16.0
+    extension_atr = float(quality.get("extension_atr", 0.0) or 0.0)
+    min_ext = float(profile.get("min_extension_atr", 0.15))
+    max_ext = float(profile.get("max_extension_atr", 0.95))
+    if max_ext <= min_ext:
+        return 0.0
+
+    ideal = min_ext + ((max_ext - min_ext) * 0.35)
+    span = max((max_ext - min_ext) * 0.85, 1e-9)
+    quality_score = _clamp(1.0 - (abs(extension_atr - ideal) / span), 0.0, 1.0)
+    return quality_score * 16.0
 
 
 
@@ -453,12 +532,12 @@ def _entry_freshness_score(level: float, close_price: float, atr: float) -> floa
         return 0.0
 
     extension_atr = abs(close_price - level) / atr
-
-    # Cerca del nivel = más fresco. Muy extendido penaliza.
-    if extension_atr <= 0.25:
+    if extension_atr <= 0.18:
+        quality = 0.6
+    elif extension_atr <= 0.60:
         quality = 1.0
-    elif extension_atr <= 0.90:
-        quality = 1.0 - ((extension_atr - 0.25) / 0.65)
+    elif extension_atr <= 0.95:
+        quality = 1.0 - ((extension_atr - 0.60) / 0.35)
     else:
         quality = 0.0
 
@@ -468,27 +547,11 @@ def _entry_freshness_score(level: float, close_price: float, atr: float) -> floa
 
 def _reset_entry_price(level: float, last: pd.Series, direction: str) -> float:
     """
-    Entry model for breakout + reset.
-
-    We send the alert after the reset candle is confirmed, but the operational
-    entry must stay close to the reclaimed breakout level. That keeps the signal
-    consistent with a retest entry instead of chasing the close.
+    Modelo predictivo de entrada: la señal se envía ANTES del reset, así que la
+    entrada debe permanecer anclada al nivel reclamado, no al precio actual.
     """
-    close_price = float(last["close"])
-    atr = max(float(last["atr"]), 1e-9)
-
-    if direction == "LONG":
-        reset_extreme = float(last["low"])
-        reclaim_distance = max(0.0, reset_extreme - level)
-        entry = level + min(reclaim_distance * 0.35, atr * 0.18)
-        entry = min(entry, close_price)
-    else:
-        reset_extreme = float(last["high"])
-        reclaim_distance = max(0.0, level - reset_extreme)
-        entry = level - min(reclaim_distance * 0.35, atr * 0.18)
-        entry = max(entry, close_price)
-
-    return round(float(entry), 8)
+    del last, direction
+    return round(float(level), 8)
 
 
 
@@ -536,7 +599,7 @@ def _build_score_components(
     volume_points = _volume_score(last)
     entry_points = _entry_freshness_score(
         quality["level"],
-        float(last["close"]),
+        float(quality.get("reference_price") or last["close"]),
         float(last["atr"]),
     )
 
@@ -606,6 +669,7 @@ def _evaluate_profile(
     profile: Dict,
     df_15m: Optional[pd.DataFrame] = None,
     df_1h: Optional[pd.DataFrame] = None,
+    reference_market_price: Optional[float] = None,
     debug_counts: Optional[Dict[str, int]] = None,
 ) -> Optional[Dict]:
     last = df.iloc[-1]
@@ -636,7 +700,12 @@ def _evaluate_profile(
         _record_reject(debug_counts, "atr_pct")
         return None
 
-    breakout_ok, quality = _confirm_breakout_retest(df, direction, profile)
+    breakout_ok, quality = _confirm_breakout_prereset(
+        df,
+        direction,
+        profile,
+        reference_market_price=reference_market_price,
+    )
     if not breakout_ok:
         _record_reject(debug_counts, "breakout_retest")
         return None
@@ -646,10 +715,10 @@ def _evaluate_profile(
         return None
 
     level = float(quality["level"])
-    close_price = float(last["close"])
+    close_price = float(quality.get("reference_price") or last["close"])
 
-    # Breakout + reset real: la entrada debe quedar anclada al nivel reclamado,
-    # no perseguir el cierre de confirmación.
+    # Breakout + reset anticipado: la entrada queda fijada donde esperamos que
+    # ocurra el retroceso, no en el precio actual de extensión.
     entry_price = _reset_entry_price(level, last, direction)
     trade_profiles = _build_trade_profiles(entry_price, direction)
 
@@ -677,11 +746,12 @@ def _evaluate_profile(
         "score_calibration": SCORE_CALIBRATION_VERSION,
         "higher_tf_context": higher_tf_context,
         "send_mode": SEND_MODE_PENDING_ENTRY,
-        "setup_stage": SETUP_STAGE_RESET_CONFIRMED_WAITING_ENTRY,
+        "setup_stage": SETUP_STAGE_PRE_RESET_WAITING_RETEST,
         "entry_model": ENTRY_MODEL_NAME,
         "entry_model_price": round(float(entry_price), 8),
         "reset_level": round(float(level), 8),
         "reset_close_price": round(float(close_price), 8),
+        "signal_reference_price": round(float(close_price), 8),
     }
 
 
@@ -697,8 +767,6 @@ def mtf_strategy(
     reference_market_price: Optional[float] = None,
     debug_counts: Optional[Dict[str, int]] = None,
 ) -> Optional[Dict]:
-    del reference_market_price  # Adaptación mínima: el scanner puede pasarlo, esta estrategia no lo usa.
-
     # Mantenemos la firma para no romper el scanner actual.
     # La lógica operativa final vive en 5M.
     required_bars = _required_history_bars()
@@ -719,7 +787,7 @@ def mtf_strategy(
         return None
 
     # 1) PREMIUM primero: misma estrategia, pero con puertas algo más altas que PLUS.
-    premium_result = _evaluate_profile(df, PREMIUM_PROFILE, df_15m=df_15m, df_1h=df_1h, debug_counts=debug_counts)
+    premium_result = _evaluate_profile(df, PREMIUM_PROFILE, df_15m=df_15m, df_1h=df_1h, reference_market_price=reference_market_price, debug_counts=debug_counts)
     if premium_result:
         return {
             "direction": premium_result["direction"],
@@ -745,10 +813,11 @@ def mtf_strategy(
             "entry_model_price": premium_result["entry_model_price"],
             "reset_level": premium_result["reset_level"],
             "reset_close_price": premium_result["reset_close_price"],
+            "signal_reference_price": premium_result.get("signal_reference_price"),
         }
 
     # 2) PLUS después: sigue siendo setup bueno, pero algo menos exigente que PREMIUM.
-    plus_result = _evaluate_profile(df, PLUS_PROFILE, df_15m=df_15m, df_1h=df_1h, debug_counts=debug_counts)
+    plus_result = _evaluate_profile(df, PLUS_PROFILE, df_15m=df_15m, df_1h=df_1h, reference_market_price=reference_market_price, debug_counts=debug_counts)
     if plus_result:
         return {
             "direction": plus_result["direction"],
@@ -774,10 +843,11 @@ def mtf_strategy(
             "entry_model_price": plus_result["entry_model_price"],
             "reset_level": plus_result["reset_level"],
             "reset_close_price": plus_result["reset_close_price"],
+            "signal_reference_price": plus_result.get("signal_reference_price"),
         }
 
     # 3) Si no pasa premium/plus, intenta el perfil flexible de FREE.
-    free_result = _evaluate_profile(df, FREE_PROFILE, df_15m=df_15m, df_1h=df_1h, debug_counts=debug_counts)
+    free_result = _evaluate_profile(df, FREE_PROFILE, df_15m=df_15m, df_1h=df_1h, reference_market_price=reference_market_price, debug_counts=debug_counts)
     if free_result:
         return {
             "direction": free_result["direction"],
@@ -803,6 +873,7 @@ def mtf_strategy(
             "entry_model_price": free_result["entry_model_price"],
             "reset_level": free_result["reset_level"],
             "reset_close_price": free_result["reset_close_price"],
+            "signal_reference_price": free_result.get("signal_reference_price"),
         }
 
     return None
