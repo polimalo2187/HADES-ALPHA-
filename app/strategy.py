@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Optional, Dict, Tuple, List
 
 import math
+import os
 import pandas as pd
 
 try:
@@ -72,6 +73,9 @@ SCORE_CALIBRATION_VERSION = "v3_breakout_reset_prereset_anticipation"
 ENTRY_MODEL_NAME = "breakout_reset_prereset_anticipatory_v2"
 SETUP_STAGE_PRE_RESET_WAITING_RETEST = "pre_reset_waiting_retest"
 SEND_MODE_PENDING_ENTRY = "entry_zone_pending"
+PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "84"))
+PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "74"))
+FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "66"))
 
 
 def _required_history_bars() -> int:
@@ -125,14 +129,14 @@ PLUS_PROFILE = {
 PREMIUM_PROFILE = {
     **SHARED_PROFILE,
     "name": "premium",
-    "adx_min": 18.8,
-    "atr_pct_min": 0.0028,
-    "atr_pct_max": 0.0116,
-    "min_body_ratio_breakout": 0.35,
-    "min_body_ratio_continuation": 0.26,
-    "min_extension_atr": 0.22,
-    "max_extension_atr": 0.74,
-    "score": 90.0,
+    "adx_min": 19.5,
+    "atr_pct_min": 0.0030,
+    "atr_pct_max": 0.0112,
+    "min_body_ratio_breakout": 0.38,
+    "min_body_ratio_continuation": 0.29,
+    "min_extension_atr": 0.26,
+    "max_extension_atr": 0.68,
+    "score": 92.0,
 }
 
 # =======================================
@@ -632,6 +636,23 @@ def _compute_raw_score(
 
 
 
+def _min_raw_score_for_profile(profile_name: str) -> float:
+    if profile_name == PREMIUM_PROFILE["name"]:
+        return PREMIUM_RAW_SCORE_MIN
+    if profile_name == PLUS_PROFILE["name"]:
+        return PLUS_RAW_SCORE_MIN
+    return FREE_RAW_SCORE_MIN
+
+
+def _passes_profile_score_floor(result: Optional[Dict], profile_name: str) -> bool:
+    if not result:
+        return False
+    try:
+        return float(result.get("raw_score", 0.0)) >= _min_raw_score_for_profile(profile_name)
+    except Exception:
+        return False
+
+
 def _compute_normalized_score(
     df: pd.DataFrame,
     direction: str,
@@ -788,7 +809,7 @@ def mtf_strategy(
 
     # 1) PREMIUM primero: misma estrategia, pero con puertas algo más altas que PLUS.
     premium_result = _evaluate_profile(df, PREMIUM_PROFILE, df_15m=df_15m, df_1h=df_1h, reference_market_price=reference_market_price, debug_counts=debug_counts)
-    if premium_result:
+    if premium_result and _passes_profile_score_floor(premium_result, PREMIUM_PROFILE["name"]):
         return {
             "direction": premium_result["direction"],
             "entry_price": premium_result["entry_price"],
@@ -818,7 +839,7 @@ def mtf_strategy(
 
     # 2) PLUS después: sigue siendo setup bueno, pero algo menos exigente que PREMIUM.
     plus_result = _evaluate_profile(df, PLUS_PROFILE, df_15m=df_15m, df_1h=df_1h, reference_market_price=reference_market_price, debug_counts=debug_counts)
-    if plus_result:
+    if plus_result and _passes_profile_score_floor(plus_result, PLUS_PROFILE["name"]):
         return {
             "direction": plus_result["direction"],
             "entry_price": plus_result["entry_price"],
@@ -848,7 +869,7 @@ def mtf_strategy(
 
     # 3) Si no pasa premium/plus, intenta el perfil flexible de FREE.
     free_result = _evaluate_profile(df, FREE_PROFILE, df_15m=df_15m, df_1h=df_1h, reference_market_price=reference_market_price, debug_counts=debug_counts)
-    if free_result:
+    if free_result and _passes_profile_score_floor(free_result, FREE_PROFILE["name"]):
         return {
             "direction": free_result["direction"],
             "entry_price": free_result["entry_price"],
