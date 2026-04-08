@@ -315,3 +315,101 @@ def test_closed_signal_uses_final_resolution_for_hit_flags(monkeypatch):
     assert payload['tp1_hit_now'] is False
     assert payload['tp2_hit_now'] is False
     assert payload['stop_hit_now'] is True
+
+
+def test_tracking_uses_historical_reset_fill_before_current_price_snapshot(monkeypatch):
+    from datetime import datetime, timedelta
+    from app.signals import get_signal_tracking_for_user
+
+    now = datetime.utcnow()
+    created_at = now - timedelta(minutes=12)
+    user_signal = {
+        'signal_id': 'sig-live-fill',
+        'symbol': 'XAGUSDT',
+        'direction': 'SHORT',
+        'entry_price': 75.75,
+        'entry_zone': {'low': 75.70, 'high': 75.80},
+        'profiles': {'moderado': {'stop_loss': 76.2651, 'take_profits': [75.144, 74.6895]}},
+        'telegram_valid_until': now + timedelta(minutes=8),
+        'entry_valid_until': now + timedelta(minutes=8),
+        'evaluation_valid_until': now + timedelta(minutes=35),
+        'send_mode': 'entry_zone_pending',
+        'created_at': created_at,
+    }
+
+    monkeypatch.setattr('app.signals.get_user_signal_by_signal_id', lambda user_id, signal_id: dict(user_signal))
+    monkeypatch.setattr('app.signals.get_base_signal_by_signal_id', lambda signal_id: {})
+    monkeypatch.setattr('app.signals.get_current_price', lambda symbol: 75.28)
+
+    class DummyResults:
+        def find_one(self, *args, **kwargs):
+            return None
+
+    monkeypatch.setattr('app.signals.signal_results_collection', lambda: DummyResults())
+
+    def fake_klines(symbol, start_dt, end_dt, interval='1m'):
+        base_ms = int(created_at.timestamp() * 1000)
+        return [
+            [base_ms, '75.40', '75.44', '75.30', '75.32', '0', base_ms + 59999],
+            [base_ms + 60000, '75.78', '75.82', '75.60', '75.65', '0', base_ms + 119999],
+            [base_ms + 120000, '75.60', '75.62', '75.50', '75.54', '0', base_ms + 179999],
+        ]
+
+    monkeypatch.setattr('app.signals._fetch_klines_between', fake_klines)
+
+    payload = get_signal_tracking_for_user(1, 'sig-live-fill', profile_name='moderado')
+
+    assert payload['entry_touched'] is True
+    assert payload['entry_state_label'] == 'RESET EJECUTADO'
+    assert payload['state_label'] == 'EN EVALUACIÓN'
+    assert payload['tp1_hit_now'] is False
+    assert payload['is_operable_now'] is False
+
+
+def test_tracking_marks_tp1_hit_from_historical_path_while_signal_is_still_open(monkeypatch):
+    from datetime import datetime, timedelta
+    from app.signals import get_signal_tracking_for_user
+
+    now = datetime.utcnow()
+    created_at = now - timedelta(minutes=15)
+    user_signal = {
+        'signal_id': 'sig-live-tp1',
+        'symbol': 'XAGUSDT',
+        'direction': 'SHORT',
+        'entry_price': 75.75,
+        'entry_zone': {'low': 75.70, 'high': 75.80},
+        'profiles': {'moderado': {'stop_loss': 76.2651, 'take_profits': [75.144, 74.6895]}},
+        'telegram_valid_until': now + timedelta(minutes=5),
+        'entry_valid_until': now + timedelta(minutes=5),
+        'evaluation_valid_until': now + timedelta(minutes=30),
+        'send_mode': 'entry_zone_pending',
+        'created_at': created_at,
+    }
+
+    monkeypatch.setattr('app.signals.get_user_signal_by_signal_id', lambda user_id, signal_id: dict(user_signal))
+    monkeypatch.setattr('app.signals.get_base_signal_by_signal_id', lambda signal_id: {})
+    monkeypatch.setattr('app.signals.get_current_price', lambda symbol: 74.99)
+
+    class DummyResults:
+        def find_one(self, *args, **kwargs):
+            return None
+
+    monkeypatch.setattr('app.signals.signal_results_collection', lambda: DummyResults())
+
+    def fake_klines(symbol, start_dt, end_dt, interval='1m'):
+        base_ms = int(created_at.timestamp() * 1000)
+        return [
+            [base_ms, '75.40', '75.44', '75.30', '75.32', '0', base_ms + 59999],
+            [base_ms + 60000, '75.78', '75.82', '75.60', '75.65', '0', base_ms + 119999],
+            [base_ms + 120000, '75.20', '75.24', '75.07', '75.12', '0', base_ms + 179999],
+        ]
+
+    monkeypatch.setattr('app.signals._fetch_klines_between', fake_klines)
+
+    payload = get_signal_tracking_for_user(1, 'sig-live-tp1', profile_name='moderado')
+
+    assert payload['entry_touched'] is True
+    assert payload['tp1_hit_now'] is True
+    assert payload['state_label'] == 'EXTENDIDA'
+    assert payload['entry_state_label'] == 'RESET EJECUTADO'
+    assert 'TP1' in payload['recommendation']
