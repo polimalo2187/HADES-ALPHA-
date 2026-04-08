@@ -204,7 +204,7 @@ if __name__ == '__main__':
 
 
 
-def test_short_pending_state_waits_when_price_is_above_zone_and_marks_away_below_zone():
+def test_short_pending_state_waits_when_price_is_below_zone_and_marks_reset_passed_above_zone():
     from app.signals import _tracking_entry_state
     from datetime import datetime, timedelta
 
@@ -212,12 +212,12 @@ def test_short_pending_state_waits_when_price_is_above_zone_and_marks_away_below
     telegram_valid_until = now + timedelta(minutes=5)
     evaluation_valid_until = now + timedelta(minutes=20)
 
-    waiting = _tracking_entry_state("SHORT", 101.0, 99.8, 100.2, now, telegram_valid_until, evaluation_valid_until, None, "entry_zone_pending")
-    away = _tracking_entry_state("SHORT", 99.4, 99.8, 100.2, now, telegram_valid_until, evaluation_valid_until, None, "entry_zone_pending")
+    waiting = _tracking_entry_state("SHORT", 99.4, 99.8, 100.2, now, telegram_valid_until, evaluation_valid_until, None, "entry_zone_pending")
+    away = _tracking_entry_state("SHORT", 101.0, 99.8, 100.2, now, telegram_valid_until, evaluation_valid_until, None, "entry_zone_pending")
 
-    assert waiting[0] == "AÚN ESPERANDO ENTRADA"
+    assert waiting[0] == "ESPERANDO RESET"
     assert waiting[2] is True
-    assert away[0] == "ENTRADA YA ALEJADA"
+    assert away[0] == "RESET YA PASÓ"
     assert away[2] is False
 
 
@@ -250,10 +250,10 @@ def test_tracking_state_does_not_claim_telegram_closed_while_window_is_still_ope
 
     payload = get_signal_tracking_for_user(1, 'sig-away', profile_name='moderado')
 
-    assert payload['entry_state_label'] == 'ENTRADA YA ALEJADA'
-    assert payload['state_label'] == 'ENTRADA YA ALEJADA'
+    assert payload['entry_state_label'] == 'ESPERANDO RESET'
+    assert payload['state_label'] == 'ESPERANDO RESET'
     assert payload['telegram_window_open'] is True
-    assert 'MiniApp' in payload['recommendation']
+    assert 'retroceso' in payload['recommendation']
     assert 'Telegram' not in payload['recommendation']
 
 
