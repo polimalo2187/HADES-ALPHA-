@@ -345,10 +345,15 @@ def _apply_close_market_execution(result: Dict, current_price: float) -> Optiona
 def build_symbol_candidate(symbol: str, df_1h: pd.DataFrame, df_15m: pd.DataFrame, df_5m: Optional[pd.DataFrame], *, debug_counts: Optional[Dict[str, int]] = None) -> Optional[Dict]:
     closed_1h = _closed_timeframe_frame(df_1h)
     closed_15m = _closed_timeframe_frame(df_15m)
+    closed_5m = _closed_timeframe_frame(df_5m) if df_5m is not None else None
     reference_price = None
     try:
         if df_5m is not None and len(df_5m) > 0:
+            # El precio de referencia puede ser el snapshot más fresco, pero la
+            # estructura del setup debe evaluarse sobre velas 5M ya cerradas.
             reference_price = float(df_5m.iloc[-1]["close"])
+        elif closed_5m is not None and len(closed_5m) > 0:
+            reference_price = float(closed_5m.iloc[-1]["close"])
         elif not closed_15m.empty:
             reference_price = float(closed_15m.iloc[-1]["close"])
     except Exception:
@@ -357,7 +362,7 @@ def build_symbol_candidate(symbol: str, df_1h: pd.DataFrame, df_15m: pd.DataFram
     strategy_kwargs = _strategy_call_kwargs(
         df_1h=closed_1h,
         df_15m=closed_15m,
-        df_5m=df_5m,
+        df_5m=closed_5m,
         reference_market_price=reference_price,
         debug_counts=debug_counts,
     )
