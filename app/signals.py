@@ -60,6 +60,8 @@ ENTRY_ZONE_MAX_PCT = float(os.getenv("ENTRY_ZONE_MAX_PCT", "0.0035"))
 ENTRY_ZONE_RISK_FRACTION = float(os.getenv("ENTRY_ZONE_RISK_FRACTION", "0.22"))
 PENDING_ENTRY_MAX_PROGRESS_TO_TP1_PCT = float(os.getenv("PENDING_ENTRY_MAX_PROGRESS_TO_TP1_PCT", "18"))
 PENDING_ENTRY_MAX_R_PROGRESS = float(os.getenv("PENDING_ENTRY_MAX_R_PROGRESS", "0.25"))
+PENDING_ENTRY_MIN_PROGRESS_TO_TP1_PCT = float(os.getenv("PENDING_ENTRY_MIN_PROGRESS_TO_TP1_PCT", "4"))
+PENDING_ENTRY_MIN_R_PROGRESS = float(os.getenv("PENDING_ENTRY_MIN_R_PROGRESS", "0.05"))
 
 # ======================================================
 # UTILIDADES
@@ -295,6 +297,7 @@ def _pending_entry_is_still_actionable(
         "tp1_progress_at_send_pct": None,
         "r_progress_at_send": None,
         "zone_distance_pct": None,
+        "actionability_reason": None,
     }
     try:
         direction = str(direction).upper()
@@ -304,39 +307,52 @@ def _pending_entry_is_still_actionable(
         zone_low = float(zone_low)
         zone_high = float(zone_high)
     except Exception:
+        details["actionability_reason"] = "invalid_payload"
         return False, details
 
     if current_price <= 0 or entry_price <= 0 or stop_loss <= 0:
+        details["actionability_reason"] = "invalid_price"
         return False, details
+
+    if take_profits:
+        try:
+            details["tp1_progress_at_send_pct"] = _tp1_progress_from_entry(direction, entry_price, float(take_profits[0]), current_price)
+        except Exception:
+            details["tp1_progress_at_send_pct"] = None
+    details["r_progress_at_send"] = _r_progress_from_entry(direction, entry_price, stop_loss, current_price)
 
     if zone_low <= current_price <= zone_high:
         details["zone_distance_pct"] = 0.0
-        return True, details
+        details["actionability_reason"] = "already_in_reset_zone"
+        return False, details
 
     if direction == "LONG":
-        if current_price < zone_low:
-            details["zone_distance_pct"] = round(max(0.0, (zone_low - current_price) / max(current_price, 1e-9)) * 100.0, 4)
-            return True, details
-        if take_profits:
-            details["tp1_progress_at_send_pct"] = _tp1_progress_from_entry(direction, entry_price, float(take_profits[0]), current_price)
-        details["r_progress_at_send"] = _r_progress_from_entry(direction, entry_price, stop_loss, current_price)
+        if current_price <= zone_high:
+            details["zone_distance_pct"] = round(max(0.0, (zone_high - current_price) / max(entry_price, 1e-9)) * 100.0, 4)
+            details["actionability_reason"] = "pre_reset_not_armed"
+            return False, details
         details["zone_distance_pct"] = round(max(0.0, (current_price - zone_high) / max(entry_price, 1e-9)) * 100.0, 4)
     else:
-        if current_price > zone_high:
-            details["zone_distance_pct"] = round(max(0.0, (current_price - zone_high) / max(current_price, 1e-9)) * 100.0, 4)
-            return True, details
-        if take_profits:
-            details["tp1_progress_at_send_pct"] = _tp1_progress_from_entry(direction, entry_price, float(take_profits[0]), current_price)
-        details["r_progress_at_send"] = _r_progress_from_entry(direction, entry_price, stop_loss, current_price)
+        if current_price >= zone_low:
+            details["zone_distance_pct"] = round(max(0.0, (current_price - zone_low) / max(entry_price, 1e-9)) * 100.0, 4)
+            details["actionability_reason"] = "pre_reset_not_armed"
+            return False, details
         details["zone_distance_pct"] = round(max(0.0, (zone_low - current_price) / max(entry_price, 1e-9)) * 100.0, 4)
 
     tp1_progress = float(details["tp1_progress_at_send_pct"] or 0.0)
     r_progress = float(details["r_progress_at_send"] or 0.0)
 
     if tp1_progress >= PENDING_ENTRY_MAX_PROGRESS_TO_TP1_PCT:
+        details["actionability_reason"] = "too_extended_to_tp1"
         return False, details
     if r_progress >= PENDING_ENTRY_MAX_R_PROGRESS:
+        details["actionability_reason"] = "too_extended_in_r"
         return False, details
+    if tp1_progress < PENDING_ENTRY_MIN_PROGRESS_TO_TP1_PCT and r_progress < PENDING_ENTRY_MIN_R_PROGRESS:
+        details["actionability_reason"] = "extension_too_shallow"
+        return False, details
+
+    details["actionability_reason"] = "armed_waiting_reset"
     return True, details
 
 
@@ -491,9 +507,10 @@ def create_base_signal(
         r_progress_at_send = pending_details.get("r_progress_at_send")
         if not actionable:
             logger.info(
-                "⏭️ Señal pendiente descartada por tardía | %s %s | price=%s | entry=%s | zone=%s→%s | tp1_progress_at_send_pct=%s | r_progress_at_send=%s",
+                "⏭️ Señal pending descartada | %s %s | reason=%s | price=%s | entry=%s | zone=%s→%s | tp1_progress_at_send_pct=%s | r_progress_at_send=%s",
                 symbol,
                 direction,
+                pending_details.get("actionability_reason"),
                 current_price,
                 entry_price,
                 zone_low,
@@ -971,16 +988,16 @@ def _tracking_entry_state(direction: str, current_price: Optional[float], zone_l
     if current_price is None or zone_low is None or zone_high is None:
         return "SIN SNAPSHOT DE PRECIO", False, False
     if zone_low <= current_price <= zone_high:
-        return "EN ZONA DE ENTRADA", True, True
+        return "RESET EN ZONA", True, True
     direction = str(direction).upper()
     if isinstance(telegram_valid_until, datetime) and telegram_valid_until > now:
         if direction == "LONG":
-            if current_price < zone_low:
-                return "AÚN ESPERANDO ENTRADA", False, True
-            return "ENTRADA YA ALEJADA", False, False
-        if current_price > zone_high:
-            return "AÚN ESPERANDO ENTRADA", False, True
-        return "ENTRADA YA ALEJADA", False, False
+            if current_price > zone_high:
+                return "ESPERANDO RESET", False, True
+            return "RESET YA PASÓ", False, False
+        if current_price < zone_low:
+            return "ESPERANDO RESET", False, True
+        return "RESET YA PASÓ", False, False
     if isinstance(evaluation_valid_until, datetime) and evaluation_valid_until > now:
         return "EN EVALUACIÓN", False, False
     return "SEÑAL FINALIZADA", False, False
@@ -1102,17 +1119,17 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
         recommendation = "La señal se activó al envío. Evalúala desde el precio enviado, no esperes retrace al entry."
         state_label = "ACTIVA DESDE ENVÍO"
     elif in_entry_zone:
-        recommendation = "El precio sigue dentro de la zona base. La señal todavía es operable si tu gestión acompaña."
-        state_label = "ACTIVA"
+        recommendation = "El precio está entrando en la zona prevista de reset. La activación real nace en este retroceso; no persigas fuera de zona."
+        state_label = "RESET EN ZONA"
     elif signal_active_for_entry:
-        recommendation = "La señal aún no entró en zona. Espera confirmación en entrada y no persigas precio."
-        state_label = "ESPERANDO ENTRADA"
-    elif entry_state_label == "ENTRADA YA ALEJADA" and evaluation_window_open:
-        recommendation = "La señal sigue en evaluación dentro de la MiniApp, pero el precio ya salió de la zona de entrada. No entrar."
-        state_label = "ENTRADA YA ALEJADA"
-    elif entry_state_label == "ENTRADA YA ALEJADA":
-        recommendation = "El precio ya salió de la zona de entrada. No entrar; úsala solo como referencia."
-        state_label = "ENTRADA YA ALEJADA"
+        recommendation = "La señal es anticipada. Espera el retroceso al nivel de reset y no entres por impulso antes de que vuelva a la zona."
+        state_label = "ESPERANDO RESET"
+    elif entry_state_label == "RESET YA PASÓ" and evaluation_window_open:
+        recommendation = "La señal sigue visible en la MiniApp, pero el precio ya pasó la zona prevista de reset. No entrar tarde."
+        state_label = "RESET YA PASÓ"
+    elif entry_state_label == "RESET YA PASÓ":
+        recommendation = "El precio ya pasó la zona prevista de reset. No entrar; úsala solo como referencia."
+        state_label = "RESET YA PASÓ"
     elif evaluation_window_open:
         recommendation = "La señal sigue en evaluación dentro de la MiniApp. Úsala como referencia operativa."
         state_label = "EN EVALUACIÓN"
