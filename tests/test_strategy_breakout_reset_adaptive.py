@@ -160,6 +160,7 @@ def test_strategy_requires_reference_price_beyond_entry_side_for_prereset_signal
         return enriched
 
     monkeypatch.setattr(strategy, "add_indicators", fake_add_indicators)
+    monkeypatch.setattr(strategy, "_passes_profile_score_floor", lambda *_args, **_kwargs: True)
 
     # Reference price por debajo de la entrada esperada: no debe publicar pre-reset.
     blocked = strategy.mtf_strategy(df, df, df.copy(), reference_market_price=100.05)
@@ -171,3 +172,77 @@ def test_strategy_requires_reference_price_beyond_entry_side_for_prereset_signal
     assert candidate["send_mode"] == "entry_zone_pending"
     assert candidate["setup_stage"] == "pre_reset_waiting_retest"
     assert float(candidate["entry_price"]) < 101.1
+
+
+def test_mtf_strategy_downgrades_premium_candidate_to_plus_when_premium_floor_not_met(monkeypatch):
+    import app.strategy as strategy
+
+    bars = strategy._required_history_bars()
+    df = pd.DataFrame([
+        {
+            "open": 1.0,
+            "high": 1.0,
+            "low": 1.0,
+            "close": 1.0,
+            "volume": 1.0,
+        }
+        for _ in range(bars)
+    ])
+
+    monkeypatch.setattr(
+        strategy,
+        "add_indicators",
+        lambda frame: frame.assign(ema20=1.0, ema50=1.0, ema200=1.0, adx=25.0, atr=0.01, atr_pct=0.01, body_ratio=0.3),
+    )
+
+    responses = [
+        {
+            "direction": "LONG",
+            "entry_price": 1.0,
+            "trade_profiles": {"conservador": {"stop_loss": 0.9, "take_profits": [1.1, 1.2]}},
+            "score": 83.0,
+            "raw_score": 83.0,
+            "normalized_score": 83.0,
+            "components": [],
+            "raw_components": [],
+            "normalized_components": [],
+            "atr_pct": 0.01,
+            "score_calibration": "v",
+            "higher_tf_context": {},
+            "send_mode": "entry_zone_pending",
+            "setup_stage": "pre_reset_waiting_retest",
+            "entry_model": "m",
+            "entry_model_price": 1.0,
+            "reset_level": 1.0,
+            "reset_close_price": 1.0,
+        },
+        {
+            "direction": "LONG",
+            "entry_price": 1.0,
+            "trade_profiles": {"conservador": {"stop_loss": 0.9, "take_profits": [1.1, 1.2]}},
+            "score": 83.0,
+            "raw_score": 83.0,
+            "normalized_score": 83.0,
+            "components": [],
+            "raw_components": [],
+            "normalized_components": [],
+            "atr_pct": 0.01,
+            "score_calibration": "v",
+            "higher_tf_context": {},
+            "send_mode": "entry_zone_pending",
+            "setup_stage": "pre_reset_waiting_retest",
+            "entry_model": "m",
+            "entry_model_price": 1.0,
+            "reset_level": 1.0,
+            "reset_close_price": 1.0,
+        },
+    ]
+
+    monkeypatch.setattr(strategy, "_evaluate_profile", lambda *_args, **_kwargs: responses.pop(0))
+
+    result = strategy.mtf_strategy(df, df, df.copy())
+
+    assert result is not None
+    assert result["setup_group"] == "plus"
+    assert result["score_profile"] == "plus"
+    assert result["raw_score"] == 83.0
