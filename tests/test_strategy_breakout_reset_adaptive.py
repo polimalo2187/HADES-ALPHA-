@@ -95,12 +95,12 @@ def test_mtf_strategy_routes_premium_then_plus_then_free(monkeypatch):
     monkeypatch.setattr(strategy, "add_indicators", lambda frame: frame.assign(ema20=1.0, ema50=1.0, ema200=1.0, adx=25.0, atr=0.01, atr_pct=0.01, body_ratio=0.3))
 
     responses = [
-        {"direction": "LONG", "entry_price": 1.0, "trade_profiles": {"conservador": {"stop_loss": 0.9, "take_profits": [1.1, 1.2]}}, "score": 90.0, "raw_score": 90.0, "normalized_score": 90.0, "components": [], "raw_components": [], "normalized_components": [], "atr_pct": 0.01, "score_calibration": "v", "higher_tf_context": {}, "send_mode": "entry_zone_pending", "setup_stage": "reset_confirmed_waiting_entry", "entry_model": "m", "entry_model_price": 1.0, "reset_level": 1.0, "reset_close_price": 1.0},
+        {"direction": "LONG", "entry_price": 1.0, "trade_profiles": {"conservador": {"stop_loss": 0.9, "take_profits": [1.1, 1.2]}}, "score": 90.0, "raw_score": 90.0, "normalized_score": 90.0, "components": [], "raw_components": [], "normalized_components": [], "atr_pct": 0.01, "score_calibration": "v", "higher_tf_context": {}, "send_mode": "entry_zone_pending", "setup_stage": "pre_reset_waiting_retest", "entry_model": "m", "entry_model_price": 1.0, "reset_level": 1.0, "reset_close_price": 1.0},
         None,
-        {"direction": "SHORT", "entry_price": 1.0, "trade_profiles": {"conservador": {"stop_loss": 1.1, "take_profits": [0.9, 0.8]}}, "score": 84.0, "raw_score": 84.0, "normalized_score": 84.0, "components": [], "raw_components": [], "normalized_components": [], "atr_pct": 0.01, "score_calibration": "v", "higher_tf_context": {}, "send_mode": "entry_zone_pending", "setup_stage": "reset_confirmed_waiting_entry", "entry_model": "m", "entry_model_price": 1.0, "reset_level": 1.0, "reset_close_price": 1.0},
+        {"direction": "SHORT", "entry_price": 1.0, "trade_profiles": {"conservador": {"stop_loss": 1.1, "take_profits": [0.9, 0.8]}}, "score": 84.0, "raw_score": 84.0, "normalized_score": 84.0, "components": [], "raw_components": [], "normalized_components": [], "atr_pct": 0.01, "score_calibration": "v", "higher_tf_context": {}, "send_mode": "entry_zone_pending", "setup_stage": "pre_reset_waiting_retest", "entry_model": "m", "entry_model_price": 1.0, "reset_level": 1.0, "reset_close_price": 1.0},
         None,
         None,
-        {"direction": "LONG", "entry_price": 1.0, "trade_profiles": {"conservador": {"stop_loss": 0.9, "take_profits": [1.1, 1.2]}}, "score": 76.0, "raw_score": 76.0, "normalized_score": 70.0, "components": [], "raw_components": [], "normalized_components": [], "atr_pct": 0.01, "score_calibration": "v", "higher_tf_context": {}, "send_mode": "entry_zone_pending", "setup_stage": "reset_confirmed_waiting_entry", "entry_model": "m", "entry_model_price": 1.0, "reset_level": 1.0, "reset_close_price": 1.0},
+        {"direction": "LONG", "entry_price": 1.0, "trade_profiles": {"conservador": {"stop_loss": 0.9, "take_profits": [1.1, 1.2]}}, "score": 76.0, "raw_score": 76.0, "normalized_score": 70.0, "components": [], "raw_components": [], "normalized_components": [], "atr_pct": 0.01, "score_calibration": "v", "higher_tf_context": {}, "send_mode": "entry_zone_pending", "setup_stage": "pre_reset_waiting_retest", "entry_model": "m", "entry_model_price": 1.0, "reset_level": 1.0, "reset_close_price": 1.0},
     ]
 
     def fake_evaluate(*_args, **_kwargs):
@@ -118,3 +118,56 @@ def test_mtf_strategy_routes_premium_then_plus_then_free(monkeypatch):
     assert plus["score_profile"] == "plus"
     assert free["setup_group"] == "free"
     assert free["score_profile"] == "free"
+
+
+
+def test_strategy_requires_reference_price_beyond_entry_side_for_prereset_signal(monkeypatch):
+    import app.strategy as strategy
+
+    bars = strategy._required_history_bars()
+    rows = []
+    for idx in range(bars):
+        rows.append({
+            "open": 100.0,
+            "high": 100.3,
+            "low": 99.7,
+            "close": 100.0,
+            "volume": 1000.0,
+        })
+    df = pd.DataFrame(rows)
+
+    def fake_add_indicators(frame):
+        enriched = frame.copy()
+        enriched["ema20"] = 101.0
+        enriched["ema50"] = 100.7
+        enriched["ema200"] = 100.2
+        enriched["adx"] = 25.0
+        enriched["atr"] = 1.0
+        enriched["atr_pct"] = 0.01
+        enriched["body_ratio"] = 0.4
+        enriched["vol_ma"] = 1000.0
+        # controlamos las dos últimas velas: breakout + continuación sin reset
+        enriched.iloc[-2, enriched.columns.get_loc("close")] = 101.6
+        enriched.iloc[-2, enriched.columns.get_loc("high")] = 101.9
+        enriched.iloc[-2, enriched.columns.get_loc("low")] = 100.8
+        enriched.iloc[-2, enriched.columns.get_loc("open")] = 100.9
+        enriched.iloc[-2, enriched.columns.get_loc("body_ratio")] = 0.52
+        enriched.iloc[-1, enriched.columns.get_loc("close")] = 101.9
+        enriched.iloc[-1, enriched.columns.get_loc("high")] = 102.2
+        enriched.iloc[-1, enriched.columns.get_loc("low")] = 101.2
+        enriched.iloc[-1, enriched.columns.get_loc("open")] = 101.4
+        enriched.iloc[-1, enriched.columns.get_loc("body_ratio")] = 0.38
+        return enriched
+
+    monkeypatch.setattr(strategy, "add_indicators", fake_add_indicators)
+
+    # Reference price por debajo de la entrada esperada: no debe publicar pre-reset.
+    blocked = strategy.mtf_strategy(df, df, df.copy(), reference_market_price=100.05)
+    assert blocked is None
+
+    # Precio ya extendido por encima del nivel: ahora sí debe anticipar el reset.
+    candidate = strategy.mtf_strategy(df, df, df.copy(), reference_market_price=101.1)
+    assert candidate is not None
+    assert candidate["send_mode"] == "entry_zone_pending"
+    assert candidate["setup_stage"] == "pre_reset_waiting_retest"
+    assert float(candidate["entry_price"]) < 101.1
