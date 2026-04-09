@@ -73,9 +73,16 @@ SCORE_CALIBRATION_VERSION = "v3_breakout_reset_prereset_anticipation"
 ENTRY_MODEL_NAME = "breakout_reset_prereset_anticipatory_v2"
 SETUP_STAGE_PRE_RESET_WAITING_RETEST = "pre_reset_waiting_retest"
 SEND_MODE_PENDING_ENTRY = "entry_zone_pending"
-PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "84"))
-PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "74"))
-FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "66"))
+PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "82"))
+PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "78"))
+FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "68"))
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except Exception:
+        return float(default)
 
 
 def _required_history_bars() -> int:
@@ -99,44 +106,53 @@ def _required_history_bars() -> int:
 
 SHARED_PROFILE = {
     "name": "shared",
-    "adx_min": 17.8,
-    "atr_pct_min": 0.0026,
-    "atr_pct_max": 0.0121,
-    "min_body_ratio_breakout": 0.32,
-    "min_body_ratio_continuation": 0.24,
-    "min_extension_atr": 0.18,
-    "max_extension_atr": 0.86,
+    "adx_min": _env_float("PLUS_ADX_MIN", 18.4),
+    "atr_pct_min": _env_float("PLUS_ATR_PCT_MIN", 0.0027),
+    "atr_pct_max": _env_float("PLUS_ATR_PCT_MAX", 0.0119),
+    "min_body_ratio_breakout": _env_float("PLUS_MIN_BODY_RATIO_BREAKOUT", 0.34),
+    "min_body_ratio_continuation": _env_float("PLUS_MIN_BODY_RATIO_CONTINUATION", 0.27),
+    "min_extension_atr": _env_float("PLUS_MIN_EXTENSION_ATR", 0.20),
+    "max_extension_atr": _env_float("PLUS_MAX_EXTENSION_ATR", 0.82),
+    "min_rel_volume_continuation": _env_float("PLUS_MIN_REL_VOLUME_CONTINUATION", 1.10),
+    "min_close_position_continuation": _env_float("PLUS_MIN_CLOSE_POSITION_CONTINUATION", 0.62),
+    "min_post_breakout_progress_atr": _env_float("PLUS_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.08),
 }
 
 FREE_PROFILE = {
     "name": "free",
-    "adx_min": 16.0,
-    "atr_pct_min": 0.0022,
-    "atr_pct_max": 0.0136,
-    "min_body_ratio_breakout": 0.24,
-    "min_body_ratio_continuation": 0.18,
-    "min_extension_atr": 0.14,
-    "max_extension_atr": 0.96,
-    "score": 76.0,
+    "adx_min": _env_float("FREE_ADX_MIN", 16.8),
+    "atr_pct_min": _env_float("FREE_ATR_PCT_MIN", 0.0024),
+    "atr_pct_max": _env_float("FREE_ATR_PCT_MAX", 0.0132),
+    "min_body_ratio_breakout": _env_float("FREE_MIN_BODY_RATIO_BREAKOUT", 0.28),
+    "min_body_ratio_continuation": _env_float("FREE_MIN_BODY_RATIO_CONTINUATION", 0.22),
+    "min_extension_atr": _env_float("FREE_MIN_EXTENSION_ATR", 0.16),
+    "max_extension_atr": _env_float("FREE_MAX_EXTENSION_ATR", 0.92),
+    "min_rel_volume_continuation": _env_float("FREE_MIN_REL_VOLUME_CONTINUATION", 1.00),
+    "min_close_position_continuation": _env_float("FREE_MIN_CLOSE_POSITION_CONTINUATION", 0.56),
+    "min_post_breakout_progress_atr": _env_float("FREE_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.05),
+    "score": 78.0,
 }
 
 PLUS_PROFILE = {
     **SHARED_PROFILE,
     "name": "plus",
-    "score": 84.0,
+    "score": 86.0,
 }
 
 PREMIUM_PROFILE = {
     **SHARED_PROFILE,
     "name": "premium",
-    "adx_min": 19.5,
-    "atr_pct_min": 0.0030,
-    "atr_pct_max": 0.0112,
-    "min_body_ratio_breakout": 0.38,
-    "min_body_ratio_continuation": 0.29,
-    "min_extension_atr": 0.26,
-    "max_extension_atr": 0.68,
-    "score": 92.0,
+    "adx_min": _env_float("PREMIUM_ADX_MIN", 19.0),
+    "atr_pct_min": _env_float("PREMIUM_ATR_PCT_MIN", 0.0029),
+    "atr_pct_max": _env_float("PREMIUM_ATR_PCT_MAX", 0.0114),
+    "min_body_ratio_breakout": _env_float("PREMIUM_MIN_BODY_RATIO_BREAKOUT", 0.36),
+    "min_body_ratio_continuation": _env_float("PREMIUM_MIN_BODY_RATIO_CONTINUATION", 0.30),
+    "min_extension_atr": _env_float("PREMIUM_MIN_EXTENSION_ATR", 0.24),
+    "max_extension_atr": _env_float("PREMIUM_MAX_EXTENSION_ATR", 0.74),
+    "min_rel_volume_continuation": _env_float("PREMIUM_MIN_REL_VOLUME_CONTINUATION", 1.18),
+    "min_close_position_continuation": _env_float("PREMIUM_MIN_CLOSE_POSITION_CONTINUATION", 0.68),
+    "min_post_breakout_progress_atr": _env_float("PREMIUM_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.10),
+    "score": 90.0,
 }
 
 # =======================================
@@ -476,7 +492,33 @@ def _confirm_breakout_prereset(
 
 
 
-def _continuation_ok(last: pd.Series, direction: str, profile: Dict) -> bool:
+def _relative_volume_ratio(last: pd.Series) -> float:
+    vol_ma = float(last.get("vol_ma", 0.0) or 0.0)
+    volume = float(last.get("volume", 0.0) or 0.0)
+    if vol_ma <= 1e-9:
+        return 0.0
+    return max(0.0, volume / vol_ma)
+
+
+def _close_position_ratio(last: pd.Series, direction: str) -> float:
+    high = float(last.get("high", 0.0) or 0.0)
+    low = float(last.get("low", 0.0) or 0.0)
+    close = float(last.get("close", 0.0) or 0.0)
+    candle_range = max(high - low, 1e-9)
+    if direction == "LONG":
+        return _clamp((close - low) / candle_range, 0.0, 1.0)
+    return _clamp((high - close) / candle_range, 0.0, 1.0)
+
+
+def _post_breakout_progress_atr(last: pd.Series, level: float, direction: str) -> float:
+    atr = max(float(last.get("atr", 0.0) or 0.0), 1e-9)
+    close_price = float(last.get("close", 0.0) or 0.0)
+    if direction == "LONG":
+        return max(0.0, close_price - float(level)) / atr
+    return max(0.0, float(level) - close_price) / atr
+
+
+def _continuation_ok(last: pd.Series, direction: str, profile: Dict, quality: Optional[Dict[str, float]] = None) -> bool:
     if direction == "LONG":
         if float(last["close"]) <= float(last["open"]):
             return False
@@ -486,6 +528,19 @@ def _continuation_ok(last: pd.Series, direction: str, profile: Dict) -> bool:
 
     if float(last["body_ratio"]) < float(profile["min_body_ratio_continuation"]):
         return False
+
+    close_position = _close_position_ratio(last, direction)
+    if close_position < float(profile.get("min_close_position_continuation", 0.0)):
+        return False
+
+    rel_volume = _relative_volume_ratio(last)
+    if rel_volume < float(profile.get("min_rel_volume_continuation", 0.0)):
+        return False
+
+    if quality is not None:
+        progress_atr = _post_breakout_progress_atr(last, float(quality.get("level", 0.0) or 0.0), direction)
+        if progress_atr < float(profile.get("min_post_breakout_progress_atr", 0.0)):
+            return False
 
     return True
 
@@ -523,11 +578,14 @@ def _retest_score(quality: Dict[str, float], profile: Dict) -> float:
 
 
 
-def _continuation_score(last: pd.Series, profile: Dict) -> float:
+def _continuation_score(last: pd.Series, profile: Dict, direction: str) -> float:
     body = float(last["body_ratio"])
     min_body = float(profile["min_body_ratio_continuation"])
-    body_quality = _clamp((body - min_body) / max(0.35, 1e-9), 0.0, 1.0)
-    return body_quality * 10.0
+    body_quality = _clamp((body - min_body) / max(0.30, 1e-9), 0.0, 1.0)
+    close_quality = _clamp((_close_position_ratio(last, direction) - float(profile.get("min_close_position_continuation", 0.0))) / 0.30, 0.0, 1.0)
+    volume_quality = _clamp((_relative_volume_ratio(last) - float(profile.get("min_rel_volume_continuation", 0.0))) / 0.60, 0.0, 1.0)
+    composite = (body_quality * 0.45) + (close_quality * 0.30) + (volume_quality * 0.25)
+    return _clamp(composite * 12.0, 0.0, 12.0)
 
 
 
@@ -599,7 +657,7 @@ def _build_score_components(
     atr_points = _atr_score(float(last["atr_pct"]), score_profile)
     breakout_points = _breakout_score(quality, score_profile)
     retest_points = _retest_score(quality, score_profile)
-    continuation_points = _continuation_score(last, score_profile)
+    continuation_points = _continuation_score(last, score_profile, direction)
     volume_points = _volume_score(last)
     entry_points = _entry_freshness_score(
         quality["level"],
@@ -731,7 +789,7 @@ def _evaluate_profile(
         _record_reject(debug_counts, "breakout_retest")
         return None
 
-    if not _continuation_ok(last, direction, profile):
+    if not _continuation_ok(last, direction, profile, quality):
         _record_reject(debug_counts, "continuation_candle")
         return None
 
