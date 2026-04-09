@@ -200,9 +200,9 @@ def test_mtf_strategy_downgrades_premium_candidate_to_plus_when_premium_floor_no
             "direction": "LONG",
             "entry_price": 1.0,
             "trade_profiles": {"conservador": {"stop_loss": 0.9, "take_profits": [1.1, 1.2]}},
-            "score": 83.0,
-            "raw_score": 83.0,
-            "normalized_score": 83.0,
+            "score": 81.0,
+            "raw_score": 81.0,
+            "normalized_score": 81.0,
             "components": [],
             "raw_components": [],
             "normalized_components": [],
@@ -220,9 +220,9 @@ def test_mtf_strategy_downgrades_premium_candidate_to_plus_when_premium_floor_no
             "direction": "LONG",
             "entry_price": 1.0,
             "trade_profiles": {"conservador": {"stop_loss": 0.9, "take_profits": [1.1, 1.2]}},
-            "score": 83.0,
-            "raw_score": 83.0,
-            "normalized_score": 83.0,
+            "score": 81.0,
+            "raw_score": 81.0,
+            "normalized_score": 81.0,
             "components": [],
             "raw_components": [],
             "normalized_components": [],
@@ -245,4 +245,37 @@ def test_mtf_strategy_downgrades_premium_candidate_to_plus_when_premium_floor_no
     assert result is not None
     assert result["setup_group"] == "plus"
     assert result["score_profile"] == "plus"
-    assert result["raw_score"] == 83.0
+    assert result["raw_score"] == 81.0
+
+
+def test_continuation_filter_requires_close_position_and_relative_volume():
+    import app.strategy as strategy
+
+    profile = dict(strategy.PLUS_PROFILE)
+    last = pd.Series({
+        "open": 100.0,
+        "high": 101.0,
+        "low": 99.8,
+        "close": 100.35,
+        "body_ratio": 0.29,
+        "volume": 900.0,
+        "vol_ma": 1000.0,
+        "atr": 1.0,
+    })
+    quality = {"level": 100.0}
+
+    assert strategy._continuation_ok(last, "LONG", profile, quality) is False
+
+    last["close"] = 100.92
+    last["volume"] = 1350.0
+
+    assert strategy._continuation_ok(last, "LONG", profile, quality) is True
+
+
+def test_profile_defaults_keep_free_plus_premium_hierarchy_after_rebalance():
+    import app.strategy as strategy
+
+    assert strategy.FREE_PROFILE["min_rel_volume_continuation"] < strategy.PLUS_PROFILE["min_rel_volume_continuation"] < strategy.PREMIUM_PROFILE["min_rel_volume_continuation"]
+    assert strategy.FREE_PROFILE["min_close_position_continuation"] < strategy.PLUS_PROFILE["min_close_position_continuation"] < strategy.PREMIUM_PROFILE["min_close_position_continuation"]
+    assert strategy.FREE_PROFILE["min_post_breakout_progress_atr"] < strategy.PLUS_PROFILE["min_post_breakout_progress_atr"] < strategy.PREMIUM_PROFILE["min_post_breakout_progress_atr"]
+    assert strategy.FREE_RAW_SCORE_MIN < strategy.PLUS_RAW_SCORE_MIN < strategy.PREMIUM_RAW_SCORE_MIN
