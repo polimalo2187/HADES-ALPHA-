@@ -93,9 +93,9 @@ if KLINE_LIMIT_1H < _MIN_HTF_BARS:
 EFFECTIVE_REQUEST_DELAY = REQUEST_DELAY if SCANNER_FORCE_REQUEST_DELAY else 0.0
 
 # Thresholds basados en raw_score real.
-PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "82"))
-PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "78"))
-FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "68"))
+PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "79"))
+PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "74"))
+FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "66"))
 
 # Freshness guard for pending-entry signals.
 # If the price already advanced too much from the intended reset entry, the alert must not be sent.
@@ -104,7 +104,7 @@ PENDING_ENTRY_MAX_R_PROGRESS = float(os.getenv("PENDING_ENTRY_MAX_R_PROGRESS", "
 
 MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT = float(os.getenv("MAX_CLOSE_MARKET_PROGRESS_TO_TP1_PCT", "15"))
 MAX_CLOSE_MARKET_R_PROGRESS = float(os.getenv("MAX_CLOSE_MARKET_R_PROGRESS", "0.15"))
-SCORE_CALIBRATION_VERSION = "v7_breakout_reset_pending_entry"
+SCORE_CALIBRATION_VERSION = "v8_breakout_reset_hybrid_continuation"
 ENTRY_MODEL_NAME = "breakout_reset_retest_pending_v1"
 SETUP_STAGE_CLOSED_CONFIRMED = "closed_confirmed"
 
