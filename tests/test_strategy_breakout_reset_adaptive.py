@@ -248,7 +248,7 @@ def test_mtf_strategy_downgrades_premium_candidate_to_plus_when_premium_floor_no
     assert result["raw_score"] == 78.0
 
 
-def test_continuation_filter_keeps_only_direction_and_body_as_hard_gate():
+def test_continuation_filter_keeps_free_plus_lightweight_but_premium_strict():
     import app.strategy as strategy
 
     profile = dict(strategy.PLUS_PROFILE)
@@ -265,6 +265,14 @@ def test_continuation_filter_keeps_only_direction_and_body_as_hard_gate():
     quality = {"level": 100.0}
 
     assert strategy._continuation_ok(last, "LONG", profile, quality) is True
+
+    premium_profile = dict(strategy.PREMIUM_PROFILE)
+    assert strategy._continuation_ok(last, "LONG", premium_profile, quality) is False
+
+    last["close"] = 100.92
+    last["volume"] = 1300.0
+    last["body_ratio"] = 0.31
+    assert strategy._continuation_ok(last, "LONG", premium_profile, quality) is True
 
     last["body_ratio"] = 0.10
     assert strategy._continuation_ok(last, "LONG", profile, quality) is False
