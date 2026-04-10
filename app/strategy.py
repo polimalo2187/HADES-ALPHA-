@@ -69,11 +69,11 @@ BREAKOUT_LOOKBACK = 24
 
 MAX_SCORE = 100.0
 FREE_NORMALIZATION_PENALTY = 6.0
-SCORE_CALIBRATION_VERSION = "v4_breakout_reset_prereset_hybrid_continuation"
+SCORE_CALIBRATION_VERSION = "v5_breakout_reset_prereset_premium_guard"
 ENTRY_MODEL_NAME = "breakout_reset_prereset_anticipatory_v2"
 SETUP_STAGE_PRE_RESET_WAITING_RETEST = "pre_reset_waiting_retest"
 SEND_MODE_PENDING_ENTRY = "entry_zone_pending"
-PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "79"))
+PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "83"))
 PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "74"))
 FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "66"))
 
@@ -142,16 +142,16 @@ PLUS_PROFILE = {
 PREMIUM_PROFILE = {
     **SHARED_PROFILE,
     "name": "premium",
-    "adx_min": _env_float("PREMIUM_ADX_MIN", 19.0),
-    "atr_pct_min": _env_float("PREMIUM_ATR_PCT_MIN", 0.0029),
-    "atr_pct_max": _env_float("PREMIUM_ATR_PCT_MAX", 0.0114),
-    "min_body_ratio_breakout": _env_float("PREMIUM_MIN_BODY_RATIO_BREAKOUT", 0.36),
-    "min_body_ratio_continuation": _env_float("PREMIUM_MIN_BODY_RATIO_CONTINUATION", 0.25),
-    "min_extension_atr": _env_float("PREMIUM_MIN_EXTENSION_ATR", 0.24),
-    "max_extension_atr": _env_float("PREMIUM_MAX_EXTENSION_ATR", 0.74),
-    "min_rel_volume_continuation": _env_float("PREMIUM_MIN_REL_VOLUME_CONTINUATION", 1.10),
-    "min_close_position_continuation": _env_float("PREMIUM_MIN_CLOSE_POSITION_CONTINUATION", 0.64),
-    "min_post_breakout_progress_atr": _env_float("PREMIUM_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.07),
+    "adx_min": _env_float("PREMIUM_ADX_MIN", 19.6),
+    "atr_pct_min": _env_float("PREMIUM_ATR_PCT_MIN", 0.0030),
+    "atr_pct_max": _env_float("PREMIUM_ATR_PCT_MAX", 0.0110),
+    "min_body_ratio_breakout": _env_float("PREMIUM_MIN_BODY_RATIO_BREAKOUT", 0.38),
+    "min_body_ratio_continuation": _env_float("PREMIUM_MIN_BODY_RATIO_CONTINUATION", 0.27),
+    "min_extension_atr": _env_float("PREMIUM_MIN_EXTENSION_ATR", 0.26),
+    "max_extension_atr": _env_float("PREMIUM_MAX_EXTENSION_ATR", 0.70),
+    "min_rel_volume_continuation": _env_float("PREMIUM_MIN_REL_VOLUME_CONTINUATION", 1.14),
+    "min_close_position_continuation": _env_float("PREMIUM_MIN_CLOSE_POSITION_CONTINUATION", 0.70),
+    "min_post_breakout_progress_atr": _env_float("PREMIUM_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.10),
     "score": 90.0,
 }
 
@@ -519,14 +519,13 @@ def _post_breakout_progress_atr(last: pd.Series, level: float, direction: str) -
 
 
 def _continuation_ok(last: pd.Series, direction: str, profile: Dict, quality: Optional[Dict[str, float]] = None) -> bool:
-    """Hard gate only for the irreducible continuation DNA.
+    """Hard gate for continuation quality.
 
-    For this strategy, the signal is emitted *before* the reset. We still need
-    a continuation candle, but close-position / relative-volume / post-breakout
-    progress should shape the score and the tier, not kill the setup too early.
+    Shared profiles keep the original lightweight gate so Free/Plus preserve
+    coverage. Premium upgrades the continuation quality metrics into mandatory
+    guards because that tier must not publish weak pre-reset setups that only
+    touch entry and then stall.
     """
-    del quality
-
     if direction == "LONG":
         if float(last["close"]) <= float(last["open"]):
             return False
@@ -535,6 +534,28 @@ def _continuation_ok(last: pd.Series, direction: str, profile: Dict, quality: Op
             return False
 
     if float(last["body_ratio"]) < float(profile["min_body_ratio_continuation"]):
+        return False
+
+    if str(profile.get("name") or "").strip().lower() != PREMIUM_PROFILE["name"]:
+        return True
+
+    if quality is None:
+        return False
+
+    close_position = _close_position_ratio(last, direction)
+    if close_position < float(profile.get("min_close_position_continuation", 0.0)):
+        return False
+
+    relative_volume = _relative_volume_ratio(last)
+    if relative_volume < float(profile.get("min_rel_volume_continuation", 0.0)):
+        return False
+
+    progress_atr = _post_breakout_progress_atr(
+        last,
+        float(quality.get("level", 0.0) or 0.0),
+        direction,
+    )
+    if progress_atr < float(profile.get("min_post_breakout_progress_atr", 0.0)):
         return False
 
     return True
