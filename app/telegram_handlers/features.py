@@ -658,7 +658,7 @@ async def handle_performance(query, user):
     def _plan_stats_line(title, emoji, key):
         stats=(by_plan_30 or {}).get(key,{}) if by_plan_30 else {}
         act=(act_by_plan_30 or {}).get(key,{}) if act_by_plan_30 else {}
-        return [f"{emoji} {title}", f"• {_tr(language,'Evaluadas','Evaluated')}: {stats.get('total',0)}", f"• TP1: {stats.get('tp1',0)} | TP2: {stats.get('tp2',0)} | SL: {stats.get('sl',0)} | {_tr(language,'Expiradas','Expired')}: {stats.get('expired',0)}", f"• {_tr(language,'Resueltas','Resolved')}: {stats.get('resolved', stats.get('won',0)+stats.get('lost',0))} | Win rate: {stats.get('winrate',0.0)}%", f"• {_tr(language,'Señales scanner','Scanner signals')}: {act.get('signals_total',0)} | {_tr(language,'Score prom (raw)','Avg score (raw)')}: {act.get('avg_score','—')}", ""]
+        return [f"{emoji} {title}", f"• {_tr(language,'Evaluadas','Evaluated')}: {stats.get('total',0)}", f"• TP1: {stats.get('tp1',0)} | TP2: {stats.get('tp2',0)} | SL: {stats.get('sl',0)} | {_tr(language,'Expiradas','Expired')}: {stats.get('expired',0)}", f"• {_tr(language,'Resueltas','Resolved')}: {stats.get('resolved', stats.get('won',0)+stats.get('lost',0))} | Win rate: {stats.get('winrate',0.0)}%", f"• {_tr(language,'Señales scanner','Scanner signals')}: {act.get('signals_total',0)} | {_tr(language,'Score prom (norm.)','Avg score (norm.)')}: {act.get('avg_score','—')}", ""]
 
     parts=[f"🎯 **{_tr(language,'RENDIMIENTO DEL BOT','BOT PERFORMANCE')}**\n"]
     parts.append(_fmt_stats('Últimos 7 días','Last 7 days', s7 or {}))
@@ -691,11 +691,11 @@ async def handle_performance(query, user):
             parts.append(f"• {str(row.get('setup_group','—')).upper()}: {row.get('winrate',0.0)}% ({row.get('resolved',0)})")
         parts.append("")
     parts.append(f"📈 **{_tr(language,'Actividad de señales (scanner)','Signal activity (scanner)')}**")
-    if act7: parts.append(f"• 7D: {act7.get('signals_total',0)} {_tr(language,'señales','signals')} | {_tr(language,'Score prom (raw)','Avg score (raw)')}: {act7.get('avg_score','—')}")
-    if act30: parts.append(f"• 30D: {act30.get('signals_total',0)} {_tr(language,'señales','signals')} | {_tr(language,'Score prom (raw)','Avg score (raw)')}: {act30.get('avg_score','—')}")
+    if act7: parts.append(f"• 7D: {act7.get('signals_total',0)} {_tr(language,'señales','signals')} | {_tr(language,'Score prom (norm.)','Avg score (norm.)')}: {act7.get('avg_score','—')}")
+    if act30: parts.append(f"• 30D: {act30.get('signals_total',0)} {_tr(language,'señales','signals')} | {_tr(language,'Score prom (norm.)','Avg score (norm.)')}: {act30.get('avg_score','—')}")
     if by_score_30 and by_score_30.get('buckets',[]):
         parts.append("")
-        parts.append(f"🏷️ **{_tr(language,'Win rate por raw score (30D)','Win rate by raw score (30D)')}**")
+        parts.append(f"🏷️ **{_tr(language,'Win rate por score normalizado (30D)','Win rate by normalized score (30D)')}**")
         for row in by_score_30.get('buckets',[]): parts.append(f"• {row.get('label','—')}: {row.get('winrate',0.0)}% ({row.get('n',0)})")
     if (s7 or {}).get('total',0)==0 and (act7 or {}).get('signals_total',0)>0:
         parts.append("")
