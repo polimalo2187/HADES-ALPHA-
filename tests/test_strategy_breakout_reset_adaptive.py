@@ -248,34 +248,54 @@ def test_mtf_strategy_downgrades_premium_candidate_to_plus_when_premium_floor_no
     assert result["raw_score"] == 78.0
 
 
-def test_continuation_filter_keeps_free_plus_lightweight_but_premium_strict():
+def test_continuation_filter_is_now_tiered_for_free_plus_and_premium():
     import app.strategy as strategy
 
-    profile = dict(strategy.PLUS_PROFILE)
-    last = pd.Series({
+    quality = {"level": 100.0}
+    weak_but_directional = pd.Series({
         "open": 100.0,
-        "high": 101.0,
-        "low": 99.8,
-        "close": 100.35,
-        "body_ratio": 0.23,
-        "volume": 900.0,
+        "high": 100.8,
+        "low": 99.9,
+        "close": 100.36,
+        "body_ratio": 0.22,
+        "volume": 920.0,
         "vol_ma": 1000.0,
         "atr": 1.0,
     })
-    quality = {"level": 100.0}
 
-    assert strategy._continuation_ok(last, "LONG", profile, quality) is True
+    assert strategy._continuation_ok(weak_but_directional, "LONG", dict(strategy.FREE_PROFILE), quality) is True
+    assert strategy._continuation_ok(weak_but_directional, "LONG", dict(strategy.PLUS_PROFILE), quality) is False
+    assert strategy._continuation_ok(weak_but_directional, "LONG", dict(strategy.PREMIUM_PROFILE), quality) is False
 
-    premium_profile = dict(strategy.PREMIUM_PROFILE)
-    assert strategy._continuation_ok(last, "LONG", premium_profile, quality) is False
+    plus_quality = pd.Series({
+        "open": 100.0,
+        "high": 101.0,
+        "low": 99.9,
+        "close": 100.82,
+        "body_ratio": 0.25,
+        "volume": 1080.0,
+        "vol_ma": 1000.0,
+        "atr": 1.0,
+    })
 
-    last["close"] = 100.92
-    last["volume"] = 1300.0
-    last["body_ratio"] = 0.31
-    assert strategy._continuation_ok(last, "LONG", premium_profile, quality) is True
+    assert strategy._continuation_ok(plus_quality, "LONG", dict(strategy.PLUS_PROFILE), quality) is True
+    assert strategy._continuation_ok(plus_quality, "LONG", dict(strategy.PREMIUM_PROFILE), quality) is False
 
-    last["body_ratio"] = 0.10
-    assert strategy._continuation_ok(last, "LONG", profile, quality) is False
+    premium_quality = pd.Series({
+        "open": 100.0,
+        "high": 101.2,
+        "low": 99.9,
+        "close": 101.02,
+        "body_ratio": 0.31,
+        "volume": 1300.0,
+        "vol_ma": 1000.0,
+        "atr": 1.0,
+    })
+
+    assert strategy._continuation_ok(premium_quality, "LONG", dict(strategy.PREMIUM_PROFILE), quality) is True
+
+    premium_quality["body_ratio"] = 0.10
+    assert strategy._continuation_ok(premium_quality, "LONG", dict(strategy.FREE_PROFILE), quality) is False
 
 
 def test_continuation_score_rewards_close_position_volume_and_progress():
