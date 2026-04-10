@@ -162,21 +162,27 @@ PREMIUM_PROFILE = {
 TRADING_PROFILES = {
     "conservador": {
         "leverage": "20x-30x",
-        "sl_pct": 0.0080,
-        "tp1_pct": 0.0090,
-        "tp2_pct": 0.0160,
+        "stop_atr_mult": _env_float("TRADE_CONSERVADOR_STOP_ATR_MULT", 0.95),
+        "min_stop_pct": _env_float("TRADE_CONSERVADOR_MIN_STOP_PCT", 0.0062),
+        "max_stop_pct": _env_float("TRADE_CONSERVADOR_MAX_STOP_PCT", 0.0098),
+        "tp1_rr": _env_float("TRADE_CONSERVADOR_TP1_RR", 1.00),
+        "tp2_rr": _env_float("TRADE_CONSERVADOR_TP2_RR", 1.85),
     },
     "moderado": {
         "leverage": "30x-40x",
-        "sl_pct": 0.0068,
-        "tp1_pct": 0.0080,
-        "tp2_pct": 0.0140,
+        "stop_atr_mult": _env_float("TRADE_MODERADO_STOP_ATR_MULT", 0.85),
+        "min_stop_pct": _env_float("TRADE_MODERADO_MIN_STOP_PCT", 0.0054),
+        "max_stop_pct": _env_float("TRADE_MODERADO_MAX_STOP_PCT", 0.0084),
+        "tp1_rr": _env_float("TRADE_MODERADO_TP1_RR", 1.12),
+        "tp2_rr": _env_float("TRADE_MODERADO_TP2_RR", 2.00),
     },
     "agresivo": {
         "leverage": "40x-50x",
-        "sl_pct": 0.0058,
-        "tp1_pct": 0.0070,
-        "tp2_pct": 0.0120,
+        "stop_atr_mult": _env_float("TRADE_AGRESIVO_STOP_ATR_MULT", 0.78),
+        "min_stop_pct": _env_float("TRADE_AGRESIVO_MIN_STOP_PCT", 0.0048),
+        "max_stop_pct": _env_float("TRADE_AGRESIVO_MAX_STOP_PCT", 0.0072),
+        "tp1_rr": _env_float("TRADE_AGRESIVO_TP1_RR", 1.28),
+        "tp2_rr": _env_float("TRADE_AGRESIVO_TP2_RR", 2.25),
     },
 }
 
@@ -237,6 +243,57 @@ def _record_reject(debug_counts: Optional[Dict[str, int]], reason: str) -> None:
 
 def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
+
+
+def _price_round_digits(value: float) -> int:
+    try:
+        number = abs(float(value))
+    except Exception:
+        return 4
+    if number == 0:
+        return 4
+    if number >= 1000:
+        return 2
+    if number >= 100:
+        return 3
+    if number >= 1:
+        return 4
+    if number >= 0.1:
+        return 5
+    if number >= 0.01:
+        return 7
+    if number >= 0.001:
+        return 8
+    if number >= 0.0001:
+        return 10
+    return 12
+
+
+
+def _round_price_dynamic(value: float) -> float:
+    return round(float(value), _price_round_digits(value))
+
+
+
+def _volatility_regime_adjustment(atr_pct: float) -> float:
+    if atr_pct >= 0.0105:
+        return 1.08
+    if atr_pct >= 0.0085:
+        return 1.04
+    if atr_pct <= 0.0032:
+        return 0.94
+    if atr_pct <= 0.0042:
+        return 0.97
+    return 1.0
+
+
+
+def _adaptive_stop_pct(atr_pct: float, cfg: Dict) -> float:
+    base_stop_pct = float(atr_pct) * float(cfg["stop_atr_mult"])
+    adjusted_stop_pct = base_stop_pct * _volatility_regime_adjustment(float(atr_pct))
+    min_stop_pct = float(cfg["min_stop_pct"])
+    max_stop_pct = float(cfg["max_stop_pct"])
+    return _clamp(adjusted_stop_pct, min_stop_pct, max_stop_pct)
 
 
 
@@ -651,22 +708,24 @@ def _reset_entry_price(level: float, last: pd.Series, direction: str) -> float:
 
 
 
-def _build_trade_profiles(entry_price: float, direction: str) -> Dict[str, Dict]:
+def _build_trade_profiles(entry_price: float, direction: str, atr_pct: float) -> Dict[str, Dict]:
     profiles: Dict[str, Dict] = {}
 
     for name, cfg in TRADING_PROFILES.items():
-        sl_pct = float(cfg["sl_pct"])
-        tp1_pct = float(cfg["tp1_pct"])
-        tp2_pct = float(cfg["tp2_pct"])
+        stop_pct = _adaptive_stop_pct(atr_pct, cfg)
+        tp1_rr = max(float(cfg["tp1_rr"]), 0.1)
+        tp2_rr = max(float(cfg["tp2_rr"]), tp1_rr + 0.1)
+        tp1_pct = stop_pct * tp1_rr
+        tp2_pct = stop_pct * tp2_rr
 
         if direction == "LONG":
-            stop_loss = round(entry_price * (1 - sl_pct), 4)
-            tp1 = round(entry_price * (1 + tp1_pct), 4)
-            tp2 = round(entry_price * (1 + tp2_pct), 4)
+            stop_loss = _round_price_dynamic(entry_price * (1 - stop_pct))
+            tp1 = _round_price_dynamic(entry_price * (1 + tp1_pct))
+            tp2 = _round_price_dynamic(entry_price * (1 + tp2_pct))
         else:
-            stop_loss = round(entry_price * (1 + sl_pct), 4)
-            tp1 = round(entry_price * (1 - tp1_pct), 4)
-            tp2 = round(entry_price * (1 - tp2_pct), 4)
+            stop_loss = _round_price_dynamic(entry_price * (1 + stop_pct))
+            tp1 = _round_price_dynamic(entry_price * (1 - tp1_pct))
+            tp2 = _round_price_dynamic(entry_price * (1 - tp2_pct))
 
         profiles[name] = {
             "stop_loss": stop_loss,
@@ -833,7 +892,7 @@ def _evaluate_profile(
     # Breakout + reset anticipado: la entrada queda fijada donde esperamos que
     # ocurra el retroceso, no en el precio actual de extensión.
     entry_price = _reset_entry_price(level, last, direction)
-    trade_profiles = _build_trade_profiles(entry_price, direction)
+    trade_profiles = _build_trade_profiles(entry_price, direction, atr_pct)
 
     raw_score, raw_components = _compute_raw_score(df, direction, profile, quality)
     normalized_score, normalized_components = _compute_normalized_score(
