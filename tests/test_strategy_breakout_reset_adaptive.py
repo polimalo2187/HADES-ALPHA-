@@ -337,3 +337,36 @@ def test_profile_defaults_keep_free_plus_premium_hierarchy_after_rebalance():
     assert strategy.FREE_PROFILE["min_close_position_continuation"] < strategy.PLUS_PROFILE["min_close_position_continuation"] < strategy.PREMIUM_PROFILE["min_close_position_continuation"]
     assert strategy.FREE_PROFILE["min_post_breakout_progress_atr"] < strategy.PLUS_PROFILE["min_post_breakout_progress_atr"] < strategy.PREMIUM_PROFILE["min_post_breakout_progress_atr"]
     assert strategy.FREE_RAW_SCORE_MIN < strategy.PLUS_RAW_SCORE_MIN < strategy.PREMIUM_RAW_SCORE_MIN
+
+
+def test_trade_profiles_use_atr_adaptive_geometry_and_preserve_rr_order():
+    import app.strategy as strategy
+
+    low_vol = strategy._build_trade_profiles(100.0, "LONG", 0.0030)
+    high_vol = strategy._build_trade_profiles(100.0, "LONG", 0.0110)
+
+    low_stop_distance = 100.0 - low_vol["conservador"]["stop_loss"]
+    high_stop_distance = 100.0 - high_vol["conservador"]["stop_loss"]
+
+    assert high_stop_distance > low_stop_distance
+    assert (100.0 - low_vol["conservador"]["stop_loss"]) > (100.0 - low_vol["moderado"]["stop_loss"]) > (100.0 - low_vol["agresivo"]["stop_loss"])
+
+    for payload in low_vol.values():
+        tp1, tp2 = payload["take_profits"]
+        stop = payload["stop_loss"]
+        assert stop < 100.0 < tp1 < tp2
+
+
+
+def test_trade_profiles_keep_precision_for_low_price_assets():
+    import app.strategy as strategy
+
+    profiles = strategy._build_trade_profiles(0.00172345, "SHORT", 0.0042)
+    moderado = profiles["moderado"]
+
+    assert round(moderado["stop_loss"], 8) == moderado["stop_loss"]
+    assert round(moderado["take_profits"][0], 8) == moderado["take_profits"][0]
+    assert round(moderado["take_profits"][1], 8) == moderado["take_profits"][1]
+    assert moderado["stop_loss"] > 0.00172345
+    assert moderado["take_profits"][0] < 0.00172345
+    assert moderado["take_profits"][1] < moderado["take_profits"][0]
