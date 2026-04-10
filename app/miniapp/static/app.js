@@ -1784,7 +1784,7 @@ function performancePlanCard(item) {
       <div class="item-header">
         <div>
           <h2 style="margin:0;">${escapeHtml(item.plan_name || item.plan || 'Plan')}</h2>
-          <div class="item-subtitle">Scanner ${escapeHtml(activity.signals_total ?? 0)} · Score ${escapeHtml(activity.avg_score === null ? '—' : formatNumber(activity.avg_score, 2))}</div>
+          <div class="item-subtitle">Scanner ${escapeHtml(activity.signals_total ?? 0)} · Score norm. ${escapeHtml(activity.avg_score === null ? '—' : formatNumber(activity.avg_score, 2))}</div>
         </div>
         <span class="plan-tag">30D</span>
       </div>
@@ -1942,7 +1942,7 @@ function renderPerformance() {
         <div class="pill-row compact-pill-row" style="margin-top:12px;">
           <span class="pill">Ventana activa: ${escapeHtml(overview.focus_label || performanceWindowLabel(overview.focus_days || 30))}</span>
           <span class="pill">Actividad scanner: ${escapeHtml(activity.signals_total ?? 0)}</span>
-          <span class="pill">Score medio: ${escapeHtml(activity.avg_score === null ? '—' : formatNumber(activity.avg_score, 2))}</span>
+          <span class="pill">Score medio (norm.): ${escapeHtml(activity.avg_score === null ? '—' : formatNumber(activity.avg_score, 2))}</span>
           <span class="pill">Generado: ${escapeHtml(formatDate(overview.generated_at))}</span>
         </div>
       </div>
@@ -2009,7 +2009,7 @@ function renderPerformance() {
       </div>
 
       <div class="card card-span-6">
-        <h2>Win rate por raw score (30D)</h2>
+        <h2>Win rate por score normalizado (30D)</h2>
         <div class="list">
           ${scoreBuckets.length ? scoreBuckets.map(performanceScoreBucketItem).join('') : '<div class="empty-state">Sin buckets de score disponibles.</div>'}
         </div>
