@@ -71,6 +71,12 @@ def build_signal_history_record(base_signal: Dict, result_doc: Dict) -> Dict:
         record["resolution"] = result_doc.get("resolution")
     if result_doc.get("completed") is not None:
         record["completed"] = bool(result_doc.get("completed"))
+    record["strategy_name"] = base_signal.get("strategy_name", result_doc.get("strategy_name"))
+    record["strategy_version"] = base_signal.get("strategy_version", result_doc.get("strategy_version"))
+    record["regime_state"] = base_signal.get("regime_state", result_doc.get("regime_state"))
+    record["regime_reason"] = base_signal.get("regime_reason", result_doc.get("regime_reason"))
+    record["regime_bias"] = base_signal.get("regime_bias", result_doc.get("regime_bias"))
+    record["router_version"] = base_signal.get("router_version", result_doc.get("router_version"))
     return record
 
 
