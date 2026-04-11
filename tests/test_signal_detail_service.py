@@ -413,3 +413,53 @@ def test_tracking_marks_tp1_hit_from_historical_path_while_signal_is_still_open(
     assert payload['state_label'] == 'EXTENDIDA'
     assert payload['entry_state_label'] == 'RESET EJECUTADO'
     assert 'TP1' in payload['recommendation']
+
+
+def test_tracking_keeps_market_execution_copy_for_liquidity_strategy(monkeypatch):
+    from datetime import datetime, timedelta
+    from app.signals import get_signal_tracking_for_user
+
+    now = datetime.utcnow()
+    created_at = now - timedelta(minutes=6)
+    user_signal = {
+        'signal_id': 'sig-liquidity-live',
+        'symbol': 'ARBUSDT',
+        'direction': 'LONG',
+        'entry_price': 0.1160,
+        'entry_zone': {'low': 0.1158, 'high': 0.1162},
+        'profiles': {'moderado': {'stop_loss': 0.1140, 'take_profits': [0.1180, 0.1200]}},
+        'telegram_valid_until': now + timedelta(minutes=4),
+        'entry_valid_until': created_at,
+        'evaluation_valid_until': now + timedelta(minutes=20),
+        'send_mode': 'market_on_close',
+        'strategy_name': 'liquidity_sweep_reversal',
+        'created_at': created_at,
+        'entry_sent_price': 0.1160,
+    }
+
+    monkeypatch.setattr('app.signals.get_user_signal_by_signal_id', lambda user_id, signal_id: dict(user_signal))
+    monkeypatch.setattr('app.signals.get_base_signal_by_signal_id', lambda signal_id: {})
+    monkeypatch.setattr('app.signals.get_current_price', lambda symbol: 0.1166)
+
+    class DummyResults:
+        def find_one(self, *args, **kwargs):
+            return None
+
+    monkeypatch.setattr('app.signals.signal_results_collection', lambda: DummyResults())
+
+    def fake_klines(symbol, start_dt, end_dt, interval='1m'):
+        base_ms = int(created_at.timestamp() * 1000)
+        return [
+            [base_ms, '0.1160', '0.1164', '0.1157', '0.1162', '0', base_ms + 59999],
+            [base_ms + 60000, '0.1162', '0.1168', '0.1161', '0.1166', '0', base_ms + 119999],
+        ]
+
+    monkeypatch.setattr('app.signals._fetch_klines_between', fake_klines)
+
+    payload = get_signal_tracking_for_user(1, 'sig-liquidity-live', profile_name='moderado')
+
+    assert payload['entry_touched'] is True
+    assert payload['entry_state_label'] == 'ACTIVA DESDE ENVÍO'
+    assert payload['state_label'] == 'ACTIVA DESDE ENVÍO'
+    assert 'reset' not in payload['recommendation'].lower()
+    assert 'envío' in payload['recommendation'].lower()
