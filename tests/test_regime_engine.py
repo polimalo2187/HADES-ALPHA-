@@ -56,3 +56,35 @@ def test_classify_market_regime_detects_risk_off_on_shock():
     assert snapshot["state"] == "risk_off"
     assert snapshot["strategy_name"] == "risk_off"
     assert snapshot["allow"] is False
+
+
+
+def test_raw_market_regime_defaults_to_continuation_when_sweep_is_not_strong(monkeypatch):
+    df_5m = _make_ohlc_frame([100.0 + (idx * 0.06) for idx in range(50)], step_minutes=5)
+    df_15m = _make_ohlc_frame([100.0 + (idx * 0.10) for idx in range(18)], step_minutes=15)
+
+    monkeypatch.setattr(regime_engine, "_body_ratio_series", lambda df: pd.Series([0.49] * len(df)))
+    monkeypatch.setattr(regime_engine, "_wickiness_series", lambda df: pd.Series([0.47] * len(df)))
+    monkeypatch.setattr(regime_engine, "_trend_consistency", lambda closes: 0.58)
+    monkeypatch.setattr(regime_engine, "_sign_flip_ratio", lambda closes: 0.40)
+
+    raw = regime_engine._classify_raw_market_regime(df_5m, df_15m)
+
+    assert raw["raw_state"] == "continuation_clean"
+    assert raw["reason"].startswith("market_regime_continuation")
+
+
+
+def test_raw_market_regime_switches_to_sweep_only_on_strong_chop(monkeypatch):
+    df_5m = _make_ohlc_frame([100.0 + ((-1) ** idx) * 0.03 for idx in range(50)], step_minutes=5)
+    df_15m = _make_ohlc_frame([100.0 + ((-1) ** idx) * 0.02 for idx in range(18)], step_minutes=15)
+
+    monkeypatch.setattr(regime_engine, "_body_ratio_series", lambda df: pd.Series([0.30] * len(df)))
+    monkeypatch.setattr(regime_engine, "_wickiness_series", lambda df: pd.Series([0.62] * len(df)))
+    monkeypatch.setattr(regime_engine, "_trend_consistency", lambda closes: 0.42)
+    monkeypatch.setattr(regime_engine, "_sign_flip_ratio", lambda closes: 0.72)
+
+    raw = regime_engine._classify_raw_market_regime(df_5m, df_15m)
+
+    assert raw["raw_state"] == "sweep_reversal"
+    assert raw["reason"] == "market_regime_sweep_reversal"
