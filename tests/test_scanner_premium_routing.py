@@ -133,3 +133,96 @@ def test_build_symbol_candidate_uses_reference_close_when_5m_disabled(monkeypatc
 
     assert result is None
     assert captured["reference_market_price"] == 120.0
+
+
+def _make_ohlc_frame(closes, *, step_minutes=5, base_ts="2026-04-10T00:00:00Z"):
+    ts0 = pd.Timestamp(base_ts)
+    rows = []
+    prev_close = float(closes[0])
+    for idx, close in enumerate(closes):
+        close = float(close)
+        open_price = prev_close
+        high = max(open_price, close) + 0.12
+        low = min(open_price, close) - 0.12
+        rows.append(
+            {
+                "open_time": ts0 + pd.Timedelta(minutes=step_minutes * idx),
+                "close_time": ts0 + pd.Timedelta(minutes=(step_minutes * idx) + step_minutes - 1),
+                "open": open_price,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": 1000.0 + idx,
+            }
+        )
+        prev_close = close
+    return pd.DataFrame(rows)
+
+
+
+def test_btc_regime_classifies_directional_uptrend_without_shock():
+    scanner = _load_scanner()
+
+    closes_5m = [100.0 + (idx * 0.22) for idx in range(40)]
+    closes_15m = [100.0 + (idx * 0.35) for idx in range(16)]
+
+    snapshot = scanner._classify_btc_regime(
+        _make_ohlc_frame(closes_5m, step_minutes=5),
+        _make_ohlc_frame(closes_15m, step_minutes=15),
+    )
+
+    assert snapshot["state"] == "trend_up"
+    assert snapshot["bias"] == "up"
+    assert snapshot["allow"] is True
+
+
+
+def test_btc_regime_classifies_vol_shock_on_large_last_candle():
+    scanner = _load_scanner()
+
+    closes_5m = [100.0 + (idx * 0.05) for idx in range(39)] + [102.8]
+    closes_15m = [100.0 + (idx * 0.08) for idx in range(16)]
+
+    snapshot = scanner._classify_btc_regime(
+        _make_ohlc_frame(closes_5m, step_minutes=5),
+        _make_ohlc_frame(closes_15m, step_minutes=15),
+    )
+
+    assert snapshot["state"] == "vol_shock"
+    assert snapshot["reason"] == "btc_regime_vol_shock"
+    assert snapshot["allow"] is False
+
+
+
+def test_btc_regime_guard_blocks_countertrend_signal():
+    scanner = _load_scanner()
+
+    candidate = {
+        "symbol": "ENAUSDT",
+        "direction": "SHORT",
+        "raw_score": 88.0,
+        "normalized_score": 84.0,
+        "setup_group": "premium",
+    }
+    btc_regime = {"state": "trend_up", "bias": "up", "reason": "btc_regime_trend_up"}
+
+    assert scanner._apply_btc_regime_guard(candidate, btc_regime) is None
+
+
+
+def test_btc_regime_guard_allows_aligned_premium_during_cooldown():
+    scanner = _load_scanner()
+
+    candidate = {
+        "symbol": "SOLUSDT",
+        "direction": "SHORT",
+        "raw_score": scanner.PREMIUM_RAW_SCORE_MIN + scanner.BTC_REGIME_PREMIUM_SHOCK_SCORE_BUFFER + 1.0,
+        "normalized_score": 86.0,
+        "setup_group": "premium",
+    }
+    btc_regime = {"state": "cooldown", "bias": "down", "reason": "btc_regime_cooldown"}
+
+    guarded = scanner._apply_btc_regime_guard(candidate, btc_regime)
+
+    assert guarded is not None
+    assert guarded["btc_regime_guard_action"] == "allow_premium_aligned_cooldown"
