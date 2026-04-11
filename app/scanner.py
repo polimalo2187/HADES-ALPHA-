@@ -9,7 +9,7 @@ import logging
 import asyncio
 import threading
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 import requests
@@ -97,6 +97,22 @@ PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "83"))
 PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "76"))
 FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "69"))
 
+# BTC market-regime guard.
+BTC_REGIME_ENABLED = str(os.getenv("BTC_REGIME_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
+BTC_REGIME_SYMBOL = str(os.getenv("BTC_REGIME_SYMBOL", "BTCUSDT")).strip().upper() or "BTCUSDT"
+BTC_REGIME_APPLY_TO_BTC_SYMBOL = str(os.getenv("BTC_REGIME_APPLY_TO_BTC_SYMBOL", "false")).strip().lower() in {"1", "true", "yes", "on"}
+BTC_REGIME_5M_LOOKBACK = max(40, int(os.getenv("BTC_REGIME_5M_LOOKBACK", "120")))
+BTC_REGIME_15M_LOOKBACK = max(24, int(os.getenv("BTC_REGIME_15M_LOOKBACK", "96")))
+BTC_REGIME_DIRECTIONAL_MOVE_PCT = max(0.15, float(os.getenv("BTC_REGIME_DIRECTIONAL_MOVE_PCT", "0.55")))
+BTC_REGIME_FAST_MOVE_PCT = max(0.08, float(os.getenv("BTC_REGIME_FAST_MOVE_PCT", "0.28")))
+BTC_REGIME_SHOCK_MOVE_PCT = max(0.20, float(os.getenv("BTC_REGIME_SHOCK_MOVE_PCT", "0.90")))
+BTC_REGIME_SHOCK_RANGE_ATR = max(1.0, float(os.getenv("BTC_REGIME_SHOCK_RANGE_ATR", "2.20")))
+BTC_REGIME_SHOCK_BODY_ATR = max(0.8, float(os.getenv("BTC_REGIME_SHOCK_BODY_ATR", "1.20")))
+BTC_REGIME_COOLDOWN_BARS = max(1, int(os.getenv("BTC_REGIME_COOLDOWN_BARS", "3")))
+BTC_REGIME_PREMIUM_SHOCK_SCORE_BUFFER = max(0.0, float(os.getenv("BTC_REGIME_PREMIUM_SHOCK_SCORE_BUFFER", "2.0")))
+BTC_REGIME_FAIL_OPEN = str(os.getenv("BTC_REGIME_FAIL_OPEN", "true")).strip().lower() in {"1", "true", "yes", "on"}
+BTC_REGIME_SNAPSHOT_TTL_SECONDS = max(15.0, float(os.getenv("BTC_REGIME_SNAPSHOT_TTL_SECONDS", "180")))
+
 # Freshness guard for pending-entry signals.
 # If the price already advanced too much from the intended reset entry, the alert must not be sent.
 PENDING_ENTRY_MAX_PROGRESS_TO_TP1_PCT = float(os.getenv("PENDING_ENTRY_MAX_PROGRESS_TO_TP1_PCT", "18"))
@@ -115,6 +131,15 @@ _PROFILE_CONFIGS = {
 }
 _PROFILE_SCORE_MAP = {
     round(float(cfg.get("score", 0.0)), 2): name for name, cfg in _PROFILE_CONFIGS.items()
+}
+
+_btc_regime_snapshot_lock = threading.Lock()
+_btc_regime_snapshot: Dict[str, Any] = {
+    "fetched_at_ts": 0.0,
+    "state": "unknown",
+    "bias": "neutral",
+    "allow": True,
+    "reason": "uninitialized",
 }
 
 
@@ -164,6 +189,156 @@ def _closed_timeframe_frame(df: pd.DataFrame) -> pd.DataFrame:
 
 def _closed_15m_frame(df_15m: pd.DataFrame) -> pd.DataFrame:
     return _closed_timeframe_frame(df_15m)
+
+
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _simple_atr_series(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    if df is None or df.empty:
+        return pd.Series(dtype=float)
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
+    close = df["close"].astype(float)
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [
+            (high - low).abs(),
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    return tr.rolling(window=period, min_periods=period).mean()
+
+
+def _direction_from_move(move: float, tolerance: float = 1e-9) -> str:
+    if move > tolerance:
+        return "up"
+    if move < -tolerance:
+        return "down"
+    return "neutral"
+
+
+def _direction_matches_bias(direction: str, bias: str) -> bool:
+    direction_key = str(direction or "").strip().upper()
+    bias_key = str(bias or "").strip().lower()
+    return (direction_key == "LONG" and bias_key == "up") or (direction_key == "SHORT" and bias_key == "down")
+
+
+def _classify_btc_regime(df_5m: pd.DataFrame, df_15m: pd.DataFrame) -> Dict[str, Any]:
+    closed_5m = _closed_timeframe_frame(df_5m)
+    closed_15m = _closed_timeframe_frame(df_15m)
+    if len(closed_5m) < 20 or len(closed_15m) < 6:
+        return {
+            "state": "unknown",
+            "bias": "neutral",
+            "allow": True,
+            "reason": "insufficient_btc_history",
+            "block_reason": None,
+        }
+
+    atr_5m = _simple_atr_series(closed_5m, period=14)
+    if atr_5m.empty or pd.isna(atr_5m.iloc[-1]) or float(atr_5m.iloc[-1]) <= 1e-9:
+        return {
+            "state": "unknown",
+            "bias": "neutral",
+            "allow": True,
+            "reason": "btc_atr_unavailable",
+            "block_reason": None,
+        }
+
+    last_5m = closed_5m.iloc[-1]
+    prev_5m = closed_5m.iloc[-2]
+    atr_now = float(atr_5m.iloc[-1])
+    last_range_atr = abs(float(last_5m["high"]) - float(last_5m["low"])) / atr_now
+    last_body_atr = abs(float(last_5m["close"]) - float(last_5m["open"])) / atr_now
+    last_move_pct = abs((float(last_5m["close"]) / max(float(prev_5m["close"]), 1e-9) - 1.0) * 100.0)
+
+    recent_window = closed_5m.tail(max(BTC_REGIME_COOLDOWN_BARS, 3)).copy()
+    recent_atr = atr_5m.tail(len(recent_window)).reset_index(drop=True)
+    recent_window = recent_window.reset_index(drop=True)
+    recent_ranges_atr = (recent_window["high"] - recent_window["low"]).abs() / recent_atr
+    recent_bodies_atr = (recent_window["close"] - recent_window["open"]).abs() / recent_atr
+    recent_shock = bool(
+        (recent_ranges_atr >= BTC_REGIME_SHOCK_RANGE_ATR).any()
+        or (recent_bodies_atr >= BTC_REGIME_SHOCK_BODY_ATR).any()
+    )
+
+    move_15m_pct = 0.0
+    if len(closed_15m) >= 4:
+        anchor_close = float(closed_15m.iloc[-4]["close"])
+        move_15m_pct = (float(closed_15m.iloc[-1]["close"]) / max(anchor_close, 1e-9) - 1.0) * 100.0
+    elif len(closed_15m) >= 2:
+        anchor_close = float(closed_15m.iloc[-2]["close"])
+        move_15m_pct = (float(closed_15m.iloc[-1]["close"]) / max(anchor_close, 1e-9) - 1.0) * 100.0
+
+    move_fast_pct = (float(last_5m["close"]) / max(float(recent_window.iloc[0]["open"]), 1e-9) - 1.0) * 100.0
+    directional_bias = _direction_from_move(move_15m_pct)
+    if directional_bias == "neutral":
+        directional_bias = _direction_from_move(move_fast_pct)
+    if directional_bias == "neutral":
+        directional_bias = _direction_from_move(float(last_5m["close"]) - float(last_5m["open"]))
+
+    shock_now = bool(
+        last_range_atr >= BTC_REGIME_SHOCK_RANGE_ATR
+        or last_body_atr >= BTC_REGIME_SHOCK_BODY_ATR
+        or last_move_pct >= BTC_REGIME_SHOCK_MOVE_PCT
+    )
+
+    state = "normal"
+    reason = "btc_regime_normal"
+    block_reason = None
+
+    if shock_now:
+        state = "vol_shock"
+        reason = "btc_regime_vol_shock"
+        block_reason = "btc_regime_vol_shock"
+    elif recent_shock:
+        state = "cooldown"
+        reason = "btc_regime_cooldown"
+        block_reason = "btc_regime_cooldown"
+    elif abs(move_15m_pct) >= BTC_REGIME_DIRECTIONAL_MOVE_PCT and abs(move_fast_pct) >= BTC_REGIME_FAST_MOVE_PCT:
+        if directional_bias == "up":
+            state = "trend_up"
+            reason = "btc_regime_trend_up"
+        elif directional_bias == "down":
+            state = "trend_down"
+            reason = "btc_regime_trend_down"
+
+    return {
+        "state": state,
+        "bias": directional_bias,
+        "allow": state in {"normal", "trend_up", "trend_down", "unknown"},
+        "reason": reason,
+        "block_reason": block_reason,
+        "symbol": BTC_REGIME_SYMBOL,
+        "metrics": {
+            "move_15m_pct": round(move_15m_pct, 4),
+            "move_fast_pct": round(move_fast_pct, 4),
+            "last_move_pct": round(last_move_pct, 4),
+            "last_range_atr": round(last_range_atr, 4),
+            "last_body_atr": round(last_body_atr, 4),
+        },
+    }
+
+
+def _snapshot_btc_regime() -> Dict[str, Any]:
+    with _btc_regime_snapshot_lock:
+        return dict(_btc_regime_snapshot)
+
+
+def _store_btc_regime(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(snapshot or {})
+    payload.setdefault("fetched_at_ts", _now_ts())
+    with _btc_regime_snapshot_lock:
+        _btc_regime_snapshot.clear()
+        _btc_regime_snapshot.update(payload)
+        return dict(_btc_regime_snapshot)
 
 
 def _timeframe_bucket_id(interval: str, now_ts: Optional[float] = None) -> Optional[int]:
@@ -731,6 +906,65 @@ def get_klines(symbol: str, interval: str, limit: int = 220, *, allow_stale: boo
     return df
 
 
+def _fetch_btc_regime_snapshot(*, force_refresh: bool = False) -> Dict[str, Any]:
+    if not BTC_REGIME_ENABLED:
+        return {
+            "state": "disabled",
+            "bias": "neutral",
+            "allow": True,
+            "reason": "btc_regime_disabled",
+            "block_reason": None,
+            "fetched_at_ts": _now_ts(),
+        }
+
+    cached = _snapshot_btc_regime()
+    cached_ts = _safe_float(cached.get("fetched_at_ts"), 0.0)
+    if not force_refresh and cached_ts > 0.0 and (_now_ts() - cached_ts) <= BTC_REGIME_SNAPSHOT_TTL_SECONDS:
+        return cached
+
+    try:
+        btc_15m = get_klines(
+            BTC_REGIME_SYMBOL,
+            "15m",
+            limit=BTC_REGIME_15M_LOOKBACK,
+            allow_stale=True,
+            stale_grace_seconds=SCANNER_HTF_STALE_GRACE_SECONDS,
+        )
+        btc_5m = get_klines(BTC_REGIME_SYMBOL, "5m", limit=BTC_REGIME_5M_LOOKBACK)
+        snapshot = _classify_btc_regime(btc_5m, btc_15m)
+        snapshot["fetched_at_ts"] = _now_ts()
+        return _store_btc_regime(snapshot)
+    except Exception as exc:
+        logger.warning("⚠️ BTC regime guard no pudo refrescar snapshot: %s", exc)
+        cached = _snapshot_btc_regime()
+        cached_ts = _safe_float(cached.get("fetched_at_ts"), 0.0)
+        if cached_ts > 0.0:
+            fallback = dict(cached)
+            fallback["stale"] = True
+            fallback["reason"] = str(fallback.get("reason") or "btc_regime_cached_stale")
+            return fallback
+        if BTC_REGIME_FAIL_OPEN:
+            return {
+                "state": "unknown",
+                "bias": "neutral",
+                "allow": True,
+                "reason": "btc_regime_fetch_failed_fail_open",
+                "block_reason": None,
+                "error": str(exc),
+                "fetched_at_ts": _now_ts(),
+            }
+        return {
+            "state": "vol_shock",
+            "bias": "neutral",
+            "allow": False,
+            "reason": "btc_regime_fetch_failed_fail_closed",
+            "block_reason": "btc_regime_fetch_failed_fail_closed",
+            "error": str(exc),
+            "fetched_at_ts": _now_ts(),
+        }
+
+
+
 def get_active_futures_symbols(*, allow_stale_on_error: bool = True) -> List[str]:
     cached = _active_symbols_cache.get()
     if cached is not None:
@@ -850,6 +1084,60 @@ def _normalized_score(signal: Dict) -> float:
 
 def _setup_group(signal: Dict) -> str:
     return str(signal.get("setup_group", "")).strip().lower()
+
+
+def _apply_btc_regime_guard(candidate: Optional[Dict], btc_regime: Optional[Dict]) -> Optional[Dict]:
+    if not candidate or not BTC_REGIME_ENABLED:
+        return candidate
+
+    snapshot = dict(btc_regime or {})
+    state = str(snapshot.get("state") or "unknown").strip().lower()
+    bias = str(snapshot.get("bias") or "neutral").strip().lower()
+    symbol = str(candidate.get("symbol") or "").strip().upper()
+    if symbol == BTC_REGIME_SYMBOL and not BTC_REGIME_APPLY_TO_BTC_SYMBOL:
+        candidate["btc_regime"] = state
+        candidate["btc_regime_bias"] = bias
+        candidate["btc_regime_reason"] = "btc_regime_symbol_exempt"
+        candidate["btc_regime_guard_action"] = "allow"
+        return candidate
+
+    candidate["btc_regime"] = state
+    candidate["btc_regime_bias"] = bias
+    candidate["btc_regime_reason"] = str(snapshot.get("reason") or "btc_regime_unknown")
+    candidate["btc_regime_guard_action"] = "allow"
+
+    direction = str(candidate.get("direction") or "").strip().upper()
+    setup_group = _setup_group(candidate)
+    raw_score = _raw_score(candidate)
+    premium_shock_floor = PREMIUM_RAW_SCORE_MIN + BTC_REGIME_PREMIUM_SHOCK_SCORE_BUFFER
+
+    if state == "vol_shock":
+        if setup_group == "premium" and _direction_matches_bias(direction, bias) and raw_score >= premium_shock_floor:
+            candidate["btc_regime_guard_action"] = "allow_premium_aligned_shock"
+            return candidate
+        candidate["btc_regime_guard_action"] = "block"
+        candidate["btc_regime_block_reason"] = "btc_regime_vol_shock"
+        return None
+
+    if state == "cooldown":
+        if setup_group == "premium" and _direction_matches_bias(direction, bias) and raw_score >= premium_shock_floor:
+            candidate["btc_regime_guard_action"] = "allow_premium_aligned_cooldown"
+            return candidate
+        candidate["btc_regime_guard_action"] = "block"
+        candidate["btc_regime_block_reason"] = "btc_regime_cooldown"
+        return None
+
+    if state == "trend_up" and direction == "SHORT":
+        candidate["btc_regime_guard_action"] = "block"
+        candidate["btc_regime_block_reason"] = "btc_regime_countertrend"
+        return None
+
+    if state == "trend_down" and direction == "LONG":
+        candidate["btc_regime_guard_action"] = "block"
+        candidate["btc_regime_block_reason"] = "btc_regime_countertrend"
+        return None
+
+    return candidate
 
 
 # ------------------------------------------------------
@@ -1036,7 +1324,7 @@ def _extract_failure_reason(local: Dict[str, int]) -> Optional[str]:
     return max(local.items(), key=lambda item: item[1])[0]
 
 
-def _process_symbol(symbol: str, *, refresh_15m: bool = False, refresh_1h: bool = False) -> Tuple[Optional[Dict], Dict[str, int], Optional[str]]:
+def _process_symbol(symbol: str, *, refresh_15m: bool = False, refresh_1h: bool = False, btc_regime: Optional[Dict] = None) -> Tuple[Optional[Dict], Dict[str, int], Optional[str]]:
     local_debug: Dict[str, int] = {}
     try:
         df_1h = get_klines(
@@ -1055,7 +1343,26 @@ def _process_symbol(symbol: str, *, refresh_15m: bool = False, refresh_1h: bool 
         )
         df_5m = get_klines(symbol, "5m", limit=KLINE_LIMIT_5M) if SCANNER_FETCH_5M else None
         candidate = build_symbol_candidate(symbol, df_1h, df_15m, df_5m, debug_counts=local_debug)
-        return candidate, local_debug, None
+        guarded_candidate = _apply_btc_regime_guard(candidate, btc_regime)
+        if candidate is not None and guarded_candidate is None:
+            regime_state = str((btc_regime or {}).get("state") or "unknown").strip().lower()
+            if regime_state in {"trend_up", "trend_down"}:
+                reason = "btc_regime_countertrend"
+            else:
+                reason = str((btc_regime or {}).get("block_reason") or (btc_regime or {}).get("reason") or "btc_regime_blocked")
+            logger.info(
+                "🧭 BTC regime bloqueó señal | symbol=%s dir=%s setup=%s raw_score=%s state=%s bias=%s reason=%s",
+                symbol,
+                candidate.get("direction"),
+                candidate.get("setup_group"),
+                candidate.get("raw_score"),
+                regime_state,
+                (btc_regime or {}).get("bias"),
+                reason,
+            )
+            _record_failure(local_debug, reason)
+            return None, local_debug, None
+        return guarded_candidate, local_debug, None
     except Exception as exc:
         return None, local_debug, f"{symbol}: {exc}"
 
@@ -1098,6 +1405,7 @@ async def scan_market_async(bot: Bot):
             cycle_started_at = datetime.utcnow()
             cache_stats_before = _kline_cache.snapshot()
             symbols = get_active_futures_symbols()
+            btc_regime = _fetch_btc_regime_snapshot(force_refresh=True)
             symbols_for_cycle, bootstrap_mode = _select_symbols_for_cycle(symbols, cycle_number)
             refresh_15m_symbols = _rotating_refresh_subset(symbols_for_cycle if bootstrap_mode else symbols, SCANNER_15M_REFRESH_BATCH_SIZE, cycle_number)
             refresh_1h_symbols = _rotating_refresh_subset(symbols_for_cycle if bootstrap_mode else symbols, SCANNER_1H_REFRESH_BATCH_SIZE, cycle_number)
@@ -1115,6 +1423,7 @@ async def scan_market_async(bot: Bot):
                         symbol,
                         refresh_15m=(symbol in refresh_15m_symbols),
                         refresh_1h=(symbol in refresh_1h_symbols),
+                        btc_regime=btc_regime,
                     )
 
             results = await asyncio.gather(*[_run(symbol) for symbol in active_symbols])
@@ -1209,11 +1518,13 @@ async def scan_market_async(bot: Bot):
             free_candidates = [c for c in candidates if _qualifies_for_free(c)]
 
             logger.info(
-                "📚 Candidatos | total=%s | premium=%s | plus=%s | free=%s | duration=%.3fs | bootstrap=%s active=%s universe=%s | rejects=%s | cache=%s",
+                "📚 Candidatos | total=%s | premium=%s | plus=%s | free=%s | btc_regime=%s/%s | duration=%.3fs | bootstrap=%s active=%s universe=%s | rejects=%s | cache=%s",
                 len(candidates),
                 len(premium_candidates),
                 len(plus_candidates),
                 len(free_candidates),
+                btc_regime.get("state"),
+                btc_regime.get("bias"),
                 cycle_duration,
                 bootstrap_mode,
                 len(active_symbols),
@@ -1283,6 +1594,7 @@ async def scan_market_async(bot: Bot):
                     "duration_seconds": cycle_duration,
                     "rejects": reject_totals,
                     "kline_cache": cache_stats,
+                    "btc_regime": btc_regime,
                 },
             )
             cycle_number += 1
