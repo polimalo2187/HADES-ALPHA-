@@ -1134,10 +1134,44 @@ def _observe_live_signal_progress(signal_doc: Dict[str, Any], as_of: datetime) -
     return snapshot
 
 
-def _tracking_entry_state(direction: str, current_price: Optional[float], zone_low: Optional[float], zone_high: Optional[float], now: datetime, telegram_valid_until: Optional[datetime], evaluation_valid_until: Optional[datetime], final_result: Optional[str], send_mode: Optional[str] = None) -> tuple[str, bool, bool]:
+def _normalized_strategy_name(strategy_name: Optional[str], send_mode: Optional[str] = None) -> str:
+    normalized = str(strategy_name or "").strip().lower()
+    if normalized:
+        return normalized
+    if str(send_mode or "").strip().lower() == "market_on_close":
+        return "market_execution"
+    return "breakout_reset"
+
+
+
+def _uses_reset_tracking_copy(strategy_name: Optional[str], send_mode: Optional[str] = None) -> bool:
+    normalized = _normalized_strategy_name(strategy_name, send_mode)
+    return normalized in {"breakout_reset", "strategy_breakout_reset", "breakout+reset", "breakout_reset_prereset_anticipatory_v2"}
+
+
+
+def _tracking_copy_key(strategy_name: Optional[str], send_mode: Optional[str] = None) -> Dict[str, str]:
+    if _uses_reset_tracking_copy(strategy_name, send_mode):
+        return {
+            "zone": "RESET EN ZONA",
+            "waiting": "ESPERANDO RESET",
+            "passed": "RESET YA PASÓ",
+            "executed": "RESET EJECUTADO",
+        }
+    return {
+        "zone": "ENTRADA EN ZONA",
+        "waiting": "ESPERANDO ENTRADA",
+        "passed": "ENTRADA YA PASÓ",
+        "executed": "ENTRADA EJECUTADA",
+    }
+
+
+
+def _tracking_entry_state(direction: str, current_price: Optional[float], zone_low: Optional[float], zone_high: Optional[float], now: datetime, telegram_valid_until: Optional[datetime], evaluation_valid_until: Optional[datetime], final_result: Optional[str], send_mode: Optional[str] = None, strategy_name: Optional[str] = None) -> tuple[str, bool, bool]:
     if final_result:
         return "SEÑAL CERRADA", False, False
     mode = str(send_mode or "").strip().lower()
+    copy = _tracking_copy_key(strategy_name, send_mode)
     if mode == "market_on_close":
         if isinstance(evaluation_valid_until, datetime) and evaluation_valid_until > now:
             return "ACTIVA DESDE ENVÍO", False, True
@@ -1145,16 +1179,16 @@ def _tracking_entry_state(direction: str, current_price: Optional[float], zone_l
     if current_price is None or zone_low is None or zone_high is None:
         return "SIN SNAPSHOT DE PRECIO", False, False
     if zone_low <= current_price <= zone_high:
-        return "RESET EN ZONA", True, True
+        return copy["zone"], True, True
     direction = str(direction).upper()
     if isinstance(telegram_valid_until, datetime) and telegram_valid_until > now:
         if direction == "LONG":
             if current_price > zone_high:
-                return "ESPERANDO RESET", False, True
-            return "RESET YA PASÓ", False, False
+                return copy["waiting"], False, True
+            return copy["passed"], False, False
         if current_price < zone_low:
-            return "ESPERANDO RESET", False, True
-        return "RESET YA PASÓ", False, False
+            return copy["waiting"], False, True
+        return copy["passed"], False, False
     if isinstance(evaluation_valid_until, datetime) and evaluation_valid_until > now:
         return "EN EVALUACIÓN", False, False
     return "SEÑAL FINALIZADA", False, False
@@ -1183,6 +1217,9 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
     telegram_valid_until = user_signal.get("telegram_valid_until") or base_signal.get("telegram_valid_until")
     entry_valid_until = user_signal.get("entry_valid_until") or base_signal.get("entry_valid_until") or telegram_valid_until
     send_mode = user_signal.get("send_mode") or base_signal.get("send_mode")
+    strategy_name = user_signal.get("strategy_name") or base_signal.get("strategy_name")
+    tracking_copy = _tracking_copy_key(strategy_name, send_mode)
+    uses_reset_copy = _uses_reset_tracking_copy(strategy_name, send_mode)
     result_doc = signal_results_collection().find_one({"base_signal_id": str(signal_id)}, sort=[("evaluated_at", -1)])
     final_result = (result_doc or {}).get("result")
 
@@ -1194,6 +1231,9 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
         warnings.append(f"No pude refrescar el precio en vivo: {exc}")
 
     now = datetime.utcnow()
+    telegram_window_open = isinstance(telegram_valid_until, datetime) and telegram_valid_until > now
+    entry_window_open = isinstance(entry_valid_until, datetime) and entry_valid_until > now
+    evaluation_window_open = isinstance(evaluation_valid_until, datetime) and evaluation_valid_until > now
     entry_state_label, in_entry_zone, signal_active_for_entry = _tracking_entry_state(
         direction,
         current_price,
@@ -1204,6 +1244,7 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
         evaluation_valid_until,
         final_result,
         send_mode,
+        strategy_name,
     )
 
     live_progress: Dict[str, Any] = {}
@@ -1229,7 +1270,10 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
             live_progress = {}
 
     if live_progress.get("entry_touched"):
-        entry_state_label = "RESET EJECUTADO"
+        if str(send_mode or "").strip().lower() == "market_on_close":
+            entry_state_label = "ACTIVA DESDE ENVÍO" if evaluation_window_open else "SEÑAL FINALIZADA"
+        else:
+            entry_state_label = tracking_copy["executed"]
         in_entry_zone = False
         signal_active_for_entry = False
 
@@ -1280,10 +1324,6 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
     if live_progress and live_progress.get("entry_touched"):
         progress_to_tp1_pct = live_progress.get("tp1_progress_max_pct")
 
-    telegram_window_open = isinstance(telegram_valid_until, datetime) and telegram_valid_until > now
-    entry_window_open = isinstance(entry_valid_until, datetime) and entry_valid_until > now
-    evaluation_window_open = isinstance(evaluation_valid_until, datetime) and evaluation_valid_until > now
-
     if final_result == "won":
         recommendation = "La señal ya cerró como ganadora. Úsala solo como referencia de seguimiento."
         state_label = "FINALIZADA"
@@ -1306,28 +1346,54 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
         state_label = "EXTENDIDA"
         signal_active_for_entry = False
     elif live_progress.get("entry_touched") and evaluation_window_open:
-        recommendation = "El reset ya tocó la entrada y la señal está en evaluación. Ahora importa la continuación posterior al reset."
-        state_label = "EN EVALUACIÓN"
+        if str(send_mode or "").strip().lower() == "market_on_close":
+            recommendation = "La entrada ya quedó ejecutada al envío y la señal sigue en evaluación. Ahora importa la continuación posterior a la confirmación."
+            state_label = "ACTIVA DESDE ENVÍO"
+        elif uses_reset_copy:
+            recommendation = "El reset ya tocó la entrada y la señal está en evaluación. Ahora importa la continuación posterior al reset."
+            state_label = "EN EVALUACIÓN"
+        else:
+            recommendation = "La entrada ya quedó ejecutada y la señal sigue en evaluación. Ahora importa la continuación posterior a la confirmación."
+            state_label = "EN EVALUACIÓN"
         signal_active_for_entry = False
     elif live_progress.get("entry_touched"):
-        recommendation = "El reset ya tocó la entrada. La ventana operativa terminó; úsala solo como referencia histórica."
-        state_label = "RESET EJECUTADO"
+        if str(send_mode or "").strip().lower() == "market_on_close":
+            recommendation = "La entrada ya quedó ejecutada al envío. La ventana operativa terminó; úsala solo como referencia histórica."
+            state_label = "FINALIZADA"
+        elif uses_reset_copy:
+            recommendation = "El reset ya tocó la entrada. La ventana operativa terminó; úsala solo como referencia histórica."
+            state_label = tracking_copy["executed"]
+        else:
+            recommendation = "La entrada ya quedó ejecutada. La ventana operativa terminó; úsala solo como referencia histórica."
+            state_label = tracking_copy["executed"]
         signal_active_for_entry = False
     elif str(send_mode or "").strip().lower() == "market_on_close":
-        recommendation = "La señal se activó al envío. Evalúala desde el precio enviado, no esperes retrace al entry."
+        recommendation = "La señal se activó al envío. Evalúala desde el precio enviado; no esperes una entrada por retroceso."
         state_label = "ACTIVA DESDE ENVÍO"
     elif in_entry_zone:
-        recommendation = "El precio está entrando en la zona prevista de reset. La activación real nace en este retroceso; no persigas fuera de zona."
-        state_label = "RESET EN ZONA"
+        if uses_reset_copy:
+            recommendation = "El precio está entrando en la zona prevista de reset. La activación real nace en este retroceso; no persigas fuera de zona."
+        else:
+            recommendation = "El precio está entrando en la zona prevista de entrada. La ejecución nace aquí; no persigas fuera de la zona operativa."
+        state_label = tracking_copy["zone"]
     elif signal_active_for_entry:
-        recommendation = "La señal es anticipada. Espera el retroceso al nivel de reset y no entres por impulso antes de que vuelva a la zona."
-        state_label = "ESPERANDO RESET"
-    elif entry_state_label == "RESET YA PASÓ" and evaluation_window_open:
-        recommendation = "La señal sigue visible en la MiniApp, pero el precio ya pasó la zona prevista de reset. No entrar tarde."
-        state_label = "RESET YA PASÓ"
-    elif entry_state_label == "RESET YA PASÓ":
-        recommendation = "El precio ya pasó la zona prevista de reset. No entrar; úsala solo como referencia."
-        state_label = "RESET YA PASÓ"
+        if uses_reset_copy:
+            recommendation = "La señal es anticipada. Espera el retroceso al nivel de reset y no entres por impulso antes de que vuelva a la zona."
+        else:
+            recommendation = "La señal sigue esperando su punto de entrada. No te adelantes ni persigas precio fuera de la zona operativa."
+        state_label = tracking_copy["waiting"]
+    elif entry_state_label == tracking_copy["passed"] and evaluation_window_open:
+        if uses_reset_copy:
+            recommendation = "La señal sigue visible en la MiniApp, pero el precio ya pasó la zona prevista de reset. No entrar tarde."
+        else:
+            recommendation = "La señal sigue visible en la MiniApp, pero el precio ya pasó la zona prevista de entrada. No entrar tarde."
+        state_label = tracking_copy["passed"]
+    elif entry_state_label == tracking_copy["passed"]:
+        if uses_reset_copy:
+            recommendation = "El precio ya pasó la zona prevista de reset. No entrar; úsala solo como referencia."
+        else:
+            recommendation = "El precio ya pasó la zona prevista de entrada. No entrar; úsala solo como referencia."
+        state_label = tracking_copy["passed"]
     elif evaluation_window_open:
         recommendation = "La señal sigue en evaluación dentro de la MiniApp. Úsala como referencia operativa."
         state_label = "EN EVALUACIÓN"
