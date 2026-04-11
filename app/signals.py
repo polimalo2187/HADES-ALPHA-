@@ -451,6 +451,12 @@ def create_base_signal(
     final_tier: Optional[str] = None,
     entry_model: Optional[str] = None,
     current_market_price: Optional[float] = None,
+    strategy_name: Optional[str] = None,
+    strategy_version: Optional[str] = None,
+    regime_state: Optional[str] = None,
+    regime_reason: Optional[str] = None,
+    regime_bias: Optional[str] = None,
+    router_version: Optional[str] = None,
 ) -> Dict:
 
     if telegram_signal_blocked(symbol, direction=direction):
@@ -581,6 +587,12 @@ def create_base_signal(
             "candidate_tier": candidate_tier,
             "final_tier": final_tier,
             "entry_model": entry_model,
+            "strategy_name": strategy_name,
+            "strategy_version": strategy_version,
+            "regime_state": regime_state,
+            "regime_reason": regime_reason,
+            "regime_bias": regime_bias,
+            "router_version": router_version,
             "evaluated": False,
             "evaluation_scope_version": MARKET_EVALUATION_VERSION,
         }}
@@ -616,6 +628,12 @@ def create_base_signal(
     signal["candidate_tier"] = candidate_tier
     signal["final_tier"] = final_tier
     signal["entry_model"] = entry_model
+    signal["strategy_name"] = strategy_name
+    signal["strategy_version"] = strategy_version
+    signal["regime_state"] = regime_state
+    signal["regime_reason"] = regime_reason
+    signal["regime_bias"] = regime_bias
+    signal["router_version"] = router_version
     signal["evaluation_scope_version"] = MARKET_EVALUATION_VERSION
     signal["schema_version"] = signal.get("schema_version", 1)
     signal["updated_at"] = now
@@ -715,6 +733,12 @@ def build_user_signal_document(base_signal: Dict, user_id: int) -> Dict:
     user_signal["candidate_tier"] = base_signal.get("candidate_tier")
     user_signal["final_tier"] = base_signal.get("final_tier")
     user_signal["entry_model"] = base_signal.get("entry_model")
+    user_signal["strategy_name"] = base_signal.get("strategy_name")
+    user_signal["strategy_version"] = base_signal.get("strategy_version")
+    user_signal["regime_state"] = base_signal.get("regime_state")
+    user_signal["regime_reason"] = base_signal.get("regime_reason")
+    user_signal["regime_bias"] = base_signal.get("regime_bias")
+    user_signal["router_version"] = base_signal.get("router_version")
     return user_signal
 
 
