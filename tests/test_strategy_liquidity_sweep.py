@@ -43,3 +43,19 @@ def test_liquidity_strategy_emits_market_on_close_candidate(monkeypatch):
     assert result["entry_price"] == round(100.4, 4)
     assert result["entry_model"] == strategy.ENTRY_MODEL_NAME
     assert result["setup_stage"] == strategy.SETUP_STAGE_CLOSED_CONFIRMED
+
+
+
+def test_liquidity_higher_timeframe_context_is_tiered(monkeypatch):
+    prepared = pd.DataFrame([
+        {"close": 100.0, "ema20": 100.6, "ema50": 101.0},
+        {"close": 100.4, "ema20": 100.3, "ema50": 101.0},
+        {"close": 99.6, "ema20": 100.2, "ema50": 100.95},
+    ])
+
+    monkeypatch.setattr(strategy, "add_indicators", lambda df: prepared)
+    monkeypatch.setattr(strategy, "_indicators_ready", lambda last: True)
+
+    assert strategy._higher_timeframe_context_ok(pd.DataFrame([{"close_time": pd.Timestamp.now(tz="UTC")} for _ in range(45)]), "LONG", strategy.FREE_PROFILE) is True
+    assert strategy._higher_timeframe_context_ok(pd.DataFrame([{"close_time": pd.Timestamp.now(tz="UTC")} for _ in range(45)]), "LONG", strategy.PLUS_PROFILE) is True
+    assert strategy._higher_timeframe_context_ok(pd.DataFrame([{"close_time": pd.Timestamp.now(tz="UTC")} for _ in range(45)]), "LONG", strategy.PREMIUM_PROFILE) is False
