@@ -20,6 +20,7 @@ from app.realtime_pipeline import enqueue_signal_dispatch
 from app.plans import PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM
 from app.signals import create_base_signal
 from app.observability import heartbeat
+from app import regime_engine, strategy_router
 from app import strategy as strategy_engine
 
 logger = logging.getLogger(__name__)
@@ -544,6 +545,46 @@ def build_symbol_candidate(symbol: str, df_1h: pd.DataFrame, df_15m: pd.DataFram
         debug_counts=debug_counts,
     )
     result = strategy_engine.mtf_strategy(**strategy_kwargs)
+    if not result:
+        return None
+    price_for_candidate = reference_price
+    if price_for_candidate is None:
+        try:
+            price_for_candidate = float(result.get("entry_sent_price") or result.get("entry_price") or 0.0)
+        except Exception:
+            price_for_candidate = 0.0
+    return _build_candidate(symbol, result, price_for_candidate)
+
+
+def route_symbol_candidate(
+    symbol: str,
+    df_1h: pd.DataFrame,
+    df_15m: pd.DataFrame,
+    df_5m: Optional[pd.DataFrame],
+    *,
+    market_regime: Optional[Dict[str, Any]],
+    debug_counts: Optional[Dict[str, int]] = None,
+) -> Optional[Dict]:
+    closed_1h = _closed_timeframe_frame(df_1h)
+    closed_15m = _closed_timeframe_frame(df_15m)
+    reference_price = None
+    try:
+        if df_5m is not None and len(df_5m) > 0:
+            reference_price = float(df_5m.iloc[-1]["close"])
+        elif not closed_15m.empty:
+            reference_price = float(closed_15m.iloc[-1]["close"])
+    except Exception:
+        reference_price = None
+
+    result = strategy_router.route_candidate(
+        symbol=symbol,
+        df_1h=closed_1h,
+        df_15m=closed_15m,
+        df_5m=df_5m,
+        market_regime=market_regime,
+        reference_market_price=reference_price,
+        debug_counts=debug_counts,
+    )
     if not result:
         return None
     price_for_candidate = reference_price
@@ -1202,6 +1243,12 @@ def _build_base_signal(signal: Dict, visibility: str) -> Optional[Dict]:
         final_tier=signal.get("final_tier"),
         entry_model=signal.get("entry_model"),
         current_market_price=signal.get("signal_market_price"),
+        strategy_name=signal.get("strategy_name"),
+        strategy_version=signal.get("strategy_version"),
+        regime_state=signal.get("regime_state"),
+        regime_reason=signal.get("regime_reason"),
+        regime_bias=signal.get("regime_bias"),
+        router_version=signal.get("router_version"),
     )
 
 
@@ -1324,7 +1371,7 @@ def _extract_failure_reason(local: Dict[str, int]) -> Optional[str]:
     return max(local.items(), key=lambda item: item[1])[0]
 
 
-def _process_symbol(symbol: str, *, refresh_15m: bool = False, refresh_1h: bool = False, btc_regime: Optional[Dict] = None) -> Tuple[Optional[Dict], Dict[str, int], Optional[str]]:
+def _process_symbol(symbol: str, *, refresh_15m: bool = False, refresh_1h: bool = False, market_regime: Optional[Dict] = None) -> Tuple[Optional[Dict], Dict[str, int], Optional[str]]:
     local_debug: Dict[str, int] = {}
     try:
         df_1h = get_klines(
@@ -1342,27 +1389,10 @@ def _process_symbol(symbol: str, *, refresh_15m: bool = False, refresh_1h: bool 
             stale_grace_seconds=SCANNER_HTF_STALE_GRACE_SECONDS,
         )
         df_5m = get_klines(symbol, "5m", limit=KLINE_LIMIT_5M) if SCANNER_FETCH_5M else None
-        candidate = build_symbol_candidate(symbol, df_1h, df_15m, df_5m, debug_counts=local_debug)
-        guarded_candidate = _apply_btc_regime_guard(candidate, btc_regime)
-        if candidate is not None and guarded_candidate is None:
-            regime_state = str((btc_regime or {}).get("state") or "unknown").strip().lower()
-            if regime_state in {"trend_up", "trend_down"}:
-                reason = "btc_regime_countertrend"
-            else:
-                reason = str((btc_regime or {}).get("block_reason") or (btc_regime or {}).get("reason") or "btc_regime_blocked")
-            logger.info(
-                "🧭 BTC regime bloqueó señal | symbol=%s dir=%s setup=%s raw_score=%s state=%s bias=%s reason=%s",
-                symbol,
-                candidate.get("direction"),
-                candidate.get("setup_group"),
-                candidate.get("raw_score"),
-                regime_state,
-                (btc_regime or {}).get("bias"),
-                reason,
-            )
-            _record_failure(local_debug, reason)
+        candidate = route_symbol_candidate(symbol, df_1h, df_15m, df_5m, market_regime=market_regime, debug_counts=local_debug)
+        if candidate is None:
             return None, local_debug, None
-        return guarded_candidate, local_debug, None
+        return candidate, local_debug, None
     except Exception as exc:
         return None, local_debug, f"{symbol}: {exc}"
 
@@ -1405,7 +1435,7 @@ async def scan_market_async(bot: Bot):
             cycle_started_at = datetime.utcnow()
             cache_stats_before = _kline_cache.snapshot()
             symbols = get_active_futures_symbols()
-            btc_regime = _fetch_btc_regime_snapshot(force_refresh=True)
+            market_regime = regime_engine.fetch_market_regime_snapshot(get_klines, force_refresh=True)
             symbols_for_cycle, bootstrap_mode = _select_symbols_for_cycle(symbols, cycle_number)
             refresh_15m_symbols = _rotating_refresh_subset(symbols_for_cycle if bootstrap_mode else symbols, SCANNER_15M_REFRESH_BATCH_SIZE, cycle_number)
             refresh_1h_symbols = _rotating_refresh_subset(symbols_for_cycle if bootstrap_mode else symbols, SCANNER_1H_REFRESH_BATCH_SIZE, cycle_number)
@@ -1423,7 +1453,7 @@ async def scan_market_async(bot: Bot):
                         symbol,
                         refresh_15m=(symbol in refresh_15m_symbols),
                         refresh_1h=(symbol in refresh_1h_symbols),
-                        btc_regime=btc_regime,
+                        market_regime=market_regime,
                     )
 
             results = await asyncio.gather(*[_run(symbol) for symbol in active_symbols])
@@ -1518,13 +1548,14 @@ async def scan_market_async(bot: Bot):
             free_candidates = [c for c in candidates if _qualifies_for_free(c)]
 
             logger.info(
-                "📚 Candidatos | total=%s | premium=%s | plus=%s | free=%s | btc_regime=%s/%s | duration=%.3fs | bootstrap=%s active=%s universe=%s | rejects=%s | cache=%s",
+                "📚 Candidatos | total=%s | premium=%s | plus=%s | free=%s | regime=%s/%s | strategy=%s | duration=%.3fs | bootstrap=%s active=%s universe=%s | rejects=%s | cache=%s",
                 len(candidates),
                 len(premium_candidates),
                 len(plus_candidates),
                 len(free_candidates),
-                btc_regime.get("state"),
-                btc_regime.get("bias"),
+                market_regime.get("state"),
+                market_regime.get("bias"),
+                market_regime.get("strategy_name"),
                 cycle_duration,
                 bootstrap_mode,
                 len(active_symbols),
@@ -1561,7 +1592,7 @@ async def scan_market_async(bot: Bot):
                     continue
 
                 logger.info(
-                    "✅ %s | %s %s | raw_score=%s | normalized_score=%s | final_score=%s | entry_q=%s | vol_q=%s | setup=%s | plan=%s | calib=%s | send_mode=%s | stage=%s",
+                    "✅ %s | %s %s | raw_score=%s | normalized_score=%s | final_score=%s | entry_q=%s | vol_q=%s | setup=%s | plan=%s | calib=%s | send_mode=%s | stage=%s | strategy=%s | regime=%s",
                     medal,
                     symbol,
                     direction,
@@ -1575,6 +1606,8 @@ async def scan_market_async(bot: Bot):
                     signal.get("score_calibration", "unknown"),
                     signal.get("send_mode", "unknown"),
                     signal.get("setup_stage", "unknown"),
+                    signal.get("strategy_name", "unknown"),
+                    signal.get("regime_state", market_regime.get("state")),
                 )
 
             heartbeat(
@@ -1594,7 +1627,8 @@ async def scan_market_async(bot: Bot):
                     "duration_seconds": cycle_duration,
                     "rejects": reject_totals,
                     "kline_cache": cache_stats,
-                    "btc_regime": btc_regime,
+                    "market_regime": market_regime,
+                    "btc_regime": market_regime,
                 },
             )
             cycle_number += 1
