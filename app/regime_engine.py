@@ -17,10 +17,12 @@ BTC_REGIME_SHOCK_RANGE_ATR = max(1.0, float(os.getenv("BTC_REGIME_SHOCK_RANGE_AT
 BTC_REGIME_SHOCK_BODY_ATR = max(0.8, float(os.getenv("BTC_REGIME_SHOCK_BODY_ATR", "1.20")))
 BTC_REGIME_COOLDOWN_BARS = max(1, int(os.getenv("BTC_REGIME_COOLDOWN_BARS", "3")))
 MARKET_REGIME_CONFIRM_BARS = max(1, int(os.getenv("MARKET_REGIME_CONFIRM_BARS", "2")))
+MARKET_REGIME_SWEEP_MIN_SCORE = max(2, int(os.getenv("MARKET_REGIME_SWEEP_MIN_SCORE", "3")))
+MARKET_REGIME_STRONG_SWEEP_MIN_SCORE = max(MARKET_REGIME_SWEEP_MIN_SCORE, int(os.getenv("MARKET_REGIME_STRONG_SWEEP_MIN_SCORE", "4")))
 MARKET_REGIME_MIN_HOLD_SECONDS = max(60, int(os.getenv("MARKET_REGIME_MIN_HOLD_SECONDS", "900")))
 MARKET_REGIME_SNAPSHOT_TTL_SECONDS = max(15.0, float(os.getenv("MARKET_REGIME_SNAPSHOT_TTL_SECONDS", "180")))
 MARKET_REGIME_FAIL_OPEN = str(os.getenv("MARKET_REGIME_FAIL_OPEN", "true")).strip().lower() in {"1", "true", "yes", "on"}
-MARKET_REGIME_ROUTER_VERSION = "v1_btc_regime_router_hysteresis"
+MARKET_REGIME_ROUTER_VERSION = "v2_btc_regime_router_balanced"
 
 _state_lock = threading.Lock()
 _state: Dict[str, Any] = {
@@ -212,9 +214,16 @@ def _classify_raw_market_regime(df_5m: pd.DataFrame, df_15m: pd.DataFrame) -> Di
         or last_move_pct >= BTC_REGIME_SHOCK_MOVE_PCT
     )
 
-    raw_state = "sweep_reversal"
-    reason = "market_regime_sweep_reversal"
+    raw_state = "continuation_clean"
+    reason = "market_regime_continuation_default"
     allow = True
+
+    strong_sweep = sweep_score >= MARKET_REGIME_STRONG_SWEEP_MIN_SCORE
+    moderate_sweep = sweep_score >= MARKET_REGIME_SWEEP_MIN_SCORE and continuation_score <= 2 and (
+        sign_flip_ratio >= 0.45
+        or float(wickiness_5m.mean()) >= 0.48
+        or float(wickiness_15m.mean()) >= 0.52
+    )
 
     if shock_now:
         raw_state = "risk_off"
@@ -227,7 +236,7 @@ def _classify_raw_market_regime(df_5m: pd.DataFrame, df_15m: pd.DataFrame) -> Di
     elif continuation_score >= 4 and continuation_score >= (sweep_score + 1) and directional_bias in {"up", "down"}:
         raw_state = "continuation_clean"
         reason = "market_regime_continuation_clean"
-    elif sweep_score >= 2:
+    elif strong_sweep or moderate_sweep:
         raw_state = "sweep_reversal"
         reason = "market_regime_sweep_reversal"
     elif directional_bias in {"up", "down"} and continuation_score >= 3:
