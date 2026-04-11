@@ -11,8 +11,8 @@ LIQUIDITY_LOOKBACK = max(24, int(os.getenv("LIQUIDITY_LOOKBACK", "36")))
 LIQUIDITY_PIVOT_LEFT = max(1, int(os.getenv("LIQUIDITY_PIVOT_LEFT", "2")))
 LIQUIDITY_PIVOT_RIGHT = max(1, int(os.getenv("LIQUIDITY_PIVOT_RIGHT", "2")))
 SWEEP_SEARCH_BARS = max(2, int(os.getenv("LIQUIDITY_SWEEP_SEARCH_BARS", "4")))
-MIN_HISTORY_BARS = max(LIQUIDITY_LOOKBACK + 4, 40)
-SCORE_CALIBRATION_VERSION = "v1_liquidity_sweep_regime_router"
+MIN_HISTORY_BARS = max(LIQUIDITY_LOOKBACK + 4, 36)
+SCORE_CALIBRATION_VERSION = "v2_liquidity_sweep_balanced_tiers"
 ENTRY_MODEL_NAME = "liquidity_sweep_reversal_close_confirm_v1"
 SETUP_STAGE_CLOSED_CONFIRMED = "closed_confirmed"
 SEND_MODE_MARKET_ON_CLOSE = "market_on_close"
@@ -24,46 +24,55 @@ FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "69"))
 
 FREE_PROFILE = {
     "name": "free",
-    "atr_pct_min": breakout._env_float("LSR_FREE_ATR_PCT_MIN", 0.0022),
-    "atr_pct_max": breakout._env_float("LSR_FREE_ATR_PCT_MAX", 0.0200),
-    "liquidity_tolerance_atr": breakout._env_float("LSR_FREE_LIQUIDITY_TOLERANCE_ATR", 0.38),
-    "min_sweep_atr": breakout._env_float("LSR_FREE_MIN_SWEEP_ATR", 0.22),
-    "min_rel_volume": breakout._env_float("LSR_FREE_MIN_REL_VOLUME", 0.95),
-    "min_confirm_rel_volume": breakout._env_float("LSR_FREE_MIN_CONFIRM_REL_VOLUME", 1.00),
-    "min_body_ratio_recovery": breakout._env_float("LSR_FREE_MIN_BODY_RATIO_RECOVERY", 0.26),
-    "min_body_ratio_confirmation": breakout._env_float("LSR_FREE_MIN_BODY_RATIO_CONFIRMATION", 0.24),
-    "min_close_position": breakout._env_float("LSR_FREE_MIN_CLOSE_POSITION", 0.58),
-    "min_rr": breakout._env_float("LSR_FREE_MIN_RR", 1.00),
+    "atr_pct_min": breakout._env_float("LSR_FREE_ATR_PCT_MIN", 0.0018),
+    "atr_pct_max": breakout._env_float("LSR_FREE_ATR_PCT_MAX", 0.0220),
+    "liquidity_tolerance_atr": breakout._env_float("LSR_FREE_LIQUIDITY_TOLERANCE_ATR", 0.40),
+    "min_sweep_atr": breakout._env_float("LSR_FREE_MIN_SWEEP_ATR", 0.16),
+    "min_rel_volume": breakout._env_float("LSR_FREE_MIN_REL_VOLUME", 0.80),
+    "min_confirm_rel_volume": breakout._env_float("LSR_FREE_MIN_CONFIRM_REL_VOLUME", 0.88),
+    "min_body_ratio_recovery": breakout._env_float("LSR_FREE_MIN_BODY_RATIO_RECOVERY", 0.22),
+    "min_body_ratio_confirmation": breakout._env_float("LSR_FREE_MIN_BODY_RATIO_CONFIRMATION", 0.20),
+    "min_close_position": breakout._env_float("LSR_FREE_MIN_CLOSE_POSITION", 0.54),
+    "min_rr": breakout._env_float("LSR_FREE_MIN_RR", 0.92),
+    "htf_price_tolerance": breakout._env_float("LSR_FREE_HTF_PRICE_TOLERANCE", 0.0080),
+    "htf_trend_tolerance": breakout._env_float("LSR_FREE_HTF_TREND_TOLERANCE", 0.0140),
+    "htf_required_score": max(1, int(os.getenv("LSR_FREE_HTF_REQUIRED_SCORE", "1"))),
     "score": 78.0,
 }
 
 PLUS_PROFILE = {
     "name": "plus",
-    "atr_pct_min": breakout._env_float("LSR_PLUS_ATR_PCT_MIN", 0.0025),
-    "atr_pct_max": breakout._env_float("LSR_PLUS_ATR_PCT_MAX", 0.0180),
-    "liquidity_tolerance_atr": breakout._env_float("LSR_PLUS_LIQUIDITY_TOLERANCE_ATR", 0.32),
-    "min_sweep_atr": breakout._env_float("LSR_PLUS_MIN_SWEEP_ATR", 0.28),
-    "min_rel_volume": breakout._env_float("LSR_PLUS_MIN_REL_VOLUME", 1.05),
-    "min_confirm_rel_volume": breakout._env_float("LSR_PLUS_MIN_CONFIRM_REL_VOLUME", 1.10),
-    "min_body_ratio_recovery": breakout._env_float("LSR_PLUS_MIN_BODY_RATIO_RECOVERY", 0.30),
-    "min_body_ratio_confirmation": breakout._env_float("LSR_PLUS_MIN_BODY_RATIO_CONFIRMATION", 0.28),
-    "min_close_position": breakout._env_float("LSR_PLUS_MIN_CLOSE_POSITION", 0.64),
-    "min_rr": breakout._env_float("LSR_PLUS_MIN_RR", 1.10),
+    "atr_pct_min": breakout._env_float("LSR_PLUS_ATR_PCT_MIN", 0.0021),
+    "atr_pct_max": breakout._env_float("LSR_PLUS_ATR_PCT_MAX", 0.0200),
+    "liquidity_tolerance_atr": breakout._env_float("LSR_PLUS_LIQUIDITY_TOLERANCE_ATR", 0.35),
+    "min_sweep_atr": breakout._env_float("LSR_PLUS_MIN_SWEEP_ATR", 0.22),
+    "min_rel_volume": breakout._env_float("LSR_PLUS_MIN_REL_VOLUME", 0.92),
+    "min_confirm_rel_volume": breakout._env_float("LSR_PLUS_MIN_CONFIRM_REL_VOLUME", 0.98),
+    "min_body_ratio_recovery": breakout._env_float("LSR_PLUS_MIN_BODY_RATIO_RECOVERY", 0.26),
+    "min_body_ratio_confirmation": breakout._env_float("LSR_PLUS_MIN_BODY_RATIO_CONFIRMATION", 0.24),
+    "min_close_position": breakout._env_float("LSR_PLUS_MIN_CLOSE_POSITION", 0.60),
+    "min_rr": breakout._env_float("LSR_PLUS_MIN_RR", 1.02),
+    "htf_price_tolerance": breakout._env_float("LSR_PLUS_HTF_PRICE_TOLERANCE", 0.0055),
+    "htf_trend_tolerance": breakout._env_float("LSR_PLUS_HTF_TREND_TOLERANCE", 0.0100),
+    "htf_required_score": max(1, int(os.getenv("LSR_PLUS_HTF_REQUIRED_SCORE", "2"))),
     "score": 86.0,
 }
 
 PREMIUM_PROFILE = {
     "name": "premium",
-    "atr_pct_min": breakout._env_float("LSR_PREMIUM_ATR_PCT_MIN", 0.0028),
-    "atr_pct_max": breakout._env_float("LSR_PREMIUM_ATR_PCT_MAX", 0.0160),
-    "liquidity_tolerance_atr": breakout._env_float("LSR_PREMIUM_LIQUIDITY_TOLERANCE_ATR", 0.28),
-    "min_sweep_atr": breakout._env_float("LSR_PREMIUM_MIN_SWEEP_ATR", 0.34),
-    "min_rel_volume": breakout._env_float("LSR_PREMIUM_MIN_REL_VOLUME", 1.12),
-    "min_confirm_rel_volume": breakout._env_float("LSR_PREMIUM_MIN_CONFIRM_REL_VOLUME", 1.18),
-    "min_body_ratio_recovery": breakout._env_float("LSR_PREMIUM_MIN_BODY_RATIO_RECOVERY", 0.34),
-    "min_body_ratio_confirmation": breakout._env_float("LSR_PREMIUM_MIN_BODY_RATIO_CONFIRMATION", 0.30),
-    "min_close_position": breakout._env_float("LSR_PREMIUM_MIN_CLOSE_POSITION", 0.70),
-    "min_rr": breakout._env_float("LSR_PREMIUM_MIN_RR", 1.18),
+    "atr_pct_min": breakout._env_float("LSR_PREMIUM_ATR_PCT_MIN", 0.0024),
+    "atr_pct_max": breakout._env_float("LSR_PREMIUM_ATR_PCT_MAX", 0.0185),
+    "liquidity_tolerance_atr": breakout._env_float("LSR_PREMIUM_LIQUIDITY_TOLERANCE_ATR", 0.30),
+    "min_sweep_atr": breakout._env_float("LSR_PREMIUM_MIN_SWEEP_ATR", 0.28),
+    "min_rel_volume": breakout._env_float("LSR_PREMIUM_MIN_REL_VOLUME", 1.00),
+    "min_confirm_rel_volume": breakout._env_float("LSR_PREMIUM_MIN_CONFIRM_REL_VOLUME", 1.06),
+    "min_body_ratio_recovery": breakout._env_float("LSR_PREMIUM_MIN_BODY_RATIO_RECOVERY", 0.30),
+    "min_body_ratio_confirmation": breakout._env_float("LSR_PREMIUM_MIN_BODY_RATIO_CONFIRMATION", 0.28),
+    "min_close_position": breakout._env_float("LSR_PREMIUM_MIN_CLOSE_POSITION", 0.66),
+    "min_rr": breakout._env_float("LSR_PREMIUM_MIN_RR", 1.10),
+    "htf_price_tolerance": breakout._env_float("LSR_PREMIUM_HTF_PRICE_TOLERANCE", 0.0040),
+    "htf_trend_tolerance": breakout._env_float("LSR_PREMIUM_HTF_TREND_TOLERANCE", 0.0080),
+    "htf_required_score": max(1, int(os.getenv("LSR_PREMIUM_HTF_REQUIRED_SCORE", "2"))),
     "score": 90.0,
 }
 
@@ -139,19 +148,45 @@ def _min_raw_score_for_profile(profile_name: str) -> float:
 
 
 
-def _higher_timeframe_context_ok(df_1h: pd.DataFrame, direction: str) -> bool:
-    if df_1h is None or df_1h.empty or len(df_1h) < 60:
+def _higher_timeframe_context_ok(df_1h: pd.DataFrame, direction: str, profile: Dict) -> bool:
+    if df_1h is None or df_1h.empty or len(df_1h) < 40:
         return True
-    enriched = add_indicators(df_1h)
+    enriched = add_indicators(_closed_15m_frame(df_1h))
+    if enriched is None or enriched.empty:
+        return True
     last = enriched.iloc[-1]
     if not _indicators_ready(last):
         return True
+    prev = enriched.iloc[-2] if len(enriched) >= 2 else last
+    recent = enriched.tail(3)
+
     close = float(last["close"])
     ema20 = float(last["ema20"])
     ema50 = float(last["ema50"])
+    prev_close = float(prev["close"])
+    prev_ema20 = float(prev["ema20"])
+    tolerance_price = max(0.0, float(profile.get("htf_price_tolerance", 0.0)))
+    tolerance_trend = max(0.0, float(profile.get("htf_trend_tolerance", 0.0)))
+    required_score = max(1, int(profile.get("htf_required_score", 1)))
+
     if direction == "LONG":
-        return close >= ema20 and ema20 >= ema50
-    return close <= ema20 and ema20 <= ema50
+        price_support = close >= (ema20 * (1.0 - tolerance_price))
+        trend_support = ema20 >= (ema50 * (1.0 - tolerance_trend))
+        momentum_support = close >= prev_close or ema20 >= (prev_ema20 * 0.999)
+        reclaim_support = bool((recent["close"].astype(float) >= (recent["ema20"].astype(float) * (1.0 - tolerance_price))).any())
+        score = sum(bool(flag) for flag in (price_support, trend_support, momentum_support, reclaim_support))
+        if str(profile.get("name")) == "premium" and not price_support:
+            return False
+        return score >= required_score
+
+    price_support = close <= (ema20 * (1.0 + tolerance_price))
+    trend_support = ema20 <= (ema50 * (1.0 + tolerance_trend))
+    momentum_support = close <= prev_close or ema20 <= (prev_ema20 * 1.001)
+    reclaim_support = bool((recent["close"].astype(float) <= (recent["ema20"].astype(float) * (1.0 + tolerance_price))).any())
+    score = sum(bool(flag) for flag in (price_support, trend_support, momentum_support, reclaim_support))
+    if str(profile.get("name")) == "premium" and not price_support:
+        return False
+    return score >= required_score
 
 
 
@@ -369,7 +404,7 @@ def _evaluate_direction(
         _record_reject(debug_counts, "liquidity_atr_pct")
         return None
 
-    if not _higher_timeframe_context_ok(df_1h, direction):
+    if not _higher_timeframe_context_ok(df_1h, direction, profile):
         _record_reject(debug_counts, "liquidity_htf_context")
         return None
 
@@ -465,7 +500,12 @@ def mtf_strategy(
         return None
 
     enriched_15m = add_indicators(closed_15m)
-    enriched_1h = add_indicators(df_1h) if df_1h is not None and not df_1h.empty else df_1h
+    if enriched_15m is None or enriched_15m.empty or not _indicators_ready(enriched_15m.iloc[-1]):
+        _record_reject(debug_counts, "liquidity_indicator_warmup")
+        return None
+
+    closed_1h = _closed_15m_frame(df_1h) if df_1h is not None and not df_1h.empty else df_1h
+    enriched_1h = add_indicators(closed_1h) if closed_1h is not None and not closed_1h.empty else closed_1h
 
     for profile in PROFILES:
         candidates: List[Tuple[Dict, Tuple[float, float, float]]] = []
