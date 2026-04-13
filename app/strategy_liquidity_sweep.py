@@ -12,7 +12,7 @@ LIQUIDITY_PIVOT_LEFT = max(1, int(os.getenv("LIQUIDITY_PIVOT_LEFT", "2")))
 LIQUIDITY_PIVOT_RIGHT = max(1, int(os.getenv("LIQUIDITY_PIVOT_RIGHT", "2")))
 SWEEP_SEARCH_BARS = max(2, int(os.getenv("LIQUIDITY_SWEEP_SEARCH_BARS", "4")))
 MIN_HISTORY_BARS = max(LIQUIDITY_LOOKBACK + 4, 36)
-SCORE_CALIBRATION_VERSION = "v2_liquidity_sweep_balanced_tiers"
+SCORE_CALIBRATION_VERSION = "v3_liquidity_sweep_long_premium_hardened"
 ENTRY_MODEL_NAME = "liquidity_sweep_reversal_close_confirm_v1"
 SETUP_STAGE_CLOSED_CONFIRMED = "closed_confirmed"
 SEND_MODE_MARKET_ON_CLOSE = "market_on_close"
@@ -80,6 +80,55 @@ PREMIUM_PROFILE = {
 PROFILES = [PREMIUM_PROFILE, PLUS_PROFILE, FREE_PROFILE]
 
 
+LONG_DIRECTIONAL_TUNING = {
+    "free": {
+        "min_sweep_atr": 0.03,
+        "min_confirm_rel_volume": 0.05,
+        "min_body_ratio_confirmation": 0.03,
+        "min_close_position": 0.03,
+        "min_rr": 0.08,
+        "htf_required_score": 0,
+        "htf_price_tolerance_mul": 0.96,
+        "htf_trend_tolerance_mul": 0.96,
+    },
+    "plus": {
+        "min_sweep_atr": 0.04,
+        "min_confirm_rel_volume": 0.06,
+        "min_body_ratio_confirmation": 0.04,
+        "min_close_position": 0.04,
+        "min_rr": 0.10,
+        "htf_required_score": 1,
+        "htf_price_tolerance_mul": 0.92,
+        "htf_trend_tolerance_mul": 0.92,
+    },
+    "premium": {
+        "min_sweep_atr": 0.06,
+        "min_confirm_rel_volume": 0.08,
+        "min_body_ratio_confirmation": 0.05,
+        "min_close_position": 0.05,
+        "min_rr": 0.14,
+        "htf_required_score": 1,
+        "htf_price_tolerance_mul": 0.88,
+        "htf_trend_tolerance_mul": 0.88,
+    },
+}
+
+PREMIUM_GLOBAL_TUNING = {
+    "min_rel_volume": 0.03,
+    "min_confirm_rel_volume": 0.04,
+    "min_body_ratio_confirmation": 0.02,
+    "min_close_position": 0.02,
+    "min_rr": 0.05,
+}
+
+LONG_SCORE_FLOOR_BONUS = {
+    "free": 1.0,
+    "plus": 2.0,
+    "premium": 4.0,
+}
+PREMIUM_SCORE_FLOOR_BONUS = 2.0
+
+
 def _record_reject(debug_counts: Optional[Dict[str, int]], reason: str) -> None:
     if debug_counts is None:
         return
@@ -87,6 +136,102 @@ def _record_reject(debug_counts: Optional[Dict[str, int]], reason: str) -> None:
     debug_counts[key] = int(debug_counts.get(key, 0)) + 1
 
 
+
+
+def _profile_name(profile: Dict) -> str:
+    return str(profile.get("name") or "free").strip().lower() or "free"
+
+
+def _directional_profile(profile: Dict, direction: str) -> Dict:
+    tuned = dict(profile)
+    profile_name = _profile_name(profile)
+
+    if profile_name == "premium":
+        tuned["min_rel_volume"] = float(tuned["min_rel_volume"]) + PREMIUM_GLOBAL_TUNING["min_rel_volume"]
+        tuned["min_confirm_rel_volume"] = float(tuned["min_confirm_rel_volume"]) + PREMIUM_GLOBAL_TUNING["min_confirm_rel_volume"]
+        tuned["min_body_ratio_confirmation"] = breakout._clamp(
+            float(tuned["min_body_ratio_confirmation"]) + PREMIUM_GLOBAL_TUNING["min_body_ratio_confirmation"],
+            0.0,
+            0.95,
+        )
+        tuned["min_close_position"] = breakout._clamp(
+            float(tuned["min_close_position"]) + PREMIUM_GLOBAL_TUNING["min_close_position"],
+            0.0,
+            0.95,
+        )
+        tuned["min_rr"] = float(tuned["min_rr"]) + PREMIUM_GLOBAL_TUNING["min_rr"]
+
+    if str(direction).upper() == "LONG":
+        direction_tuning = LONG_DIRECTIONAL_TUNING.get(profile_name, {})
+        tuned["min_sweep_atr"] = float(tuned["min_sweep_atr"]) + float(direction_tuning.get("min_sweep_atr", 0.0))
+        tuned["min_confirm_rel_volume"] = float(tuned["min_confirm_rel_volume"]) + float(direction_tuning.get("min_confirm_rel_volume", 0.0))
+        tuned["min_body_ratio_confirmation"] = breakout._clamp(
+            float(tuned["min_body_ratio_confirmation"]) + float(direction_tuning.get("min_body_ratio_confirmation", 0.0)),
+            0.0,
+            0.95,
+        )
+        tuned["min_close_position"] = breakout._clamp(
+            float(tuned["min_close_position"]) + float(direction_tuning.get("min_close_position", 0.0)),
+            0.0,
+            0.97,
+        )
+        tuned["min_rr"] = float(tuned["min_rr"]) + float(direction_tuning.get("min_rr", 0.0))
+        tuned["htf_required_score"] = max(
+            int(tuned.get("htf_required_score", 1)),
+            int(profile.get("htf_required_score", 1)) + int(direction_tuning.get("htf_required_score", 0)),
+        )
+        tuned["htf_price_tolerance"] = max(0.0, float(tuned["htf_price_tolerance"]) * float(direction_tuning.get("htf_price_tolerance_mul", 1.0)))
+        tuned["htf_trend_tolerance"] = max(0.0, float(tuned["htf_trend_tolerance"]) * float(direction_tuning.get("htf_trend_tolerance_mul", 1.0)))
+
+    return tuned
+
+
+def _directional_min_raw_score(profile_name: str, direction: str) -> float:
+    minimum = _min_raw_score_for_profile(profile_name)
+    normalized_profile = str(profile_name or "").strip().lower()
+    if normalized_profile == "premium":
+        minimum += PREMIUM_SCORE_FLOOR_BONUS
+    if str(direction).upper() == "LONG":
+        minimum += float(LONG_SCORE_FLOOR_BONUS.get(normalized_profile, 0.0))
+    return float(minimum)
+
+
+def _directional_context_ok(df: pd.DataFrame, direction: str, profile: Dict) -> bool:
+    if df is None or df.empty or len(df) < 2:
+        return True
+
+    profile_name = _profile_name(profile)
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+
+    close = float(last["close"])
+    prev_close = float(prev["close"])
+    high = float(last["high"])
+    prev_high = float(prev["high"])
+    low = float(last["low"])
+    prev_low = float(prev["low"])
+    ema20 = float(last["ema20"])
+    prev_ema20 = float(prev["ema20"])
+    rel_volume = float(last.get("rel_volume") or 0.0)
+
+    if str(direction).upper() == "SHORT":
+        if profile_name != "premium":
+            return True
+        checks = [
+            close <= (ema20 * 1.002),
+            close <= (prev_close * 1.002) or low <= prev_low,
+            rel_volume >= float(profile.get("min_confirm_rel_volume", 0.0)),
+        ]
+        return sum(bool(flag) for flag in checks) >= 2
+
+    checks = [
+        close >= (ema20 * (0.999 if profile_name == "free" else 1.0)),
+        ema20 >= (prev_ema20 * (0.999 if profile_name == "free" else 0.9995 if profile_name == "plus" else 1.0)),
+        close >= (prev_close * (0.999 if profile_name == "free" else 1.0)) or high >= prev_high,
+        rel_volume >= float(profile.get("min_confirm_rel_volume", 0.0)),
+    ]
+    required = 2 if profile_name == "free" else 3
+    return sum(bool(flag) for flag in checks) >= required
 
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     frame = df.copy()
@@ -399,32 +544,38 @@ def _evaluate_direction(
         _record_reject(debug_counts, "liquidity_indicator_warmup")
         return None
 
+    tuned_profile = _directional_profile(profile, direction)
+
     atr_pct = float(last["atr_pct"])
-    if not (float(profile["atr_pct_min"]) <= atr_pct <= float(profile["atr_pct_max"])):
+    if not (float(tuned_profile["atr_pct_min"]) <= atr_pct <= float(tuned_profile["atr_pct_max"])):
         _record_reject(debug_counts, "liquidity_atr_pct")
         return None
 
-    if not _higher_timeframe_context_ok(df_1h, direction, profile):
+    if not _higher_timeframe_context_ok(df_1h, direction, tuned_profile):
         _record_reject(debug_counts, "liquidity_htf_context")
         return None
 
-    zone = _select_liquidity_zone(df, direction, profile)
+    zone = _select_liquidity_zone(df, direction, tuned_profile)
     if not zone:
         _record_reject(debug_counts, "liquidity_zone_missing")
         return None
 
     level = float(zone["price"])
-    sweep = _find_recent_sweep(df, direction, level, profile)
+    sweep = _find_recent_sweep(df, direction, level, tuned_profile)
     if not sweep:
         _record_reject(debug_counts, "liquidity_minimum_sweep")
         return None
 
-    if not _recovery_candle_ok(last, direction, level, profile):
+    if not _recovery_candle_ok(last, direction, level, tuned_profile):
         _record_reject(debug_counts, "liquidity_recovery_close")
         return None
 
-    if not _confirmation_candle_ok(last, direction, level, profile):
+    if not _confirmation_candle_ok(last, direction, level, tuned_profile):
         _record_reject(debug_counts, "liquidity_confirmation")
+        return None
+
+    if not _directional_context_ok(df, direction, tuned_profile):
+        _record_reject(debug_counts, "liquidity_directional_context")
         return None
 
     if not _ema_reclaim_ok(last, direction):
@@ -444,14 +595,14 @@ def _evaluate_direction(
         return None
 
     barrier_price = _nearest_barrier_price(df, direction, market_entry)
-    barrier_rr = _safe_rr(market_entry, stop_loss, barrier_price) if barrier_price is not None else float(profile["min_rr"])
-    if barrier_rr < float(profile["min_rr"]):
+    barrier_rr = _safe_rr(market_entry, stop_loss, barrier_price) if barrier_price is not None else float(tuned_profile["min_rr"])
+    if barrier_rr < float(tuned_profile["min_rr"]):
         _record_reject(debug_counts, "liquidity_barrier_room")
         return None
 
-    components = _score_components(last, direction, zone, sweep, barrier_rr, profile)
+    components = _score_components(last, direction, zone, sweep, barrier_rr, tuned_profile)
     raw_score = _sum_components(components)
-    if raw_score < _min_raw_score_for_profile(str(profile["name"])):
+    if raw_score < _directional_min_raw_score(str(tuned_profile["name"]), direction):
         _record_reject(debug_counts, "liquidity_score_floor")
         return None
 
@@ -469,9 +620,9 @@ def _evaluate_direction(
         "raw_components": components,
         "normalized_components": components,
         "timeframes": ["15M"],
-        "setup_group": str(profile["name"]),
+        "setup_group": str(tuned_profile["name"]),
         "atr_pct": round(atr_pct, 6),
-        "score_profile": str(profile["name"]),
+        "score_profile": str(tuned_profile["name"]),
         "score_calibration": SCORE_CALIBRATION_VERSION,
         "send_mode": SEND_MODE_MARKET_ON_CLOSE,
         "entry_model_price": breakout._round_price_dynamic(entry_model_price),
