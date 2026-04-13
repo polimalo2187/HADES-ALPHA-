@@ -59,3 +59,33 @@ def test_liquidity_higher_timeframe_context_is_tiered(monkeypatch):
     assert strategy._higher_timeframe_context_ok(pd.DataFrame([{"close_time": pd.Timestamp.now(tz="UTC")} for _ in range(45)]), "LONG", strategy.FREE_PROFILE) is True
     assert strategy._higher_timeframe_context_ok(pd.DataFrame([{"close_time": pd.Timestamp.now(tz="UTC")} for _ in range(45)]), "LONG", strategy.PLUS_PROFILE) is True
     assert strategy._higher_timeframe_context_ok(pd.DataFrame([{"close_time": pd.Timestamp.now(tz="UTC")} for _ in range(45)]), "LONG", strategy.PREMIUM_PROFILE) is False
+
+
+def test_directional_profile_hardens_long_and_premium():
+    free_long = strategy._directional_profile(strategy.FREE_PROFILE, "LONG")
+    free_short = strategy._directional_profile(strategy.FREE_PROFILE, "SHORT")
+    premium_long = strategy._directional_profile(strategy.PREMIUM_PROFILE, "LONG")
+    premium_short = strategy._directional_profile(strategy.PREMIUM_PROFILE, "SHORT")
+
+    assert free_long["min_sweep_atr"] > strategy.FREE_PROFILE["min_sweep_atr"]
+    assert free_long["min_rr"] > free_short["min_rr"]
+    assert premium_short["min_confirm_rel_volume"] > strategy.PREMIUM_PROFILE["min_confirm_rel_volume"]
+    assert premium_long["min_confirm_rel_volume"] > premium_short["min_confirm_rel_volume"]
+    assert premium_long["htf_required_score"] >= premium_short["htf_required_score"]
+
+
+
+def test_directional_context_rejects_weak_premium_long_but_accepts_stronger_short():
+    weak_long = pd.DataFrame([
+        {"close": 100.0, "high": 101.0, "low": 99.2, "ema20": 100.5, "rel_volume": 1.05},
+        {"close": 99.9, "high": 100.2, "low": 99.1, "ema20": 100.3, "rel_volume": 1.02},
+    ])
+    tuned_premium_long = strategy._directional_profile(strategy.PREMIUM_PROFILE, "LONG")
+    assert strategy._directional_context_ok(weak_long, "LONG", tuned_premium_long) is False
+
+    ok_short = pd.DataFrame([
+        {"close": 100.4, "high": 101.0, "low": 100.0, "ema20": 100.2, "rel_volume": 1.15},
+        {"close": 99.7, "high": 100.1, "low": 99.4, "ema20": 100.0, "rel_volume": 1.20},
+    ])
+    tuned_premium_short = strategy._directional_profile(strategy.PREMIUM_PROFILE, "SHORT")
+    assert strategy._directional_context_ok(ok_short, "SHORT", tuned_premium_short) is True
