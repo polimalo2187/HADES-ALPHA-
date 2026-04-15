@@ -62,9 +62,10 @@ SCANNER_MAX_REQUESTS_PER_SECOND = float(os.getenv("SCANNER_MAX_REQUESTS_PER_SECO
 SCANNER_MAX_BURST = int(os.getenv("SCANNER_MAX_BURST", "16"))
 
 # 5m fetching.
-SCANNER_FETCH_5M_ENV = str(os.getenv("SCANNER_FETCH_5M", "false")).strip().lower() in {"1", "true", "yes", "on"}
-# Esta estrategia adaptada es 5M-nativa; forzar 5M evita pasar df_5m=None a mtf_strategy().
-SCANNER_FETCH_5M = True
+# La estrategia actual es 5M-nativa, así que el default permanece activado.
+# Aun así, el valor de entorno debe respetarse para poder perfilar coste y experimentos controlados.
+SCANNER_FETCH_5M_ENV = str(os.getenv("SCANNER_FETCH_5M", "true")).strip().lower() in {"1", "true", "yes", "on"}
+SCANNER_FETCH_5M = SCANNER_FETCH_5M_ENV
 
 # Kline limits: IMPORTANT — must be large enough for the slowest indicator (EMA200).
 # Defaults are intentionally >= 260 to ensure warm-up and to enable the HTF context gate (>= 220).
@@ -1435,7 +1436,7 @@ async def scan_market_async(bot: Bot):
             cycle_started_at = datetime.utcnow()
             cache_stats_before = _kline_cache.snapshot()
             symbols = get_active_futures_symbols()
-            market_regime = regime_engine.fetch_market_regime_snapshot(get_klines, force_refresh=True)
+            market_regime = regime_engine.fetch_market_regime_snapshot(get_klines, force_refresh=False)
             symbols_for_cycle, bootstrap_mode = _select_symbols_for_cycle(symbols, cycle_number)
             refresh_15m_symbols = _rotating_refresh_subset(symbols_for_cycle if bootstrap_mode else symbols, SCANNER_15M_REFRESH_BATCH_SIZE, cycle_number)
             refresh_1h_symbols = _rotating_refresh_subset(symbols_for_cycle if bootstrap_mode else symbols, SCANNER_1H_REFRESH_BATCH_SIZE, cycle_number)
