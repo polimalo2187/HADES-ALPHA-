@@ -1,6 +1,6 @@
 import asyncio
 import logging
-import threading
+import os
 from typing import Dict, List, Optional
 from telegram import Bot
 from datetime import datetime
@@ -13,7 +13,8 @@ from app.models import is_trial_active, is_plan_active
 
 logger = logging.getLogger(__name__)
 
-ALERT_AUTO_DELETE_SECONDS = 8
+ALERT_AUTO_DELETE_ENABLED = str(os.getenv("ALERT_AUTO_DELETE_ENABLED", "false")).strip().lower() in {"1", "true", "yes", "on"}
+ALERT_AUTO_DELETE_SECONDS = max(0, int(os.getenv("ALERT_AUTO_DELETE_SECONDS", "8")))
 MAX_PUSH_CONCURRENCY = 25
 
 
@@ -91,16 +92,25 @@ async def _delete_message_once(bot: Bot, chat_id: int, message_id: int) -> None:
         pass
 
 
-def _schedule_auto_delete(bot: Bot, chat_id: int, message_id: int) -> None:
-    def _runner() -> None:
-        try:
-            asyncio.run(_delete_message_once(bot, chat_id, message_id))
-        except Exception:
-            pass
+async def _delete_message_after_delay(bot: Bot, chat_id: int, message_id: int, delay_seconds: int) -> None:
+    try:
+        await asyncio.sleep(max(0, int(delay_seconds)))
+        await _delete_message_once(bot, chat_id, message_id)
+    except Exception:
+        pass
 
-    timer = threading.Timer(ALERT_AUTO_DELETE_SECONDS, _runner)
-    timer.daemon = True
-    timer.start()
+
+def _schedule_auto_delete(bot: Bot, chat_id: int, message_id: int) -> None:
+    if not ALERT_AUTO_DELETE_ENABLED or ALERT_AUTO_DELETE_SECONDS <= 0:
+        return
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.warning("⚠️ No se pudo programar auto-delete: no hay event loop activo | chat_id=%s | message_id=%s", chat_id, message_id)
+        return
+
+    loop.create_task(_delete_message_after_delay(bot, chat_id, message_id, ALERT_AUTO_DELETE_SECONDS))
 
 
 async def send_signal_alerts(
