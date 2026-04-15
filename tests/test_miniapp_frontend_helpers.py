@@ -102,7 +102,7 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
         self.assertIn("PAYLOAD_CACHE_PREFIX", text)
         self.assertIn("primePayloadShell();", text)
         self.assertIn("restoreCachedPayload()", text)
-        self.assertIn("Promise.resolve(bootstrap())", text)
+        self.assertIn("await bootstrap();", text)
         self.assertIn('visibilitychange', text)
         self.assertIn('window-focus', text)
 
