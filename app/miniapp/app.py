@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from bson import ObjectId
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -26,6 +26,7 @@ from app.miniapp.service import (
     build_bootstrap_payload,
     build_account_center_payload,
     build_dashboard_payload,
+    build_live_signals_feed_meta,
     build_live_signals_payload,
     build_history_payload,
     build_market_payload,
@@ -375,9 +376,21 @@ def create_mini_app() -> FastAPI:
     async def miniapp_dashboard(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
         return build_dashboard_payload(user)
 
-    @app.get("/api/miniapp/live-signals")
-    async def miniapp_live_signals(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
-        return build_live_signals_payload(user)
+    @app.get("/api/miniapp/live-signals", response_model=None)
+    async def miniapp_live_signals(since_version: Optional[str] = None, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Any:
+        meta = build_live_signals_feed_meta(user)
+        current_version = str(meta.get("feed_version") or "")
+        if since_version is not None and str(since_version) == current_version:
+            generated_at = str(meta.get("generated_at") or "")
+            return Response(
+                status_code=204,
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Live-Signals-Version": current_version,
+                    "X-Live-Signals-Generated-At": generated_at,
+                },
+            )
+        return build_live_signals_payload(user, meta=meta)
 
     @app.get("/api/miniapp/account")
     async def miniapp_account(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
