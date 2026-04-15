@@ -89,7 +89,8 @@ const state = {
   },
 };
 
-const LIVE_SIGNALS_POLL_INTERVAL_MS = 7000;
+const LIVE_SIGNALS_HOME_POLL_INTERVAL_MS = 15000;
+const LIVE_SIGNALS_VIEW_POLL_INTERVAL_MS = 8000;
 const LIVE_SIGNALS_FOCUS_DEBOUNCE_MS = 2500;
 const PAYLOAD_CACHE_TTL_MS = 10 * 60 * 1000;
 const PAYLOAD_CACHE_PREFIX = 'hades-miniapp-payload-v3';
@@ -181,7 +182,34 @@ function primePayloadShell(me = {}) {
 }
 
 function applyBootstrapPayload(payload, { persist = true } = {}) {
-  state.payload = payload && typeof payload === 'object' ? payload : {};
+  const incoming = payload && typeof payload === 'object' ? payload : {};
+  const isLightBootstrap = String(incoming?.bootstrap_mode || '').toLowerCase() === 'light';
+  const hasExistingPayload = state.payload && typeof state.payload === 'object';
+
+  if (isLightBootstrap && hasExistingPayload) {
+    state.payload = {
+      ...state.payload,
+      ...incoming,
+      me: { ...(state.payload.me || {}), ...(incoming.me || {}) },
+      dashboard: Object.keys(state.payload.dashboard || {}).length
+        ? { ...(incoming.dashboard || {}), ...(state.payload.dashboard || {}) }
+        : { ...(incoming.dashboard || {}) },
+      market: Object.keys(state.payload.market || {}).length
+        ? { ...(incoming.market || {}), ...(state.payload.market || {}) }
+        : { ...(incoming.market || {}) },
+      watchlist_meta: Object.keys(state.payload.watchlist_meta || {}).length
+        ? { ...(incoming.watchlist_meta || {}), ...(state.payload.watchlist_meta || {}) }
+        : { ...(incoming.watchlist_meta || {}) },
+      account: Object.keys(incoming.account || {}).length ? incoming.account : (state.payload.account || {}),
+      plans: Object.keys(incoming.plans || {}).length ? incoming.plans : (state.payload.plans || {}),
+      signals: Array.isArray(incoming.signals) && incoming.signals.length ? incoming.signals : (Array.isArray(state.payload.signals) ? state.payload.signals : []),
+      history: Array.isArray(incoming.history) && incoming.history.length ? incoming.history : (Array.isArray(state.payload.history) ? state.payload.history : []),
+      watchlist: Array.isArray(incoming.watchlist) && incoming.watchlist.length ? incoming.watchlist : (Array.isArray(state.payload.watchlist) ? state.payload.watchlist : []),
+    };
+  } else {
+    state.payload = incoming;
+  }
+
   ensurePayloadShell();
   if (state.authMe && typeof state.authMe === 'object') {
     state.payload.me = { ...(state.payload.me || {}), ...state.authMe };
@@ -692,6 +720,16 @@ function applyLiveSignalsPayload(payload = {}) {
   state.lazy.signals.loaded = true;
 }
 
+function shouldPollLiveSignals() {
+  return Boolean(state.token) && !document.hidden && ['home', 'signals'].includes(String(state.currentView || 'home'));
+}
+
+function getLiveSignalsPollIntervalMs() {
+  return state.currentView === 'signals'
+    ? LIVE_SIGNALS_VIEW_POLL_INTERVAL_MS
+    : LIVE_SIGNALS_HOME_POLL_INTERVAL_MS;
+}
+
 function stopLiveSignalsPolling() {
   if (state.liveSignals.timer) {
     clearTimeout(state.liveSignals.timer);
@@ -699,27 +737,43 @@ function stopLiveSignalsPolling() {
   }
 }
 
-function scheduleLiveSignalsTick(delay = LIVE_SIGNALS_POLL_INTERVAL_MS) {
+function scheduleLiveSignalsTick(delay = getLiveSignalsPollIntervalMs()) {
   stopLiveSignalsPolling();
-  if (!state.token || document.hidden) return;
+  if (!shouldPollLiveSignals()) return;
   state.liveSignals.timer = setTimeout(async () => {
     try {
       await refreshLiveSignalsState(false, 'interval');
     } catch (error) {
       console.warn('MiniApp live signals refresh failed', error);
     } finally {
-      scheduleLiveSignalsTick(LIVE_SIGNALS_POLL_INTERVAL_MS);
+      scheduleLiveSignalsTick(getLiveSignalsPollIntervalMs());
     }
-  }, Math.max(1000, Number(delay || LIVE_SIGNALS_POLL_INTERVAL_MS)));
+  }, Math.max(1000, Number(delay || getLiveSignalsPollIntervalMs())));
 }
 
 async function refreshLiveSignalsState(force = false, reason = 'manual') {
-  if (!state.token || state.liveSignals.requestInFlight) return null;
+  if (!state.token || state.liveSignals.requestInFlight || !shouldPollLiveSignals()) return null;
   state.liveSignals.requestInFlight = true;
   try {
-    const payload = await api('/api/miniapp/live-signals');
+    const currentVersion = String(state.liveSignals.feedVersion || '');
+    const url = (!force && currentVersion)
+      ? `/api/miniapp/live-signals?since_version=${encodeURIComponent(currentVersion)}`
+      : '/api/miniapp/live-signals';
+    const headers = {};
+    if (state.token) headers.Authorization = `Bearer ${state.token}`;
+    const response = await fetch(url, { headers });
+
+    if (response.status === 204) {
+      state.liveSignals.feedVersion = response.headers.get('X-Live-Signals-Version') || currentVersion;
+      state.liveSignals.lastSyncedAt = response.headers.get('X-Live-Signals-Generated-At') || new Date().toISOString();
+      return null;
+    }
+
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.detail || payload.message || 'request_failed');
+
     const nextVersion = String(payload.feed_version || '');
-    if (!force && nextVersion && nextVersion === String(state.liveSignals.feedVersion || '')) {
+    if (!force && nextVersion && nextVersion === currentVersion) {
       state.liveSignals.lastSyncedAt = payload.generated_at || state.liveSignals.lastSyncedAt || null;
       return payload;
     }
@@ -734,12 +788,23 @@ async function refreshLiveSignalsState(force = false, reason = 'manual') {
 }
 
 function startLiveSignalsPolling() {
-  scheduleLiveSignalsTick(LIVE_SIGNALS_POLL_INTERVAL_MS);
+  scheduleLiveSignalsTick(getLiveSignalsPollIntervalMs());
+}
+
+function syncLiveSignalsPolling() {
+  if (!shouldPollLiveSignals()) {
+    stopLiveSignalsPolling();
+    return;
+  }
+  scheduleLiveSignalsTick(getLiveSignalsPollIntervalMs());
 }
 
 function queueLiveSignalsRefresh(reason = 'focus') {
-  if (!state.token) return;
-  scheduleLiveSignalsTick(LIVE_SIGNALS_POLL_INTERVAL_MS);
+  if (!shouldPollLiveSignals()) {
+    stopLiveSignalsPolling();
+    return;
+  }
+  scheduleLiveSignalsTick(getLiveSignalsPollIntervalMs());
   Promise.resolve(refreshLiveSignalsState(true, reason)).catch(error => {
     console.warn(`MiniApp live signals ${reason} refresh failed`, error);
   });
@@ -765,16 +830,33 @@ function ensurePayloadShell() {
 
 function markLazyStateFromBootstrap() {
   const isLightBootstrap = String(state.payload?.bootstrap_mode || '').toLowerCase() === 'light';
-  state.lazy.dashboard.loaded = !isLightBootstrap;
+  const dashboard = state.payload?.dashboard || {};
+  const market = state.payload?.market || {};
+  const account = state.payload?.account || {};
+
+  state.lazy.dashboard.loaded = !isLightBootstrap || Boolean(
+    Number(dashboard.active_signals_count || 0)
+    || (Array.isArray(dashboard.recent_signals) && dashboard.recent_signals.length)
+    || (Array.isArray(dashboard.recent_history) && dashboard.recent_history.length)
+  );
   state.lazy.dashboard.loading = false;
-  state.lazy.signals.loaded = !isLightBootstrap;
+  state.lazy.signals.loaded = !isLightBootstrap || (Array.isArray(state.payload?.signals) && state.payload.signals.length > 0);
   state.lazy.signals.loading = false;
-  state.lazy.history.loaded = !isLightBootstrap;
+  state.lazy.history.loaded = !isLightBootstrap || (Array.isArray(state.payload?.history) && state.payload.history.length > 0);
   state.lazy.history.loading = false;
-  state.lazy.market.loaded = !isLightBootstrap;
+  state.lazy.market.loaded = !isLightBootstrap || Boolean(
+    (Array.isArray(market.radar) && market.radar.length)
+    || (Array.isArray(market.top_gainers) && market.top_gainers.length)
+    || (Array.isArray(market.top_losers) && market.top_losers.length)
+    || market.generated_at
+  );
   state.lazy.market.loading = false;
   state.lazy.market.error = null;
-  state.lazy.account.loaded = !isLightBootstrap;
+  state.lazy.account.loaded = !isLightBootstrap || Boolean(
+    Object.keys(account).filter(key => key !== 'billing').length
+    || account?.billing?.active_order
+    || (Array.isArray(account?.billing?.recent_orders) && account.billing.recent_orders.length)
+  );
   state.lazy.account.loading = false;
 }
 
@@ -3704,7 +3786,6 @@ function ensureViewData(view, options = {}) {
     return;
   }
   if (view === 'signals') {
-    Promise.resolve(refreshSignalsState(force)).catch(error => console.warn('MiniApp signals refresh failed', error));
     queueLiveSignalsRefresh(force ? 'signals-bootstrap' : 'signals-view');
     return;
   }
@@ -3740,6 +3821,7 @@ function setView(view) {
   renderView(view);
   bindViewButtons();
   ensureViewData(view);
+  syncLiveSignalsPolling();
 }
 
 async function copyValue(value, successMessage = 'Copiado correctamente.') {
@@ -4519,11 +4601,13 @@ document.addEventListener('visibilitychange', () => {
     stopLiveSignalsPolling();
     return;
   }
+  syncLiveSignalsPolling();
   queueLiveSignalsRefresh('visibility');
 });
 
 window.addEventListener('focus', () => {
   if (document.hidden) return;
+  syncLiveSignalsPolling();
   queueLiveSignalsRefresh('window-focus');
 });
 
@@ -4541,22 +4625,24 @@ document.querySelectorAll('.nav-item').forEach(button => {
     renderAll();
     restoredFromCache = restoreCachedPayload();
 
-    if (!restoredFromCache) {
-      Promise.resolve(refreshDashboardState(true)).catch(error => console.warn('MiniApp startup dashboard refresh failed', error));
-      queueLiveSignalsRefresh('startup-shell');
-    } else {
-      queueLiveSignalsRefresh('startup-cache');
+    try {
+      await bootstrap();
+    } catch (error) {
+      console.warn('MiniApp bootstrap refresh failed', error);
+      if (!restoredFromCache) {
+        showError(error.message || 'No se pudo abrir la mini-app.');
+        return;
+      }
     }
 
-    Promise.resolve(bootstrap()).catch(error => {
-      console.warn('MiniApp bootstrap refresh failed', error);
-      if (!restoredFromCache) showError(error.message || 'No se pudo abrir la mini-app.');
-    });
+    ensureViewData(state.currentView || 'home', { force: !restoredFromCache });
+    syncLiveSignalsPolling();
 
-    startLiveSignalsPolling();
-    setTimeout(() => {
-      queueLiveSignalsRefresh(restoredFromCache ? 'startup-cached-focus' : 'startup-focus');
-    }, LIVE_SIGNALS_FOCUS_DEBOUNCE_MS);
+    if (shouldPollLiveSignals()) {
+      setTimeout(() => {
+        queueLiveSignalsRefresh(restoredFromCache ? 'startup-cached-focus' : 'startup-focus');
+      }, LIVE_SIGNALS_FOCUS_DEBOUNCE_MS);
+    }
   } catch (error) {
     showError(error.message || 'No se pudo abrir la mini-app.');
   }
