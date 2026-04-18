@@ -121,7 +121,7 @@ def test_mtf_strategy_routes_premium_then_plus_then_free(monkeypatch):
 
 
 
-def test_strategy_requires_reference_price_beyond_entry_side_for_prereset_signal(monkeypatch):
+def test_strategy_only_publishes_breakout_when_live_price_touches_reset_zone(monkeypatch):
     import app.strategy as strategy
 
     bars = strategy._required_history_bars()
@@ -147,31 +147,32 @@ def test_strategy_requires_reference_price_beyond_entry_side_for_prereset_signal
         enriched["body_ratio"] = 0.4
         enriched["vol_ma"] = 1000.0
         # controlamos las dos últimas velas: breakout + continuación sin reset
-        enriched.iloc[-2, enriched.columns.get_loc("close")] = 101.6
-        enriched.iloc[-2, enriched.columns.get_loc("high")] = 101.9
-        enriched.iloc[-2, enriched.columns.get_loc("low")] = 100.8
-        enriched.iloc[-2, enriched.columns.get_loc("open")] = 100.9
+        enriched.iloc[-2, enriched.columns.get_loc("close")] = 100.7
+        enriched.iloc[-2, enriched.columns.get_loc("high")] = 100.9
+        enriched.iloc[-2, enriched.columns.get_loc("low")] = 100.1
+        enriched.iloc[-2, enriched.columns.get_loc("open")] = 100.2
         enriched.iloc[-2, enriched.columns.get_loc("body_ratio")] = 0.52
-        enriched.iloc[-1, enriched.columns.get_loc("close")] = 101.9
-        enriched.iloc[-1, enriched.columns.get_loc("high")] = 102.2
-        enriched.iloc[-1, enriched.columns.get_loc("low")] = 101.2
-        enriched.iloc[-1, enriched.columns.get_loc("open")] = 101.4
+        enriched.iloc[-1, enriched.columns.get_loc("close")] = 100.8
+        enriched.iloc[-1, enriched.columns.get_loc("high")] = 101.0
+        enriched.iloc[-1, enriched.columns.get_loc("low")] = 100.5
+        enriched.iloc[-1, enriched.columns.get_loc("open")] = 100.4
         enriched.iloc[-1, enriched.columns.get_loc("body_ratio")] = 0.38
         return enriched
 
     monkeypatch.setattr(strategy, "add_indicators", fake_add_indicators)
     monkeypatch.setattr(strategy, "_passes_profile_score_floor", lambda *_args, **_kwargs: True)
 
-    # Reference price por debajo de la entrada esperada: no debe publicar pre-reset.
-    blocked = strategy.mtf_strategy(df, df, df.copy(), reference_market_price=100.05)
+    # Precio todavía extendido por encima de la zona: no se publica nada al usuario.
+    blocked = strategy.mtf_strategy(df, df, df.copy(), reference_market_price=101.1)
     assert blocked is None
 
-    # Precio ya extendido por encima del nivel: ahora sí debe anticipar el reset.
-    candidate = strategy.mtf_strategy(df, df, df.copy(), reference_market_price=101.1)
+    # Cuando el precio toca la zona de reset en vivo, la señal sí se publica.
+    candidate = strategy.mtf_strategy(df, df, df.copy(), reference_market_price=100.2)
     assert candidate is not None
-    assert candidate["send_mode"] == "entry_zone_pending"
-    assert candidate["setup_stage"] == "pre_reset_waiting_retest"
-    assert float(candidate["entry_price"]) < 101.1
+    assert candidate["send_mode"] == "market_on_close"
+    assert candidate["setup_stage"] == strategy.SETUP_STAGE_RESET_TOUCH_LIVE
+    assert float(candidate["entry_price"]) == 100.2
+    assert float(candidate["entry_model_price"]) == 100.3
 
 
 def test_mtf_strategy_downgrades_premium_candidate_to_plus_when_premium_floor_not_met(monkeypatch):
