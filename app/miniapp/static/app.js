@@ -3448,6 +3448,12 @@ function renderSignalDetailModal(payload) {
   const statusBadge = signal.result
     ? `<span class="${badgeClassByResult(signal)}">${escapeHtml(resultLabel(signal))}</span>`
     : `<span class="plan-tag">${escapeHtml(tracking.result_label || formatStatusLabel(signal.status || 'active'))}</span>`;
+  const strategyLabel = tracking.strategy_label || signal.strategy_label || 'Señal táctica';
+  const strategyFamily = tracking.strategy_family || 'Lectura operativa';
+  const entryModelLabel = tracking.entry_model_label || 'Entrada táctica';
+  const liveSummary = tracking.live_summary || tracking.recommendation || 'Sin lectura operativa disponible.';
+  const strategySummary = tracking.strategy_summary || 'Sin contexto táctico adicional para esta estrategia.';
+  const actionLabel = tracking.action_label || 'Seguimiento';
 
   els.signalDetailTitle.textContent = `${signal.symbol || 'Señal'} · ${signal.direction || ''}`.trim();
   els.signalDetailBody.innerHTML = `
@@ -3455,22 +3461,33 @@ function renderSignalDetailModal(payload) {
       <div class="card detail-status-card">
         <div class="detail-status-top">
           <div class="detail-status-copy-block">
-            <span class="detail-kicker">Resumen operativo</span>
-            <div class="item-title">${escapeHtml(tracking.state_label || 'Sin estado')}</div>
-            <div class="item-subtitle">${escapeHtml(tracking.entry_state_label || 'Sin lectura operativa')}</div>
+            <span class="detail-kicker">Estrategia en vivo</span>
+            <div class="item-title">${escapeHtml(strategyLabel)} · ${escapeHtml(tracking.state_label || 'Sin estado')}</div>
+            <div class="item-subtitle">${escapeHtml(tracking.entry_state_label || 'Sin lectura operativa')} · ${escapeHtml(actionLabel)}</div>
           </div>
           ${statusBadge}
         </div>
-        <p class="detail-status-copy">${escapeHtml(tracking.recommendation || 'Sin recomendación operativa disponible.')}</p>
+        <p class="detail-status-copy">${escapeHtml(liveSummary)}</p>
       </div>
 
       <div class="detail-info-grid">
         ${detailInfoChip('Plan', String(payload.viewer_plan || 'free').toUpperCase())}
         ${detailInfoChip('Tier', String(signal.visibility || 'free').toUpperCase())}
+        ${detailInfoChip('Estrategia', strategyLabel)}
         ${detailInfoChip('Perfil', profileLabel(selectedProfile))}
-        ${detailInfoChip('Tracking', String(tier).toUpperCase())}
         ${detailInfoChip('Setup', String(analysis.setup_group || signal.setup_group || 'legacy').toUpperCase())}
         ${detailInfoChip('Score', formatNumber(analysis.normalized_score ?? analysis.score ?? signal.score, 1))}
+      </div>
+
+      <div class="card signal-intel-section signal-intel-section-full">
+        <h3>Qué está trabajando esta señal</h3>
+        <div class="pill-row compact-pill-row">
+          <span class="pill">Familia: ${escapeHtml(strategyFamily)}</span>
+          <span class="pill">Modelo: ${escapeHtml(entryModelLabel)}</span>
+          <span class="pill">Acción ahora: ${escapeHtml(actionLabel)}</span>
+        </div>
+        <p class="detail-status-copy">${escapeHtml(strategySummary)}</p>
+        <p class="detail-status-copy">${escapeHtml(liveSummary)}</p>
       </div>
 
       <div class="detail-profile-selector" role="tablist" aria-label="Perfil de lectura">
@@ -3493,11 +3510,12 @@ function renderSignalDetailModal(payload) {
       <div class="card signal-intel-section signal-intel-section-full">
         <h3>Lectura operativa</h3>
         <div class="pill-row compact-pill-row">
-          <span class="pill">En entrada: ${tracking.in_entry_zone ? 'Sí' : 'No'}</span>
+          <span class="pill">Entrada ya tocada: ${tracking.entry_touched ? 'Sí' : 'No'}</span>
+          <span class="pill">En zona ahora: ${tracking.in_entry_zone ? 'Sí' : 'No'}</span>
           <span class="pill">Operable ahora: ${tracking.is_operable_now ? 'Sí' : 'No'}</span>
-          <span class="pill">TP1 tocado: ${tracking.tp1_hit_now ? 'Sí' : 'No'}</span>
-          <span class="pill">TP2 tocado: ${tracking.tp2_hit_now ? 'Sí' : 'No'}</span>
-          <span class="pill">SL roto: ${tracking.stop_hit_now ? 'Sí' : 'No'}</span>
+          <span class="pill">TP1 ya tocado: ${tracking.tp1_hit_now ? 'Sí' : 'No'}</span>
+          <span class="pill">TP2 ya tocado: ${tracking.tp2_hit_now ? 'Sí' : 'No'}</span>
+          <span class="pill">SL ya roto: ${tracking.stop_hit_now ? 'Sí' : 'No'}</span>
         </div>
         <div class="inline-meta">
           <span>Creada: ${escapeHtml(formatDate(tracking.created_at || signal.created_at))}</span>
