@@ -3449,7 +3449,7 @@ function renderSignalDetailModal(payload) {
     ? `<span class="${badgeClassByResult(signal)}">${escapeHtml(resultLabel(signal))}</span>`
     : `<span class="plan-tag">${escapeHtml(tracking.result_label || formatStatusLabel(signal.status || 'active'))}</span>`;
   const strategyLabel = tracking.strategy_label || signal.strategy_label || 'Señal táctica';
-  const strategyFamily = tracking.strategy_family || 'Lectura operativa';
+  const strategyFamily = tracking.strategy_family || 'Marco táctico';
   const entryModelLabel = tracking.entry_model_label || 'Entrada táctica';
   const liveSummary = tracking.live_summary || tracking.recommendation || 'Sin lectura operativa disponible.';
   const strategySummary = tracking.strategy_summary || 'Sin contexto táctico adicional para esta estrategia.';
@@ -3480,11 +3480,11 @@ function renderSignalDetailModal(payload) {
       </div>
 
       <div class="card signal-intel-section signal-intel-section-full">
-        <h3>Qué está trabajando esta señal</h3>
+        <h3>Marco estratégico de la señal</h3>
         <div class="pill-row compact-pill-row">
           <span class="pill">Familia: ${escapeHtml(strategyFamily)}</span>
           <span class="pill">Modelo: ${escapeHtml(entryModelLabel)}</span>
-          <span class="pill">Acción ahora: ${escapeHtml(actionLabel)}</span>
+          <span class="pill">Lectura ahora: ${escapeHtml(actionLabel)}</span>
         </div>
         <p class="detail-status-copy">${escapeHtml(strategySummary)}</p>
         <p class="detail-status-copy">${escapeHtml(liveSummary)}</p>
@@ -3508,7 +3508,7 @@ function renderSignalDetailModal(payload) {
       </div>
 
       <div class="card signal-intel-section signal-intel-section-full">
-        <h3>Lectura operativa</h3>
+        <h3>Estado operativo en vivo</h3>
         <div class="pill-row compact-pill-row">
           <span class="pill">Entrada ya tocada: ${tracking.entry_touched ? 'Sí' : 'No'}</span>
           <span class="pill">En zona ahora: ${tracking.in_entry_zone ? 'Sí' : 'No'}</span>
