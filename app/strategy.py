@@ -69,10 +69,14 @@ BREAKOUT_LOOKBACK = 24
 
 MAX_SCORE = 100.0
 FREE_NORMALIZATION_PENALTY = 6.0
-SCORE_CALIBRATION_VERSION = "v6_breakout_reset_tiered_continuation_guard"
-ENTRY_MODEL_NAME = "breakout_reset_prereset_anticipatory_v2"
+SCORE_CALIBRATION_VERSION = "v7_breakout_reset_live_reset_touch_release"
+ENTRY_MODEL_NAME = "breakout_reset_live_reset_touch_v1"
 SETUP_STAGE_PRE_RESET_WAITING_RETEST = "pre_reset_waiting_retest"
+SETUP_STAGE_RESET_TOUCH_LIVE = "reset_touch_live"
 SEND_MODE_PENDING_ENTRY = "entry_zone_pending"
+ENTRY_ZONE_MIN_PCT = float(os.getenv("ENTRY_ZONE_MIN_PCT", "0.0015"))
+ENTRY_ZONE_MAX_PCT = float(os.getenv("ENTRY_ZONE_MAX_PCT", "0.0035"))
+ENTRY_ZONE_RISK_FRACTION = float(os.getenv("ENTRY_ZONE_RISK_FRACTION", "0.22"))
 PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "83"))
 PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "76"))
 FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "69"))
@@ -269,10 +273,34 @@ def _price_round_digits(value: float) -> int:
     return 12
 
 
+def _calculate_entry_zone(entry: float, stop_loss: float) -> Tuple[float, float]:
+    entry = float(entry)
+    risk_pct = abs(entry - float(stop_loss)) / max(abs(entry), 1e-9)
+    zone_pct = _clamp(risk_pct * ENTRY_ZONE_RISK_FRACTION, ENTRY_ZONE_MIN_PCT, ENTRY_ZONE_MAX_PCT)
+    low = _round_price_dynamic(entry * (1 - zone_pct))
+    high = _round_price_dynamic(entry * (1 + zone_pct))
+    return low, high
+
+
+def _classify_live_reset_state(direction: str, current_price: float, zone_low: float, zone_high: float) -> str:
+    direction = str(direction).upper().strip()
+    current_price = float(current_price)
+    if direction == "LONG":
+        if current_price > zone_high:
+            return SETUP_STAGE_PRE_RESET_WAITING_RETEST
+        if zone_low <= current_price <= zone_high:
+            return SETUP_STAGE_RESET_TOUCH_LIVE
+        return "reset_late_or_lost"
+
+    if current_price < zone_low:
+        return SETUP_STAGE_PRE_RESET_WAITING_RETEST
+    if zone_low <= current_price <= zone_high:
+        return SETUP_STAGE_RESET_TOUCH_LIVE
+    return "reset_late_or_lost"
+
 
 def _round_price_dynamic(value: float) -> float:
     return round(float(value), _price_round_digits(value))
-
 
 
 def _volatility_regime_adjustment(atr_pct: float) -> float:
@@ -493,9 +521,10 @@ def _confirm_breakout_prereset(
 
     level = breakout_level(df, direction)
     atr = float(last["atr"])
-    current_price = float(reference_market_price or last["close"] or 0.0)
+    setup_reference_price = float(last["close"] or 0.0)
+    current_price = float(reference_market_price or setup_reference_price or 0.0)
 
-    if atr <= 0 or current_price <= 0:
+    if atr <= 0 or current_price <= 0 or setup_reference_price <= 0:
         return False, {}
 
     min_ext = float(profile.get("min_extension_atr", 0.15))
@@ -513,7 +542,7 @@ def _confirm_breakout_prereset(
             and float(last["body_ratio"]) >= float(profile["min_body_ratio_continuation"])
         )
         no_reset_yet = float(last["low"]) > level
-        extension_atr = max(0.0, current_price - level) / atr
+        extension_atr = max(0.0, setup_reference_price - level) / atr
         overshoot_atr = max(0.0, float(prev["close"]) - level) / atr
     else:
         breakout_ok = (
@@ -527,7 +556,7 @@ def _confirm_breakout_prereset(
             and float(last["body_ratio"]) >= float(profile["min_body_ratio_continuation"])
         )
         no_reset_yet = float(last["high"]) < level
-        extension_atr = max(0.0, level - current_price) / atr
+        extension_atr = max(0.0, level - setup_reference_price) / atr
         overshoot_atr = max(0.0, level - float(prev["close"])) / atr
 
     if not breakout_ok or not continuation_ok or not no_reset_yet:
@@ -542,7 +571,7 @@ def _confirm_breakout_prereset(
         "continuation_body_ratio": float(last["body_ratio"]),
         "extension_atr": float(extension_atr),
         "overshoot_atr": float(overshoot_atr),
-        "reference_price": float(current_price),
+        "reference_price": float(setup_reference_price),
         "pre_reset_space_atr": float(abs(float(last["low"]) - level) / atr) if direction == "LONG" else float(abs(level - float(last["high"])) / atr),
     }
     return True, quality
@@ -889,9 +918,22 @@ def _evaluate_profile(
     level = float(quality["level"])
     close_price = float(quality.get("reference_price") or last["close"])
 
-    # Breakout + reset anticipado: la entrada queda fijada donde esperamos que
-    # ocurra el retroceso, no en el precio actual de extensión.
-    entry_price = _reset_entry_price(level, last, direction)
+    model_entry_price = _reset_entry_price(level, last, direction)
+    model_trade_profiles = _build_trade_profiles(model_entry_price, direction, atr_pct)
+    model_conservative = model_trade_profiles.get("conservador") or {}
+    model_stop_loss = float(model_conservative.get("stop_loss") or 0.0)
+    if model_stop_loss <= 0:
+        _record_reject(debug_counts, "breakout_trade_profile")
+        return None
+
+    zone_low, zone_high = _calculate_entry_zone(model_entry_price, model_stop_loss)
+    live_price = float(reference_market_price or close_price or model_entry_price)
+    live_stage = _classify_live_reset_state(direction, live_price, zone_low, zone_high)
+    if live_stage != SETUP_STAGE_RESET_TOUCH_LIVE:
+        _record_reject(debug_counts, "breakout_waiting_live_reset" if live_stage == SETUP_STAGE_PRE_RESET_WAITING_RETEST else "breakout_reset_late")
+        return None
+
+    entry_price = _round_price_dynamic(live_price)
     trade_profiles = _build_trade_profiles(entry_price, direction, atr_pct)
 
     raw_score, raw_components = _compute_raw_score(df, direction, profile, quality)
@@ -917,10 +959,13 @@ def _evaluate_profile(
         "score_profile": str(profile["name"]),
         "score_calibration": SCORE_CALIBRATION_VERSION,
         "higher_tf_context": higher_tf_context,
-        "send_mode": SEND_MODE_PENDING_ENTRY,
-        "setup_stage": SETUP_STAGE_PRE_RESET_WAITING_RETEST,
+        "send_mode": "market_on_close",
+        "setup_stage": SETUP_STAGE_RESET_TOUCH_LIVE,
         "entry_model": ENTRY_MODEL_NAME,
-        "entry_model_price": round(float(entry_price), 8),
+        "entry_model_price": round(float(model_entry_price), 8),
+        "entry_sent_price": round(float(entry_price), 8),
+        "reset_zone_low": round(float(zone_low), 8),
+        "reset_zone_high": round(float(zone_high), 8),
         "reset_level": round(float(level), 8),
         "reset_close_price": round(float(close_price), 8),
         "signal_reference_price": round(float(close_price), 8),
