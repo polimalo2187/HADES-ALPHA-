@@ -1250,6 +1250,7 @@ def _build_base_signal(signal: Dict, visibility: str) -> Optional[Dict]:
         regime_reason=signal.get("regime_reason"),
         regime_bias=signal.get("regime_bias"),
         router_version=signal.get("router_version"),
+        strategy_runtime=signal.get("strategy_runtime"),
     )
 
 
