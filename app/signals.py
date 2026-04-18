@@ -1168,9 +1168,9 @@ def _strategy_tracking_meta(strategy_name: Optional[str], send_mode: Optional[st
         return {
             "key": "breakout_reset",
             "label": "Breakout + Reset",
-            "family": "Continuación con reset",
-            "entry_model_label": "Entrada por reset",
-            "summary": "Esta señal trabaja una continuación estructurada. La oportunidad no nace por perseguir impulso: nace cuando el precio regresa con orden a la zona de reset y ofrece reentrada limpia.",
+            "family": "Continuación con reset vivo",
+            "entry_model_label": "Activación en reset vivo",
+            "summary": "Esta señal trabaja una continuación estructurada con activación en reset vivo. El setup puede armarse antes en segundo plano, pero ya no se publica anticipada: la señal pública nace cuando el precio entra en la zona válida de reset con fuerza y frescura suficientes.",
         }
     if normalized in _LIQUIDITY_STRATEGY_NAMES:
         if str(send_mode or "").strip().lower() == "market_on_close":
@@ -1209,6 +1209,40 @@ def _strategy_tracking_meta(strategy_name: Optional[str], send_mode: Optional[st
 def _uses_reset_tracking_copy(strategy_name: Optional[str], send_mode: Optional[str] = None) -> bool:
     normalized = _normalized_strategy_name(strategy_name, send_mode)
     return normalized in _BREAKOUT_STRATEGY_NAMES
+
+
+def _is_breakout_legacy_pre_reset(*, strategy_meta: Dict[str, str], entry_touched: bool, in_entry_zone: bool, signal_active_for_entry: bool) -> bool:
+    return (
+        strategy_meta.get("key") == "breakout_reset"
+        and signal_active_for_entry
+        and not entry_touched
+        and not in_entry_zone
+    )
+
+
+def _resolve_tracking_strategy_copy(
+    *,
+    strategy_meta: Dict[str, str],
+    entry_touched: bool,
+    in_entry_zone: bool,
+    signal_active_for_entry: bool,
+) -> Dict[str, str]:
+    if _is_breakout_legacy_pre_reset(
+        strategy_meta=strategy_meta,
+        entry_touched=entry_touched,
+        in_entry_zone=in_entry_zone,
+        signal_active_for_entry=signal_active_for_entry,
+    ):
+        return {
+            "family": "Continuación con reset anticipado (legacy)",
+            "entry_model_label": "Entrada anticipada (legacy)",
+            "summary": "Esta señal pertenece al modelo anterior de Breakout + Reset anticipado. En ese esquema, el setup se publicaba antes de tocar reset y la ejecución quedaba pendiente hasta que el precio regresara a la zona válida.",
+        }
+    return {
+        "family": strategy_meta.get("family") or "Lectura operativa",
+        "entry_model_label": strategy_meta.get("entry_model_label") or "Entrada táctica",
+        "summary": strategy_meta.get("summary") or "La señal está activa bajo la lógica táctica definida por el scanner y el perfil de riesgo aplicado.",
+    }
 
 
 
@@ -1267,8 +1301,8 @@ def _build_tracking_live_summary(
             )
         if key == "breakout_reset":
             return (
-                "El reset ya activó la entrada y la señal sigue viva. Ahora la lectura correcta es confirmar si aparece continuidad limpia después de ese retroceso.",
-                "Seguimiento activo",
+                "La señal nació cuando el precio tocó el reset válido y quedó activa en vivo. Ahora la lectura correcta es medir si la continuación mantiene fuerza suficiente para desarrollar hacia objetivos.",
+                "Seguimiento post-reset",
             )
         if key == "liquidity_sweep_reversal":
             return (
@@ -1287,7 +1321,7 @@ def _build_tracking_live_summary(
             )
         if key == "breakout_reset":
             return (
-                "El reset ya ejecutó la entrada, pero la ventana operativa ya terminó. Ya no es una entrada reutilizable ni una reentrada válida.",
+                "La señal ya hizo su activación en reset vivo, pero la ventana operativa terminó. Ya no conserva una entrada fresca ni una reactivación válida.",
                 "Solo historial",
             )
         if key == "liquidity_sweep_reversal":
@@ -1307,8 +1341,8 @@ def _build_tracking_live_summary(
     if in_entry_zone:
         if key == "breakout_reset":
             return (
-                "El precio ya regresó a la zona de reset. Aquí nace la activación limpia del breakout + reset; fuera de esta zona, la ejecución pierde calidad.",
-                "Zona de activación",
+                "El precio está dentro del reset válido y por eso esta señal ya fue liberada en vivo. Aquí nace la activación de calidad del breakout + reset; fuera de zona, la ejecución se degrada rápido.",
+                "Activación en reset vivo",
             )
         if key == "liquidity_sweep_reversal":
             return (
@@ -1322,7 +1356,7 @@ def _build_tracking_live_summary(
     if signal_active_for_entry:
         if key == "breakout_reset":
             return (
-                "La estructura sigue viva, pero el precio todavía no ha vuelto a la zona de reset. La entrada correcta aún no existe; anticiparse aquí empeora la ejecución.",
+                "Este caso sigue visible bajo el modelo anticipado anterior. La estructura sigue viva, pero el retroceso todavía no ha tocado la zona de reset válida de activación.",
                 "Esperar reset",
             )
         if key == "liquidity_sweep_reversal":
@@ -1337,7 +1371,7 @@ def _build_tracking_live_summary(
     if entry_state_label == tracking_copy["passed"] and evaluation_window_open:
         if key == "breakout_reset":
             return (
-                "La señal sigue visible, pero el reset de calidad ya pasó. Entrar tarde rompe la relación entre entrada y riesgo.",
+                "La señal sigue visible, pero la activación limpia del reset vivo ya pasó. Entrar tarde rompe la relación entre entrada, riesgo y continuación.",
                 "No entrar tarde",
             )
         if key == "liquidity_sweep_reversal":
@@ -1566,7 +1600,7 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
             recommendation = "La entrada ya quedó ejecutada al envío y la señal sigue en evaluación. Ahora importa la continuación posterior a la confirmación inicial."
             state_label = "ACTIVA DESDE ENVÍO"
         elif uses_reset_copy:
-            recommendation = "El reset ya tocó la entrada y la señal está en evaluación. Ahora importa confirmar si aparece continuidad real después del retroceso."
+            recommendation = "La señal nació cuando el precio tocó el reset válido y quedó activa en vivo. Ahora importa confirmar si la continuación mantiene fuerza real después de esa activación."
             state_label = "EN EVALUACIÓN"
         else:
             recommendation = "La entrada ya quedó ejecutada y la señal sigue en evaluación. Ahora importa exclusivamente el desarrollo posterior a la confirmación."
@@ -1577,7 +1611,7 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
             recommendation = "La entrada ya quedó ejecutada al envío. La ventana operativa terminó; úsala solo como referencia histórica."
             state_label = "FINALIZADA"
         elif uses_reset_copy:
-            recommendation = "El reset ya tocó la entrada. La ventana operativa terminó; úsala solo como referencia histórica."
+            recommendation = "La señal ya hizo su activación en reset vivo. La ventana operativa terminó; úsala solo como referencia histórica."
             state_label = tracking_copy["executed"]
         else:
             recommendation = "La entrada ya quedó ejecutada. La ventana operativa terminó; úsala solo como referencia histórica."
@@ -1588,25 +1622,25 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
         state_label = "ACTIVA DESDE ENVÍO"
     elif in_entry_zone:
         if uses_reset_copy:
-            recommendation = "El precio está entrando en la zona prevista de reset. La activación limpia nace en este retroceso; no persigas fuera de zona."
+            recommendation = "El precio está dentro del reset válido y por eso esta señal ya fue liberada en vivo. La activación limpia nace aquí; no persigas fuera de zona."
         else:
             recommendation = "El precio está entrando en la zona prevista de entrada. La ejecución limpia nace aquí; no persigas fuera de la zona operativa."
         state_label = tracking_copy["zone"]
     elif signal_active_for_entry:
         if uses_reset_copy:
-            recommendation = "La señal es anticipada. Espera el retroceso al nivel de reset y no entres por impulso antes de que vuelva a la zona correcta."
+            recommendation = "Este caso pertenece al modelo anticipado anterior. Espera el retroceso de regreso al reset válido y no entres por impulso antes de que vuelva a la zona correcta."
         else:
             recommendation = "La señal sigue esperando su punto de entrada. No te adelantes ni persigas precio fuera de la zona operativa."
         state_label = tracking_copy["waiting"]
     elif entry_state_label == tracking_copy["passed"] and evaluation_window_open:
         if uses_reset_copy:
-            recommendation = "La señal sigue visible en la MiniApp, pero el precio ya pasó la zona prevista de reset. No entrar tarde."
+            recommendation = "La señal sigue visible en la MiniApp, pero la activación limpia del reset vivo ya pasó. No entrar tarde."
         else:
             recommendation = "La señal sigue visible en la MiniApp, pero el precio ya pasó la zona prevista de entrada. No entrar tarde."
         state_label = tracking_copy["passed"]
     elif entry_state_label == tracking_copy["passed"]:
         if uses_reset_copy:
-            recommendation = "El precio ya pasó la zona prevista de reset. No entrar; úsala solo como referencia."
+            recommendation = "La activación limpia del reset vivo ya pasó. No entrar; úsala solo como referencia."
         else:
             recommendation = "El precio ya pasó la zona prevista de entrada. No entrar; úsala solo como referencia."
         state_label = tracking_copy["passed"]
@@ -1624,6 +1658,12 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
 
     entry_touched = bool(live_progress.get("entry_touched") or (result_doc or {}).get("entry_touched"))
     strategy_meta = _strategy_tracking_meta(strategy_name, send_mode)
+    strategy_copy = _resolve_tracking_strategy_copy(
+        strategy_meta=strategy_meta,
+        entry_touched=entry_touched,
+        in_entry_zone=in_entry_zone,
+        signal_active_for_entry=signal_active_for_entry,
+    )
     live_summary, action_label = _build_tracking_live_summary(
         strategy_meta=strategy_meta,
         send_mode=send_mode,
@@ -1670,9 +1710,9 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
         "recommendation": recommendation,
         "strategy_key": strategy_meta.get("key"),
         "strategy_label": strategy_meta.get("label"),
-        "strategy_family": strategy_meta.get("family"),
-        "entry_model_label": strategy_meta.get("entry_model_label"),
-        "strategy_summary": strategy_meta.get("summary"),
+        "strategy_family": strategy_copy.get("family"),
+        "entry_model_label": strategy_copy.get("entry_model_label"),
+        "strategy_summary": strategy_copy.get("summary"),
         "live_summary": live_summary,
         "action_label": action_label,
         "result": final_result,
