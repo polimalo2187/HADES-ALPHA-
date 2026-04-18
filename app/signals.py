@@ -1170,7 +1170,7 @@ def _strategy_tracking_meta(strategy_name: Optional[str], send_mode: Optional[st
             "label": "Breakout + Reset",
             "family": "Continuación con reset",
             "entry_model_label": "Entrada por reset",
-            "summary": "Esta estrategia busca continuación. La entrada buena no nace por perseguir la vela, sino cuando el precio vuelve a la zona de reset.",
+            "summary": "Esta señal trabaja una continuación estructurada. La oportunidad no nace por perseguir impulso: nace cuando el precio regresa con orden a la zona de reset y ofrece reentrada limpia.",
         }
     if normalized in _LIQUIDITY_STRATEGY_NAMES:
         if str(send_mode or "").strip().lower() == "market_on_close":
@@ -1179,14 +1179,14 @@ def _strategy_tracking_meta(strategy_name: Optional[str], send_mode: Optional[st
                 "label": "Cazador de liquidez",
                 "family": "Reversión corta tras barrida",
                 "entry_model_label": "Entrada al envío (legacy)",
-                "summary": "Esta señal pertenece al cazador de liquidez, pero este caso concreto quedó activo desde el envío. Se sigue desde el precio enviado y no espera un pullback adicional.",
+                "summary": "Esta señal pertenece al cazador de liquidez, pero este caso concreto quedó activo con el modelo anterior de entrada al envío. Se evalúa desde el precio enviado y no requiere un pullback adicional.",
             }
         return {
             "key": "liquidity_sweep_reversal",
             "label": "Cazador de liquidez",
             "family": "Reversión corta tras barrida",
             "entry_model_label": "Entrada por pullback post-sweep",
-            "summary": "Esta estrategia busca una barrida de liquidez y un rechazo. La entrada buena nace cuando aparece el pullback de ejecución después del sweep, no persiguiendo precio extendido.",
+            "summary": "Esta señal trabaja una reversión corta tras una barrida de liquidez. La oportunidad no nace persiguiendo extensión: nace cuando el mercado barre, rechaza y devuelve un pullback limpio de ejecución.",
         }
     if normalized == "market_execution":
         return {
@@ -1194,14 +1194,14 @@ def _strategy_tracking_meta(strategy_name: Optional[str], send_mode: Optional[st
             "label": "Entrada directa",
             "family": "Confirmación inmediata",
             "entry_model_label": "Entrada al envío",
-            "summary": "Esta señal entra desde el momento del envío. No espera un retroceso adicional para activar la operación.",
+            "summary": "Esta señal se activa desde el momento del envío. No espera un retroceso adicional para quedar operativa.",
         }
     return {
         "key": normalized or "unknown",
         "label": "Señal táctica",
         "family": "Lectura operativa",
         "entry_model_label": "Entrada táctica",
-        "summary": "La señal está activa con la lógica operativa definida por el scanner y su perfil de riesgo.",
+        "summary": "La señal está activa bajo la lógica táctica definida por el scanner y el perfil de riesgo aplicado.",
     }
 
 
@@ -1231,132 +1231,132 @@ def _build_tracking_live_summary(
     strategy_label = strategy_meta.get("label") or "Señal táctica"
     if final_result == "won":
         return (
-            f"La operación de {strategy_label} ya terminó en ganancia. El recorrido principal ya ocurrió y ahora solo sirve como referencia.",
+            f"La operación de {strategy_label} ya terminó en ganancia. El tramo principal ya ocurrió y ahora queda solo como referencia de seguimiento.",
             "Solo referencia",
         )
     if final_result == "lost":
         return (
-            f"La operación de {strategy_label} ya cerró en pérdida. La idea quedó invalidada y no conviene forzar reentrada.",
+            f"La operación de {strategy_label} ya cerró en pérdida. La idea quedó invalidada y no conviene forzar una reentrada sobre este mismo movimiento.",
             "No reentrar",
         )
     if final_result == "expired":
         return (
-            f"La ventana de mercado terminó para esta señal de {strategy_label}. Ya no tiene vigencia operativa.",
+            f"La ventana de mercado terminó para esta señal de {strategy_label}. Ya no conserva vigencia operativa dentro de esta lectura en vivo.",
             "Solo historial",
         )
     if stop_hit_now:
         return (
-            "El precio ya rompió el stop del perfil elegido. En este seguimiento la idea quedó invalidada.",
+            "El precio ya rompió el stop del perfil elegido. En esta lectura, la idea queda invalidada y no debe seguir tratándose como operable.",
             "No operar",
         )
     if tp2_hit_now:
         return (
-            "La señal ya alcanzó TP2. El recorrido fuerte ya ocurrió y perseguirla ahora no tiene sentido.",
+            "La señal ya alcanzó TP2. El tramo fuerte del movimiento ya ocurrió y perseguirla ahora deteriora totalmente la ejecución.",
             "Solo seguimiento",
         )
     if tp1_hit_now:
         return (
-            "La señal ya alcanzó TP1 y sigue en evaluación. La parte más limpia del primer recorrido ya se movió.",
+            "La señal ya alcanzó TP1 y sigue en evaluación. La parte más limpia del primer recorrido ya se consumió.",
             "Gestionar / no perseguir",
         )
     if entry_touched and evaluation_window_open:
         if str(send_mode or "").strip().lower() == "market_on_close":
             return (
-                "La operación quedó activa desde el envío y sigue viva. Ahora lo importante es cómo desarrolla después de la confirmación.",
+                "La operación quedó activa desde el envío y sigue viva. Ahora la lectura correcta es evaluar cómo desarrolla después de la confirmación inicial.",
                 "Seguimiento activo",
             )
         if key == "breakout_reset":
             return (
-                "El reset ya tocó la entrada y la señal sigue viva. Ahora lo importante es si aparece continuación limpia después del reset.",
+                "El reset ya activó la entrada y la señal sigue viva. Ahora la lectura correcta es confirmar si aparece continuidad limpia después de ese retroceso.",
                 "Seguimiento activo",
             )
         if key == "liquidity_sweep_reversal":
             return (
-                "La barrida ya confirmó y el pullback de entrada ya se ejecutó. Ahora lo importante es si aparece el rebote o rechazo esperado.",
+                "La barrida ya confirmó y el pullback de entrada ya se ejecutó. Ahora la lectura correcta es validar si aparece el rebote o rechazo esperado tras la activación.",
                 "Seguimiento activo",
             )
         return (
-            "La entrada ya se ejecutó y la señal sigue viva. Ahora importa el desarrollo posterior al fill.",
+            "La entrada ya se ejecutó y la señal sigue viva. Ahora importa exclusivamente el desarrollo posterior al fill.",
             "Seguimiento activo",
         )
     if entry_touched:
         if str(send_mode or "").strip().lower() == "market_on_close":
             return (
-                "La operación nació al envío, pero su ventana operativa ya terminó. Úsala solo como referencia.",
+                "La operación nació al envío, pero su ventana operativa ya terminó. Ya no es utilizable como entrada; queda solo como referencia.",
                 "Solo historial",
             )
         if key == "breakout_reset":
             return (
-                "El reset ya ejecutó la entrada, pero la ventana operativa ya terminó. No es una entrada reutilizable.",
+                "El reset ya ejecutó la entrada, pero la ventana operativa ya terminó. Ya no es una entrada reutilizable ni una reentrada válida.",
                 "Solo historial",
             )
         if key == "liquidity_sweep_reversal":
             return (
-                "El pullback de entrada del cazador de liquidez ya pasó y la ventana operativa terminó. Ya no es una entrada válida.",
+                "El pullback de entrada del cazador de liquidez ya pasó y la ventana operativa terminó. Ya no conserva una entrada válida.",
                 "Solo historial",
             )
         return (
-            "La entrada ya ocurrió, pero la ventana operativa terminó. Ya no es una señal utilizable.",
+            "La entrada ya ocurrió, pero la ventana operativa terminó. Ya no es una señal utilizable como ejecución nueva.",
             "Solo historial",
         )
     if str(send_mode or "").strip().lower() == "market_on_close":
         return (
-            "Esta señal entra desde el envío. No espera reset ni pullback adicional; se sigue desde el precio enviado.",
+            "Esta señal entra desde el envío. No espera reset ni pullback adicional; debe leerse desde el precio enviado.",
             "Seguimiento desde envío",
         )
     if in_entry_zone:
         if key == "breakout_reset":
             return (
-                "El precio está en la zona de reset. Aquí es donde nace la entrada válida de esta estrategia de continuación.",
-                "Zona de entrada",
+                "El precio ya regresó a la zona de reset. Aquí nace la activación limpia del breakout + reset; fuera de esta zona, la ejecución pierde calidad.",
+                "Zona de activación",
             )
         if key == "liquidity_sweep_reversal":
             return (
-                "El precio volvió a la zona de pullback tras la barrida. Aquí es donde nace la entrada válida del cazador de liquidez.",
-                "Zona de entrada",
+                "El precio ya volvió al pullback tras la barrida. Aquí nace la activación limpia del cazador de liquidez; perseguir fuera de esta zona degrada la ventaja.",
+                "Zona de activación",
             )
         return (
-            "El precio está dentro de la zona operativa de entrada. Este es el punto donde la señal se vuelve ejecutable.",
-            "Zona de entrada",
+            "El precio está dentro de la zona operativa de entrada. Este es el punto donde la señal se vuelve realmente ejecutable.",
+            "Zona de activación",
         )
     if signal_active_for_entry:
         if key == "breakout_reset":
             return (
-                "La idea sigue viva, pero todavía no ha vuelto a la zona de reset. La entrada correcta aún no ha nacido.",
+                "La estructura sigue viva, pero el precio todavía no ha vuelto a la zona de reset. La entrada correcta aún no existe; anticiparse aquí empeora la ejecución.",
                 "Esperar reset",
             )
         if key == "liquidity_sweep_reversal":
             return (
-                "La idea sigue viva, pero todavía no ha regresado al pullback de ejecución tras la barrida. Falta el punto limpio de entrada.",
+                "La barrida sigue válida, pero el pullback de ejecución aún no aparece. La entrada limpia todavía no existe.",
                 "Esperar pullback",
             )
         return (
-            "La señal sigue viva, pero todavía no está en el punto correcto de entrada.",
+            "La señal sigue viva, pero todavía no está en el punto correcto de activación.",
             "Esperar entrada",
         )
     if entry_state_label == tracking_copy["passed"] and evaluation_window_open:
         if key == "breakout_reset":
             return (
-                "La señal sigue visible, pero el reset bueno ya pasó. Llegar tarde empeora mucho la ejecución.",
+                "La señal sigue visible, pero el reset de calidad ya pasó. Entrar tarde rompe la relación entre entrada y riesgo.",
                 "No entrar tarde",
             )
         if key == "liquidity_sweep_reversal":
             return (
-                "La señal sigue visible, pero el mejor pullback del cazador de liquidez ya pasó. Perseguirla ahora degrada mucho la entrada.",
+                "La señal sigue visible, pero el mejor pullback del cazador de liquidez ya pasó. Perseguirla ahora degrada claramente la entrada.",
                 "No entrar tarde",
             )
         return (
-            "La señal sigue visible, pero el punto de entrada bueno ya pasó. Llegar tarde empeora la ejecución.",
+            "La señal sigue visible, pero el mejor punto de entrada ya pasó. Llegar tarde deteriora la ejecución.",
             "No entrar tarde",
         )
     if entry_state_label == tracking_copy["passed"]:
         return (
-            "El punto de entrada ya pasó y la señal ya no está operable. Solo sirve como referencia.",
+            "El punto de entrada ya pasó y la señal ya no está operable. Queda solo como referencia de contexto.",
             "Solo referencia",
         )
     if evaluation_window_open:
         return (
-            "La señal sigue en evaluación dentro de la MiniApp, pero ya no está en punto limpio de entrada.",
+            "La señal sigue en evaluación dentro de la MiniApp, pero ya no está en un punto limpio de ejecución.",
             "Solo seguimiento",
         )
     return (
@@ -1544,13 +1544,13 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
         recommendation = "La señal ya cerró como ganadora. Úsala solo como referencia de seguimiento."
         state_label = "FINALIZADA"
     elif final_result == "lost":
-        recommendation = "La señal ya cerró en pérdida. No busques reentrada sobre esta idea."
+        recommendation = "La señal ya cerró en pérdida. No busques reentrada sobre esta misma idea."
         state_label = "FINALIZADA"
     elif final_result == "expired":
         recommendation = "La ventana de mercado terminó sin objetivo claro. Úsala solo como referencia histórica."
         state_label = "FINALIZADA"
     elif stop_hit_now:
-        recommendation = "La señal ya tocó el SL del perfil elegido durante el seguimiento. Espera el cierre final para la consolidación del resultado."
+        recommendation = "La señal ya tocó el SL del perfil elegido durante el seguimiento. Espera el cierre final para consolidar el resultado."
         state_label = "SL TOCADO"
         signal_active_for_entry = False
     elif tp2_hit_now:
@@ -1563,13 +1563,13 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
         signal_active_for_entry = False
     elif live_progress.get("entry_touched") and evaluation_window_open:
         if str(send_mode or "").strip().lower() == "market_on_close":
-            recommendation = "La entrada ya quedó ejecutada al envío y la señal sigue en evaluación. Ahora importa la continuación posterior a la confirmación."
+            recommendation = "La entrada ya quedó ejecutada al envío y la señal sigue en evaluación. Ahora importa la continuación posterior a la confirmación inicial."
             state_label = "ACTIVA DESDE ENVÍO"
         elif uses_reset_copy:
-            recommendation = "El reset ya tocó la entrada y la señal está en evaluación. Ahora importa la continuación posterior al reset."
+            recommendation = "El reset ya tocó la entrada y la señal está en evaluación. Ahora importa confirmar si aparece continuidad real después del retroceso."
             state_label = "EN EVALUACIÓN"
         else:
-            recommendation = "La entrada ya quedó ejecutada y la señal sigue en evaluación. Ahora importa la continuación posterior a la confirmación."
+            recommendation = "La entrada ya quedó ejecutada y la señal sigue en evaluación. Ahora importa exclusivamente el desarrollo posterior a la confirmación."
             state_label = "EN EVALUACIÓN"
         signal_active_for_entry = False
     elif live_progress.get("entry_touched"):
@@ -1584,17 +1584,17 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
             state_label = tracking_copy["executed"]
         signal_active_for_entry = False
     elif str(send_mode or "").strip().lower() == "market_on_close":
-        recommendation = "La señal se activó al envío. Evalúala desde el precio enviado; no esperes una entrada por retroceso."
+        recommendation = "La señal se activó al envío. Evalúala desde el precio enviado; no esperes una entrada por retroceso adicional."
         state_label = "ACTIVA DESDE ENVÍO"
     elif in_entry_zone:
         if uses_reset_copy:
-            recommendation = "El precio está entrando en la zona prevista de reset. La activación real nace en este retroceso; no persigas fuera de zona."
+            recommendation = "El precio está entrando en la zona prevista de reset. La activación limpia nace en este retroceso; no persigas fuera de zona."
         else:
-            recommendation = "El precio está entrando en la zona prevista de entrada. La ejecución nace aquí; no persigas fuera de la zona operativa."
+            recommendation = "El precio está entrando en la zona prevista de entrada. La ejecución limpia nace aquí; no persigas fuera de la zona operativa."
         state_label = tracking_copy["zone"]
     elif signal_active_for_entry:
         if uses_reset_copy:
-            recommendation = "La señal es anticipada. Espera el retroceso al nivel de reset y no entres por impulso antes de que vuelva a la zona."
+            recommendation = "La señal es anticipada. Espera el retroceso al nivel de reset y no entres por impulso antes de que vuelva a la zona correcta."
         else:
             recommendation = "La señal sigue esperando su punto de entrada. No te adelantes ni persigas precio fuera de la zona operativa."
         state_label = tracking_copy["waiting"]
@@ -1611,7 +1611,7 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
             recommendation = "El precio ya pasó la zona prevista de entrada. No entrar; úsala solo como referencia."
         state_label = tracking_copy["passed"]
     elif evaluation_window_open:
-        recommendation = "La señal sigue en evaluación dentro de la MiniApp. Úsala como referencia operativa."
+        recommendation = "La señal sigue en evaluación dentro de la MiniApp. Úsala como referencia operativa, no como entrada fresca."
         state_label = "EN EVALUACIÓN"
     else:
         recommendation = "La señal ya no está operativa. Úsala solo como referencia histórica."
