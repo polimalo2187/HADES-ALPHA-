@@ -69,7 +69,7 @@ BREAKOUT_LOOKBACK = 24
 
 MAX_SCORE = 100.0
 FREE_NORMALIZATION_PENALTY = 6.0
-SCORE_CALIBRATION_VERSION = "v7_breakout_reset_live_reset_touch_release"
+SCORE_CALIBRATION_VERSION = "v8_breakout_reset_live_reset_touch_strength_guard"
 ENTRY_MODEL_NAME = "breakout_reset_live_reset_touch_v1"
 SETUP_STAGE_PRE_RESET_WAITING_RETEST = "pre_reset_waiting_retest"
 SETUP_STAGE_RESET_TOUCH_LIVE = "reset_touch_live"
@@ -117,6 +117,8 @@ SHARED_PROFILE = {
     "min_body_ratio_continuation": _env_float("PLUS_MIN_BODY_RATIO_CONTINUATION", 0.24),
     "min_extension_atr": _env_float("PLUS_MIN_EXTENSION_ATR", 0.22),
     "max_extension_atr": _env_float("PLUS_MAX_EXTENSION_ATR", 0.78),
+    "min_breakout_overshoot_atr": _env_float("PLUS_MIN_BREAKOUT_OVERSHOOT_ATR", 0.12),
+    "min_pre_reset_space_atr": _env_float("PLUS_MIN_PRE_RESET_SPACE_ATR", 0.10),
     "min_rel_volume_continuation": _env_float("PLUS_MIN_REL_VOLUME_CONTINUATION", 1.05),
     "min_close_position_continuation": _env_float("PLUS_MIN_CLOSE_POSITION_CONTINUATION", 0.61),
     "min_post_breakout_progress_atr": _env_float("PLUS_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.06),
@@ -131,6 +133,8 @@ FREE_PROFILE = {
     "min_body_ratio_continuation": _env_float("FREE_MIN_BODY_RATIO_CONTINUATION", 0.20),
     "min_extension_atr": _env_float("FREE_MIN_EXTENSION_ATR", 0.18),
     "max_extension_atr": _env_float("FREE_MAX_EXTENSION_ATR", 0.86),
+    "min_breakout_overshoot_atr": _env_float("FREE_MIN_BREAKOUT_OVERSHOOT_ATR", 0.08),
+    "min_pre_reset_space_atr": _env_float("FREE_MIN_PRE_RESET_SPACE_ATR", 0.06),
     "min_rel_volume_continuation": _env_float("FREE_MIN_REL_VOLUME_CONTINUATION", 0.98),
     "min_close_position_continuation": _env_float("FREE_MIN_CLOSE_POSITION_CONTINUATION", 0.54),
     "min_post_breakout_progress_atr": _env_float("FREE_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.04),
@@ -153,6 +157,8 @@ PREMIUM_PROFILE = {
     "min_body_ratio_continuation": _env_float("PREMIUM_MIN_BODY_RATIO_CONTINUATION", 0.27),
     "min_extension_atr": _env_float("PREMIUM_MIN_EXTENSION_ATR", 0.26),
     "max_extension_atr": _env_float("PREMIUM_MAX_EXTENSION_ATR", 0.70),
+    "min_breakout_overshoot_atr": _env_float("PREMIUM_MIN_BREAKOUT_OVERSHOOT_ATR", 0.16),
+    "min_pre_reset_space_atr": _env_float("PREMIUM_MIN_PRE_RESET_SPACE_ATR", 0.14),
     "min_rel_volume_continuation": _env_float("PREMIUM_MIN_REL_VOLUME_CONTINUATION", 1.14),
     "min_close_position_continuation": _env_float("PREMIUM_MIN_CLOSE_POSITION_CONTINUATION", 0.70),
     "min_post_breakout_progress_atr": _env_float("PREMIUM_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.10),
@@ -507,7 +513,7 @@ def _confirm_breakout_prereset(
     direction: str,
     profile: Dict,
     reference_market_price: Optional[float],
-) -> Tuple[bool, Dict[str, float]]:
+) -> Tuple[bool, Dict[str, float], Optional[str]]:
     """
     Detecta un breakout ya confirmado y una extensión suficiente para ANTICIPAR
     el reset futuro.
@@ -525,7 +531,7 @@ def _confirm_breakout_prereset(
     current_price = float(reference_market_price or setup_reference_price or 0.0)
 
     if atr <= 0 or current_price <= 0 or setup_reference_price <= 0:
-        return False, {}
+        return False, {}, "invalid_reference_price"
 
     min_ext = float(profile.get("min_extension_atr", 0.15))
     max_ext = float(profile.get("max_extension_atr", 0.95))
@@ -560,10 +566,20 @@ def _confirm_breakout_prereset(
         overshoot_atr = max(0.0, level - float(prev["close"])) / atr
 
     if not breakout_ok or not continuation_ok or not no_reset_yet:
-        return False, {}
+        return False, {}, "breakout_shape"
 
     if extension_atr < min_ext or extension_atr > max_ext:
-        return False, {}
+        return False, {}, "breakout_extension"
+
+    pre_reset_space_atr = float(abs(float(last["low"]) - level) / atr) if direction == "LONG" else float(abs(level - float(last["high"])) / atr)
+
+    min_overshoot_atr = float(profile.get("min_breakout_overshoot_atr", 0.0) or 0.0)
+    if overshoot_atr < min_overshoot_atr:
+        return False, {}, "breakout_overshoot"
+
+    min_pre_reset_space_atr = float(profile.get("min_pre_reset_space_atr", 0.0) or 0.0)
+    if pre_reset_space_atr < min_pre_reset_space_atr:
+        return False, {}, "reset_freshness"
 
     quality = {
         "level": float(level),
@@ -572,9 +588,9 @@ def _confirm_breakout_prereset(
         "extension_atr": float(extension_atr),
         "overshoot_atr": float(overshoot_atr),
         "reference_price": float(setup_reference_price),
-        "pre_reset_space_atr": float(abs(float(last["low"]) - level) / atr) if direction == "LONG" else float(abs(level - float(last["high"])) / atr),
+        "pre_reset_space_atr": pre_reset_space_atr,
     }
-    return True, quality
+    return True, quality, None
 
 
 
@@ -901,14 +917,14 @@ def _evaluate_profile(
         _record_reject(debug_counts, "atr_pct")
         return None
 
-    breakout_ok, quality = _confirm_breakout_prereset(
+    breakout_ok, quality, breakout_reason = _confirm_breakout_prereset(
         df,
         direction,
         profile,
         reference_market_price=reference_market_price,
     )
     if not breakout_ok:
-        _record_reject(debug_counts, "breakout_retest")
+        _record_reject(debug_counts, breakout_reason or "breakout_retest")
         return None
 
     if not _continuation_ok(last, direction, profile, quality):
