@@ -337,6 +337,8 @@ def test_profile_defaults_keep_free_plus_premium_hierarchy_after_rebalance():
     assert strategy.FREE_PROFILE["min_rel_volume_continuation"] < strategy.PLUS_PROFILE["min_rel_volume_continuation"] < strategy.PREMIUM_PROFILE["min_rel_volume_continuation"]
     assert strategy.FREE_PROFILE["min_close_position_continuation"] < strategy.PLUS_PROFILE["min_close_position_continuation"] < strategy.PREMIUM_PROFILE["min_close_position_continuation"]
     assert strategy.FREE_PROFILE["min_post_breakout_progress_atr"] < strategy.PLUS_PROFILE["min_post_breakout_progress_atr"] < strategy.PREMIUM_PROFILE["min_post_breakout_progress_atr"]
+    assert strategy.FREE_PROFILE["min_breakout_overshoot_atr"] < strategy.PLUS_PROFILE["min_breakout_overshoot_atr"] < strategy.PREMIUM_PROFILE["min_breakout_overshoot_atr"]
+    assert strategy.FREE_PROFILE["min_pre_reset_space_atr"] < strategy.PLUS_PROFILE["min_pre_reset_space_atr"] < strategy.PREMIUM_PROFILE["min_pre_reset_space_atr"]
     assert strategy.FREE_RAW_SCORE_MIN < strategy.PLUS_RAW_SCORE_MIN < strategy.PREMIUM_RAW_SCORE_MIN
 
 
@@ -371,3 +373,93 @@ def test_trade_profiles_keep_precision_for_low_price_assets():
     assert moderado["stop_loss"] > 0.00172345
     assert moderado["take_profits"][0] < 0.00172345
     assert moderado["take_profits"][1] < moderado["take_profits"][0]
+
+
+def test_breakout_filter_rejects_weak_overshoot_even_if_live_price_touches_reset(monkeypatch):
+    import app.strategy as strategy
+
+    bars = strategy._required_history_bars()
+    rows = []
+    for _ in range(bars):
+        rows.append({
+            "open": 100.0,
+            "high": 100.3,
+            "low": 99.7,
+            "close": 100.0,
+            "volume": 1000.0,
+        })
+    df = pd.DataFrame(rows)
+
+    def fake_add_indicators(frame):
+        enriched = frame.copy()
+        enriched["ema20"] = 101.0
+        enriched["ema50"] = 100.7
+        enriched["ema200"] = 100.2
+        enriched["adx"] = 25.0
+        enriched["atr"] = 1.0
+        enriched["atr_pct"] = 0.01
+        enriched["body_ratio"] = 0.4
+        enriched["vol_ma"] = 1000.0
+        # breakout demasiado tímido: apenas 0.05 ATR por encima del nivel
+        enriched.iloc[-2, enriched.columns.get_loc("close")] = 100.35
+        enriched.iloc[-2, enriched.columns.get_loc("high")] = 100.55
+        enriched.iloc[-2, enriched.columns.get_loc("low")] = 100.05
+        enriched.iloc[-2, enriched.columns.get_loc("open")] = 100.0
+        enriched.iloc[-2, enriched.columns.get_loc("body_ratio")] = 0.70
+        enriched.iloc[-1, enriched.columns.get_loc("close")] = 100.8
+        enriched.iloc[-1, enriched.columns.get_loc("high")] = 101.0
+        enriched.iloc[-1, enriched.columns.get_loc("low")] = 100.45
+        enriched.iloc[-1, enriched.columns.get_loc("open")] = 100.4
+        enriched.iloc[-1, enriched.columns.get_loc("body_ratio")] = 0.73
+        return enriched
+
+    monkeypatch.setattr(strategy, "add_indicators", fake_add_indicators)
+    monkeypatch.setattr(strategy, "_passes_profile_score_floor", lambda *_args, **_kwargs: True)
+
+    candidate = strategy.mtf_strategy(df, df, df.copy(), reference_market_price=100.2)
+    assert candidate is None
+
+
+def test_breakout_filter_rejects_stale_reset_when_pre_reset_space_is_too_thin(monkeypatch):
+    import app.strategy as strategy
+
+    bars = strategy._required_history_bars()
+    rows = []
+    for _ in range(bars):
+        rows.append({
+            "open": 100.0,
+            "high": 100.3,
+            "low": 99.7,
+            "close": 100.0,
+            "volume": 1000.0,
+        })
+    df = pd.DataFrame(rows)
+
+    def fake_add_indicators(frame):
+        enriched = frame.copy()
+        enriched["ema20"] = 101.0
+        enriched["ema50"] = 100.7
+        enriched["ema200"] = 100.2
+        enriched["adx"] = 25.0
+        enriched["atr"] = 1.0
+        enriched["atr_pct"] = 0.01
+        enriched["body_ratio"] = 0.4
+        enriched["vol_ma"] = 1000.0
+        # breakout correcto, pero la continuación ya quedó demasiado pegada al nivel
+        enriched.iloc[-2, enriched.columns.get_loc("close")] = 100.7
+        enriched.iloc[-2, enriched.columns.get_loc("high")] = 100.9
+        enriched.iloc[-2, enriched.columns.get_loc("low")] = 100.1
+        enriched.iloc[-2, enriched.columns.get_loc("open")] = 100.2
+        enriched.iloc[-2, enriched.columns.get_loc("body_ratio")] = 0.52
+        enriched.iloc[-1, enriched.columns.get_loc("close")] = 100.62
+        enriched.iloc[-1, enriched.columns.get_loc("high")] = 100.92
+        enriched.iloc[-1, enriched.columns.get_loc("low")] = 100.34
+        enriched.iloc[-1, enriched.columns.get_loc("open")] = 100.32
+        enriched.iloc[-1, enriched.columns.get_loc("body_ratio")] = 0.52
+        return enriched
+
+    monkeypatch.setattr(strategy, "add_indicators", fake_add_indicators)
+    monkeypatch.setattr(strategy, "_passes_profile_score_floor", lambda *_args, **_kwargs: True)
+
+    candidate = strategy.mtf_strategy(df, df, df.copy(), reference_market_price=100.2)
+    assert candidate is None
