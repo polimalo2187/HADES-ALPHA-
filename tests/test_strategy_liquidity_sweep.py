@@ -6,7 +6,7 @@ from tests import _bootstrap  # noqa: F401
 from app import strategy_liquidity_sweep as strategy
 
 
-def test_liquidity_strategy_emits_market_on_close_candidate(monkeypatch):
+def test_liquidity_strategy_emits_pending_pullback_candidate(monkeypatch):
     rows = []
     base_time = pd.Timestamp.now(tz="UTC") - timedelta(minutes=(strategy.LIQUIDITY_LOOKBACK + 8) * 15)
     for idx in range(strategy.LIQUIDITY_LOOKBACK + 6):
@@ -38,11 +38,13 @@ def test_liquidity_strategy_emits_market_on_close_candidate(monkeypatch):
     result = strategy.mtf_strategy(df_1h=df_1h, df_15m=df_15m, df_5m=None, reference_market_price=100.4, debug_counts={})
 
     assert result is not None
-    assert result["send_mode"] == "market_on_close"
-    assert result["entry_price"] == result["entry_sent_price"]
-    assert result["entry_price"] == round(100.4, 4)
+    assert result["send_mode"] == strategy.SEND_MODE_PENDING_ENTRY
+    assert result["entry_price"] < result["entry_sent_price"]
+    assert result["entry_price"] > result["liquidity_zone"]
+    assert result["stop_loss"] < result["entry_price"]
     assert result["entry_model"] == strategy.ENTRY_MODEL_NAME
-    assert result["setup_stage"] == strategy.SETUP_STAGE_CLOSED_CONFIRMED
+    assert result["setup_stage"] == strategy.SETUP_STAGE_WAITING_PULLBACK
+    assert result["strategy_runtime"]["post_fill_invalidation"]["minutes"] == strategy.POST_FILL_INVALIDATION_MINUTES
 
 
 
@@ -89,3 +91,34 @@ def test_directional_context_rejects_weak_premium_long_but_accepts_stronger_shor
     ])
     tuned_premium_short = strategy._directional_profile(strategy.PREMIUM_PROFILE, "SHORT")
     assert strategy._directional_context_ok(ok_short, "SHORT", tuned_premium_short) is True
+
+
+def test_liquidity_trade_profile_anchors_stop_to_sweep_extreme_and_caps_targets():
+    profiles = strategy._build_liquidity_trade_profiles(
+        entry_price=100.45,
+        direction="LONG",
+        atr_now=0.8,
+        sweep_extreme_price=99.70,
+        barrier_price=101.25,
+    )
+
+    conservador = profiles["conservador"]
+    stop_loss = conservador["stop_loss"]
+    tp1, tp2 = conservador["take_profits"]
+
+    assert stop_loss < 99.70
+    assert stop_loss < 100.45
+    assert 100.45 < tp1 < tp2 <= 101.25
+
+
+def test_pullback_entry_waits_for_retrace_instead_of_chasing_close():
+    entry = strategy._build_pullback_entry(
+        direction="LONG",
+        level=100.0,
+        confirmation_close=100.9,
+        market_price=100.8,
+        atr_now=0.5,
+    )
+
+    assert entry is not None
+    assert 100.0 < entry < 100.8
