@@ -12,10 +12,10 @@ LIQUIDITY_PIVOT_LEFT = max(1, int(os.getenv("LIQUIDITY_PIVOT_LEFT", "2")))
 LIQUIDITY_PIVOT_RIGHT = max(1, int(os.getenv("LIQUIDITY_PIVOT_RIGHT", "2")))
 SWEEP_SEARCH_BARS = max(2, int(os.getenv("LIQUIDITY_SWEEP_SEARCH_BARS", "4")))
 MIN_HISTORY_BARS = max(LIQUIDITY_LOOKBACK + 4, 36)
-SCORE_CALIBRATION_VERSION = "v3_liquidity_sweep_long_premium_hardened"
-ENTRY_MODEL_NAME = "liquidity_sweep_reversal_close_confirm_v1"
-SETUP_STAGE_CLOSED_CONFIRMED = "closed_confirmed"
-SEND_MODE_MARKET_ON_CLOSE = "market_on_close"
+SCORE_CALIBRATION_VERSION = "v4_liquidity_sweep_pullback_execution"
+ENTRY_MODEL_NAME = "liquidity_sweep_reversal_pullback_execution_v2"
+SETUP_STAGE_WAITING_PULLBACK = "confirmed_waiting_pullback"
+SEND_MODE_PENDING_ENTRY = breakout.SEND_MODE_PENDING_ENTRY
 
 PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "83"))
 PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "76"))
@@ -127,6 +127,42 @@ LONG_SCORE_FLOOR_BONUS = {
     "premium": 4.0,
 }
 PREMIUM_SCORE_FLOOR_BONUS = 2.0
+
+
+LIQUIDITY_TRADE_PROFILES = {
+    "conservador": {
+        "leverage": breakout.TRADING_PROFILES["conservador"]["leverage"],
+        "stop_buffer_atr_mult": breakout._env_float("LSR_TRADE_CONSERVADOR_STOP_BUFFER_ATR_MULT", 0.14),
+        "min_stop_pct": breakout._env_float("LSR_TRADE_CONSERVADOR_MIN_STOP_PCT", 0.0038),
+        "max_stop_pct": breakout._env_float("LSR_TRADE_CONSERVADOR_MAX_STOP_PCT", 0.0088),
+        "tp1_rr": breakout._env_float("LSR_TRADE_CONSERVADOR_TP1_RR", 0.82),
+        "tp2_rr": breakout._env_float("LSR_TRADE_CONSERVADOR_TP2_RR", 1.36),
+    },
+    "moderado": {
+        "leverage": breakout.TRADING_PROFILES["moderado"]["leverage"],
+        "stop_buffer_atr_mult": breakout._env_float("LSR_TRADE_MODERADO_STOP_BUFFER_ATR_MULT", 0.11),
+        "min_stop_pct": breakout._env_float("LSR_TRADE_MODERADO_MIN_STOP_PCT", 0.0032),
+        "max_stop_pct": breakout._env_float("LSR_TRADE_MODERADO_MAX_STOP_PCT", 0.0076),
+        "tp1_rr": breakout._env_float("LSR_TRADE_MODERADO_TP1_RR", 0.95),
+        "tp2_rr": breakout._env_float("LSR_TRADE_MODERADO_TP2_RR", 1.58),
+    },
+    "agresivo": {
+        "leverage": breakout.TRADING_PROFILES["agresivo"]["leverage"],
+        "stop_buffer_atr_mult": breakout._env_float("LSR_TRADE_AGRESIVO_STOP_BUFFER_ATR_MULT", 0.09),
+        "min_stop_pct": breakout._env_float("LSR_TRADE_AGRESIVO_MIN_STOP_PCT", 0.0028),
+        "max_stop_pct": breakout._env_float("LSR_TRADE_AGRESIVO_MAX_STOP_PCT", 0.0066),
+        "tp1_rr": breakout._env_float("LSR_TRADE_AGRESIVO_TP1_RR", 1.08),
+        "tp2_rr": breakout._env_float("LSR_TRADE_AGRESIVO_TP2_RR", 1.82),
+    },
+}
+
+PULLBACK_RETRACE_FRACTION = breakout._env_float("LSR_PULLBACK_RETRACE_FRACTION", 0.42)
+PULLBACK_ATR_MIN = breakout._env_float("LSR_PULLBACK_ATR_MIN", 0.16)
+PULLBACK_ATR_MAX = breakout._env_float("LSR_PULLBACK_ATR_MAX", 0.48)
+PULLBACK_LEVEL_BUFFER_ATR = breakout._env_float("LSR_PULLBACK_LEVEL_BUFFER_ATR", 0.04)
+PULLBACK_MARKET_GAP_ATR = breakout._env_float("LSR_PULLBACK_MARKET_GAP_ATR", 0.03)
+POST_FILL_INVALIDATION_MINUTES = max(5, int(os.getenv("LSR_POST_FILL_INVALIDATION_MINUTES", "35")))
+POST_FILL_MIN_TP1_PROGRESS_PCT = breakout._env_float("LSR_POST_FILL_MIN_TP1_PROGRESS_PCT", 18.0)
 
 
 def _record_reject(debug_counts: Optional[Dict[str, int]], reason: str) -> None:
@@ -453,6 +489,7 @@ def _find_recent_sweep(df: pd.DataFrame, direction: str, level: float, profile: 
             return None
         return {
             "index": idx,
+            "extreme_price": breakout._round_price_dynamic(low_price),
             "sweep_distance_atr": round((level - low_price) / max(atr_now, 1e-9), 4),
             "wick_ratio": round(float(candle.get("lower_wick") or 0.0), 4),
         }
@@ -465,6 +502,7 @@ def _find_recent_sweep(df: pd.DataFrame, direction: str, level: float, profile: 
         return None
     return {
         "index": idx,
+        "extreme_price": breakout._round_price_dynamic(high_price),
         "sweep_distance_atr": round((high_price - level) / max(atr_now, 1e-9), 4),
         "wick_ratio": round(float(candle.get("upper_wick") or 0.0), 4),
     }
@@ -488,6 +526,121 @@ def _safe_rr(entry_price: float, stop_loss: float, target_price: float) -> float
     if risk <= 1e-9:
         return 0.0
     return abs(target_price - entry_price) / risk
+
+
+def _build_pullback_entry(
+    *,
+    direction: str,
+    level: float,
+    confirmation_close: float,
+    market_price: float,
+    atr_now: float,
+) -> Optional[float]:
+    reference_price = float(market_price or confirmation_close)
+    confirmation_close = float(confirmation_close)
+    level = float(level)
+    atr_now = max(float(atr_now or 0.0), max(abs(reference_price) * 0.0003, 1e-9))
+
+    reclaim_distance = abs(confirmation_close - level)
+    desired_pullback = breakout._clamp(
+        max(reclaim_distance * PULLBACK_RETRACE_FRACTION, atr_now * PULLBACK_ATR_MIN),
+        atr_now * PULLBACK_ATR_MIN,
+        atr_now * PULLBACK_ATR_MAX,
+    )
+    level_buffer = atr_now * PULLBACK_LEVEL_BUFFER_ATR
+    market_gap = atr_now * PULLBACK_MARKET_GAP_ATR
+
+    if str(direction).upper() == "LONG":
+        floor = level + level_buffer
+        upper = reference_price - market_gap
+        if upper <= floor:
+            return None
+        candidate = max(floor, reference_price - desired_pullback)
+        return breakout._round_price_dynamic(min(candidate, upper))
+
+    ceiling = level - level_buffer
+    lower = reference_price + market_gap
+    if lower >= ceiling:
+        return None
+    candidate = min(ceiling, reference_price + desired_pullback)
+    return breakout._round_price_dynamic(max(candidate, lower))
+
+
+def _rr_price(direction: str, entry_price: float, risk_distance: float, rr: float) -> float:
+    if str(direction).upper() == "LONG":
+        return breakout._round_price_dynamic(entry_price + (risk_distance * rr))
+    return breakout._round_price_dynamic(entry_price - (risk_distance * rr))
+
+
+def _cap_target_to_barrier(direction: str, entry_price: float, raw_target: float, barrier_price: Optional[float], barrier_fraction: float) -> float:
+    if barrier_price is None:
+        return breakout._round_price_dynamic(raw_target)
+
+    entry_price = float(entry_price)
+    barrier_price = float(barrier_price)
+    barrier_fraction = breakout._clamp(float(barrier_fraction), 0.55, 0.98)
+
+    if str(direction).upper() == "LONG":
+        barrier_gap = barrier_price - entry_price
+        if barrier_gap <= 0:
+            return breakout._round_price_dynamic(raw_target)
+        return breakout._round_price_dynamic(min(raw_target, entry_price + (barrier_gap * barrier_fraction)))
+
+    barrier_gap = entry_price - barrier_price
+    if barrier_gap <= 0:
+        return breakout._round_price_dynamic(raw_target)
+    return breakout._round_price_dynamic(max(raw_target, entry_price - (barrier_gap * barrier_fraction)))
+
+
+def _build_liquidity_trade_profiles(
+    *,
+    entry_price: float,
+    direction: str,
+    atr_now: float,
+    sweep_extreme_price: float,
+    barrier_price: Optional[float],
+) -> Dict[str, Dict]:
+    profiles: Dict[str, Dict] = {}
+    entry_price = float(entry_price)
+    atr_now = max(float(atr_now or 0.0), max(abs(entry_price) * 0.0003, 1e-9))
+    sweep_extreme_price = float(sweep_extreme_price)
+
+    for name, cfg in LIQUIDITY_TRADE_PROFILES.items():
+        buffer_distance = atr_now * max(float(cfg.get("stop_buffer_atr_mult", 0.0)), 0.0)
+        if str(direction).upper() == "LONG":
+            raw_stop = sweep_extreme_price - buffer_distance
+            min_stop = entry_price * (1.0 - float(cfg["min_stop_pct"]))
+            stop_loss = min(raw_stop, min_stop)
+            risk_distance = entry_price - stop_loss
+        else:
+            raw_stop = sweep_extreme_price + buffer_distance
+            min_stop = entry_price * (1.0 + float(cfg["min_stop_pct"]))
+            stop_loss = max(raw_stop, min_stop)
+            risk_distance = stop_loss - entry_price
+
+        risk_pct = risk_distance / max(entry_price, 1e-9)
+        if risk_distance <= 0 or risk_pct > float(cfg["max_stop_pct"]):
+            continue
+
+        raw_tp1 = _rr_price(direction, entry_price, risk_distance, float(cfg["tp1_rr"]))
+        raw_tp2 = _rr_price(direction, entry_price, risk_distance, float(cfg["tp2_rr"]))
+        tp1 = _cap_target_to_barrier(direction, entry_price, raw_tp1, barrier_price, 0.78)
+        tp2 = _cap_target_to_barrier(direction, entry_price, raw_tp2, barrier_price, 0.96)
+
+        if str(direction).upper() == "LONG":
+            if not (tp1 > entry_price and tp2 > tp1):
+                continue
+        else:
+            if not (tp1 < entry_price and tp2 < tp1):
+                continue
+
+        profiles[name] = {
+            "stop_loss": breakout._round_price_dynamic(stop_loss),
+            "take_profits": [tp1, tp2],
+            "leverage": cfg["leverage"],
+        }
+
+    return profiles
 
 
 
@@ -529,6 +682,7 @@ def _sum_components(components: List[Dict]) -> float:
 def _evaluate_direction(
     df: pd.DataFrame,
     df_1h: pd.DataFrame,
+    df_5m: Optional[pd.DataFrame],
     direction: str,
     profile: Dict,
     *,
@@ -582,11 +736,30 @@ def _evaluate_direction(
         _record_reject(debug_counts, "liquidity_ema_reclaim")
         return None
 
-    market_entry = float(current_market_price or last["close"])
-    if market_entry <= 0:
-        market_entry = float(last["close"])
+    current_reference_price = float(current_market_price or last["close"])
+    if current_reference_price <= 0:
+        current_reference_price = float(last["close"])
 
-    trade_profiles = breakout._build_trade_profiles(market_entry, direction, atr_pct)
+    atr_now = float(last["atr"])
+    entry_price = _build_pullback_entry(
+        direction=direction,
+        level=level,
+        confirmation_close=float(last["close"]),
+        market_price=current_reference_price,
+        atr_now=atr_now,
+    )
+    if entry_price is None:
+        _record_reject(debug_counts, "liquidity_pullback_geometry")
+        return None
+
+    barrier_price = _nearest_barrier_price(df, direction, entry_price)
+    trade_profiles = _build_liquidity_trade_profiles(
+        entry_price=entry_price,
+        direction=direction,
+        atr_now=atr_now,
+        sweep_extreme_price=float(sweep.get("extreme_price") or level),
+        barrier_price=barrier_price,
+    )
     conservative = trade_profiles.get("conservador") or {}
     stop_loss = float(conservative.get("stop_loss") or 0.0)
     take_profits = list(conservative.get("take_profits") or [])
@@ -594,8 +767,7 @@ def _evaluate_direction(
         _record_reject(debug_counts, "liquidity_trade_profile")
         return None
 
-    barrier_price = _nearest_barrier_price(df, direction, market_entry)
-    barrier_rr = _safe_rr(market_entry, stop_loss, barrier_price) if barrier_price is not None else float(tuned_profile["min_rr"])
+    barrier_rr = _safe_rr(entry_price, stop_loss, barrier_price) if barrier_price is not None else 0.0
     if barrier_rr < float(tuned_profile["min_rr"]):
         _record_reject(debug_counts, "liquidity_barrier_room")
         return None
@@ -609,7 +781,7 @@ def _evaluate_direction(
     entry_model_price = float(last["close"])
     payload = {
         "direction": direction,
-        "entry_price": breakout._round_price_dynamic(market_entry),
+        "entry_price": breakout._round_price_dynamic(entry_price),
         "stop_loss": stop_loss,
         "take_profits": take_profits,
         "profiles": trade_profiles,
@@ -619,19 +791,27 @@ def _evaluate_direction(
         "components": components,
         "raw_components": components,
         "normalized_components": components,
-        "timeframes": ["15M"],
+        "timeframes": ["15M", "5M"],
         "setup_group": str(tuned_profile["name"]),
         "atr_pct": round(atr_pct, 6),
         "score_profile": str(tuned_profile["name"]),
         "score_calibration": SCORE_CALIBRATION_VERSION,
-        "send_mode": SEND_MODE_MARKET_ON_CLOSE,
+        "send_mode": SEND_MODE_PENDING_ENTRY,
         "entry_model_price": breakout._round_price_dynamic(entry_model_price),
-        "entry_sent_price": breakout._round_price_dynamic(market_entry),
-        "setup_stage": SETUP_STAGE_CLOSED_CONFIRMED,
+        "entry_sent_price": breakout._round_price_dynamic(current_reference_price),
+        "setup_stage": SETUP_STAGE_WAITING_PULLBACK,
         "entry_model": ENTRY_MODEL_NAME,
         "higher_tf_context": {"liquidity_zone": level, "sweep_distance_atr": sweep.get("sweep_distance_atr")},
         "liquidity_zone": breakout._round_price_dynamic(level),
         "liquidity_sweep_distance_atr": sweep.get("sweep_distance_atr"),
+        "liquidity_sweep_extreme_price": sweep.get("extreme_price"),
+        "strategy_runtime": {
+            "post_fill_invalidation": {
+                "minutes": POST_FILL_INVALIDATION_MINUTES,
+                "min_tp1_progress_pct": POST_FILL_MIN_TP1_PROGRESS_PCT,
+                "reason": "liquidity_no_followthrough",
+            }
+        },
     }
     ranking = (raw_score, barrier_rr, float(zone.get("count") or 0.0))
     return payload, ranking
@@ -664,6 +844,7 @@ def mtf_strategy(
             result = _evaluate_direction(
                 enriched_15m,
                 enriched_1h,
+                df_5m,
                 direction,
                 profile,
                 current_market_price=reference_market_price,
