@@ -9,7 +9,7 @@ from bson import ObjectId
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -67,6 +67,24 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 INDEX_FILE = STATIC_DIR / "index.html"
+
+
+def _build_static_asset_version() -> str:
+    versions = []
+    for candidate in (STATIC_DIR / "app.js", STATIC_DIR / "app.css", INDEX_FILE):
+        try:
+            versions.append(str(int(candidate.stat().st_mtime)))
+        except Exception:
+            continue
+    return "-".join(versions) if versions else "1"
+
+
+def _render_index_html() -> str:
+    html = INDEX_FILE.read_text(encoding="utf-8")
+    version = _build_static_asset_version()
+    html = html.replace('/miniapp/static/app.css', f'/miniapp/static/app.css?v={version}')
+    html = html.replace('/miniapp/static/app.js', f'/miniapp/static/app.js?v={version}')
+    return html
 
 
 class MiniAppAuthRequest(BaseModel):
@@ -212,7 +230,14 @@ def create_mini_app() -> FastAPI:
                 },
             )
         response.headers["X-Request-ID"] = request_id
-        if str(request.url.path).startswith("/miniapp/static/") and not response.headers.get("Cache-Control"):
+        path = str(request.url.path)
+        if path == "/miniapp":
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+        elif path in {"/miniapp/static/app.js", "/miniapp/static/app.css"}:
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+        elif path.startswith("/miniapp/static/") and not response.headers.get("Cache-Control"):
             response.headers["Cache-Control"] = "public, max-age=86400"
         return response
 
@@ -290,8 +315,8 @@ def create_mini_app() -> FastAPI:
         return user
 
     @app.get("/miniapp")
-    async def miniapp_index() -> FileResponse:
-        return FileResponse(str(INDEX_FILE))
+    async def miniapp_index() -> HTMLResponse:
+        return HTMLResponse(_render_index_html())
 
     @app.get("/miniapp/health/live")
     async def miniapp_liveness() -> Dict[str, Any]:
