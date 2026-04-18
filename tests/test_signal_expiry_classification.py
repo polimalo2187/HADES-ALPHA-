@@ -212,3 +212,41 @@ def test_pending_signal_does_not_score_tp_after_post_fill_window_expires():
     assert evaluation["resolution"] == "expired_after_entry"
     assert evaluation["entry_touched"] is True
     assert abs((evaluation["effective_valid_until"] - (entry_touch_at + timedelta(minutes=5))).total_seconds()) < 1
+
+
+def test_post_fill_invalidation_expires_dead_liquidity_setup_early():
+    now = datetime.utcnow()
+    created_at = now - timedelta(minutes=50)
+    entry_touch_at = created_at + timedelta(minutes=5)
+    invalidation_close = entry_touch_at + timedelta(minutes=6)
+    signal = {
+        **_base_signal("LONG"),
+        "created_at": created_at,
+        "entry_price": 100.0,
+        "entry_zone": {"low": 99.85, "high": 100.15},
+        "signal_market_price": 100.8,
+        "send_mode": "entry_zone_pending",
+        "entry_valid_until": created_at + timedelta(minutes=12),
+        "market_validity_minutes": 25,
+        "evaluation_valid_until": created_at + timedelta(minutes=35),
+        "strategy_runtime": {
+            "post_fill_invalidation": {
+                "minutes": 6,
+                "min_tp1_progress_pct": 45.0,
+                "reason": "liquidity_no_followthrough",
+            }
+        },
+    }
+    klines = [
+        [int((entry_touch_at - timedelta(minutes=1)).timestamp() * 1000), 100.7, 100.8, 99.95, 100.1, 0, int(entry_touch_at.timestamp() * 1000)],
+        [int((invalidation_close - timedelta(minutes=1)).timestamp() * 1000), 100.1, 100.35, 99.92, 100.12, 0, int(invalidation_close.timestamp() * 1000)],
+        [int((invalidation_close + timedelta(minutes=1)).timestamp() * 1000), 100.12, 100.4, 99.9, 100.0, 0, int((invalidation_close + timedelta(minutes=2)).timestamp() * 1000)],
+    ]
+
+    with patch('app.signals._fetch_klines_between', return_value=klines):
+        evaluation = _evaluate_signal_result(signal)
+
+    assert evaluation["result"] == "expired"
+    assert evaluation["resolution"] == "expired_after_entry"
+    assert evaluation["expiry_reason"] == "liquidity_no_followthrough"
+    assert evaluation["entry_touched"] is True
