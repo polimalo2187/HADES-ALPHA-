@@ -24,6 +24,12 @@ class SignalDetailPayloadTests(unittest.TestCase):
             'entry_state_label': 'EN ZONA DE ENTRADA',
             'result_label': 'Aún sin cierre final',
             'recommendation': 'Todavía operable.',
+            'strategy_label': 'Breakout + Reset',
+            'strategy_family': 'Continuación con reset',
+            'entry_model_label': 'Entrada por reset',
+            'strategy_summary': 'Resumen de estrategia.',
+            'live_summary': 'Lectura viva.',
+            'action_label': 'Esperar reset',
             'current_price': 100.5,
             'entry_zone_low': 99.0,
             'entry_zone_high': 101.0,
@@ -68,6 +74,8 @@ class SignalDetailPayloadTests(unittest.TestCase):
         self.assertEqual(payload['tracking_tier'], 'basic')
         self.assertEqual(payload['selected_profile'], 'moderado')
         self.assertEqual(payload['profile_options'], ['moderado'])
+        self.assertEqual(payload['tracking']['strategy_label'], 'Breakout + Reset')
+        self.assertEqual(payload['tracking']['action_label'], 'Esperar reset')
         self.assertEqual(payload['analysis']['components'][0]['label'], 'Estructura de tendencia')
         self.assertNotIn('raw_components', payload['analysis'])
         self.assertIsNotNone(payload['upgrade_hint'])
@@ -253,7 +261,10 @@ def test_tracking_state_does_not_claim_telegram_closed_while_window_is_still_ope
     assert payload['entry_state_label'] == 'ESPERANDO RESET'
     assert payload['state_label'] == 'ESPERANDO RESET'
     assert payload['telegram_window_open'] is True
+    assert payload['strategy_label'] == 'Breakout + Reset'
+    assert payload['action_label'] == 'Esperar reset'
     assert 'retroceso' in payload['recommendation']
+    assert 'zona de reset' in payload['live_summary']
     assert 'Telegram' not in payload['recommendation']
 
 
@@ -461,5 +472,8 @@ def test_tracking_keeps_market_execution_copy_for_liquidity_strategy(monkeypatch
     assert payload['entry_touched'] is True
     assert payload['entry_state_label'] == 'ACTIVA DESDE ENVÍO'
     assert payload['state_label'] == 'ACTIVA DESDE ENVÍO'
+    assert payload['strategy_label'] == 'Cazador de liquidez'
+    assert payload['entry_model_label'] == 'Entrada al envío (legacy)'
     assert 'reset' not in payload['recommendation'].lower()
     assert 'envío' in payload['recommendation'].lower()
+    assert 'envío' in payload['live_summary'].lower()
