@@ -477,3 +477,83 @@ def test_tracking_keeps_market_execution_copy_for_liquidity_strategy(monkeypatch
     assert 'reset' not in payload['recommendation'].lower()
     assert 'envío' in payload['recommendation'].lower()
     assert 'envío' in payload['live_summary'].lower()
+
+
+def test_tracking_uses_live_reset_copy_for_new_breakout_activation(monkeypatch):
+    from datetime import datetime, timedelta
+    from app.signals import get_signal_tracking_for_user
+
+    now = datetime.utcnow()
+    created_at = now - timedelta(minutes=2)
+    user_signal = {
+        'signal_id': 'sig-breakout-live-reset',
+        'symbol': 'BTCUSDT',
+        'direction': 'LONG',
+        'entry_price': 100.0,
+        'entry_zone': {'low': 99.9, 'high': 100.1},
+        'profiles': {'moderado': {'stop_loss': 98.0, 'take_profits': [101.0, 102.0]}},
+        'telegram_valid_until': now + timedelta(minutes=8),
+        'evaluation_valid_until': now + timedelta(minutes=35),
+        'send_mode': 'entry_zone_pending',
+        'strategy_name': 'breakout_reset',
+        'created_at': created_at,
+        'entry_sent_price': 100.0,
+    }
+
+    monkeypatch.setattr('app.signals.get_user_signal_by_signal_id', lambda user_id, signal_id: dict(user_signal))
+    monkeypatch.setattr('app.signals.get_base_signal_by_signal_id', lambda signal_id: {})
+    monkeypatch.setattr('app.signals.get_current_price', lambda symbol: 100.05)
+
+    class DummyResults:
+        def find_one(self, *args, **kwargs):
+            return None
+
+    monkeypatch.setattr('app.signals.signal_results_collection', lambda: DummyResults())
+
+    payload = get_signal_tracking_for_user(1, 'sig-breakout-live-reset', profile_name='moderado')
+
+    assert payload['strategy_label'] == 'Breakout + Reset'
+    assert payload['strategy_family'] == 'Continuación con reset vivo'
+    assert payload['entry_model_label'] == 'Activación en reset vivo'
+    assert 'no se publica' in payload['strategy_summary'].lower()
+    assert payload['action_label'] == 'Activación en reset vivo'
+    assert 'reset válido' in payload['live_summary'] or 'reset vivo' in payload['live_summary']
+
+
+
+def test_tracking_keeps_legacy_breakout_copy_when_reset_has_not_touched(monkeypatch):
+    from datetime import datetime, timedelta
+    from app.signals import get_signal_tracking_for_user
+
+    now = datetime.utcnow()
+    user_signal = {
+        'signal_id': 'sig-breakout-legacy',
+        'symbol': 'ETHUSDT',
+        'direction': 'LONG',
+        'entry_price': 100.0,
+        'entry_zone': {'low': 99.9, 'high': 100.1},
+        'profiles': {'moderado': {'stop_loss': 98.0, 'take_profits': [101.0, 102.0]}},
+        'telegram_valid_until': now + timedelta(minutes=8),
+        'evaluation_valid_until': now + timedelta(minutes=35),
+        'send_mode': 'entry_zone_pending',
+        'strategy_name': 'breakout_reset',
+    }
+
+    monkeypatch.setattr('app.signals.get_user_signal_by_signal_id', lambda user_id, signal_id: dict(user_signal))
+    monkeypatch.setattr('app.signals.get_base_signal_by_signal_id', lambda signal_id: {})
+    monkeypatch.setattr('app.signals.get_current_price', lambda symbol: 100.7)
+
+    class DummyResults:
+        def find_one(self, *args, **kwargs):
+            return None
+
+    monkeypatch.setattr('app.signals.signal_results_collection', lambda: DummyResults())
+
+    payload = get_signal_tracking_for_user(1, 'sig-breakout-legacy', profile_name='moderado')
+
+    assert payload['entry_state_label'] == 'ESPERANDO RESET'
+    assert payload['strategy_family'] == 'Continuación con reset anticipado (legacy)'
+    assert payload['entry_model_label'] == 'Entrada anticipada (legacy)'
+    assert 'modelo anterior' in payload['strategy_summary'].lower()
+    assert payload['action_label'] == 'Esperar reset'
+    assert 'modelo anticipado anterior' in payload['live_summary'].lower()
