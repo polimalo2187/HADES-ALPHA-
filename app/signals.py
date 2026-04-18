@@ -457,6 +457,7 @@ def create_base_signal(
     regime_reason: Optional[str] = None,
     regime_bias: Optional[str] = None,
     router_version: Optional[str] = None,
+    strategy_runtime: Optional[Dict[str, Any]] = None,
 ) -> Dict:
 
     if telegram_signal_blocked(symbol, direction=direction):
@@ -593,6 +594,7 @@ def create_base_signal(
             "regime_reason": regime_reason,
             "regime_bias": regime_bias,
             "router_version": router_version,
+            "strategy_runtime": strategy_runtime or {},
             "evaluated": False,
             "evaluation_scope_version": MARKET_EVALUATION_VERSION,
         }}
@@ -634,6 +636,7 @@ def create_base_signal(
     signal["regime_reason"] = regime_reason
     signal["regime_bias"] = regime_bias
     signal["router_version"] = router_version
+    signal["strategy_runtime"] = strategy_runtime or {}
     signal["evaluation_scope_version"] = MARKET_EVALUATION_VERSION
     signal["schema_version"] = signal.get("schema_version", 1)
     signal["updated_at"] = now
@@ -1544,6 +1547,25 @@ def _candle_within_window(row: List[Any], window_end: Optional[datetime]) -> boo
     return True
 
 
+def _post_fill_invalidation_config(signal_doc: Dict[str, Any]) -> Optional[Dict[str, float]]:
+    runtime = signal_doc.get("strategy_runtime") or {}
+    cfg = runtime.get("post_fill_invalidation") or signal_doc.get("post_fill_invalidation") or {}
+    if not isinstance(cfg, dict):
+        return None
+    try:
+        minutes = int(cfg.get("minutes") or 0)
+        min_progress = float(cfg.get("min_tp1_progress_pct") or 0.0)
+    except Exception:
+        return None
+    if minutes <= 0:
+        return None
+    return {
+        "minutes": float(minutes),
+        "min_tp1_progress_pct": max(0.0, min_progress),
+        "reason": str(cfg.get("reason") or "no_followthrough").strip() or "no_followthrough",
+    }
+
+
 def _entry_zone_touched_in_candle(zone_low: float, zone_high: float, high: float, low: float) -> bool:
     return low <= zone_high and high >= zone_low
 
@@ -1704,6 +1726,7 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
     tp1_progress_max_pct = 0.0
     max_favorable_excursion_r = 0.0
     max_adverse_excursion_r = 0.0
+    post_fill_invalidation = _post_fill_invalidation_config(signal_doc)
 
     def _merge_observability(payload: Dict[str, Any], *, expiry_type: Optional[str], expiry_reason: Optional[str]) -> Dict[str, Any]:
         payload.update(
@@ -1856,6 +1879,24 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
                     expiry_type=None,
                     expiry_reason=None,
                 )
+
+        if entry_touched and entry_touched_at is not None and post_fill_invalidation is not None:
+            candle_open_dt, candle_close_dt = _candle_time_bounds(row)
+            candle_ts = candle_close_dt or candle_open_dt
+            if candle_ts is not None:
+                invalidation_deadline = entry_touched_at + timedelta(minutes=float(post_fill_invalidation["minutes"]))
+                if candle_ts >= invalidation_deadline and tp1_progress_max_pct < float(post_fill_invalidation["min_tp1_progress_pct"]):
+                    return _merge_observability(
+                        {
+                            "result": "expired",
+                            "resolution": "expired_after_entry",
+                            "completed": False,
+                            "tp_used": None,
+                            "sl_used": stop_loss,
+                        },
+                        expiry_type="after_entry_no_followthrough",
+                        expiry_reason=str(post_fill_invalidation.get("reason") or "no_followthrough"),
+                    )
 
     if entry_touched:
         return _merge_observability(
