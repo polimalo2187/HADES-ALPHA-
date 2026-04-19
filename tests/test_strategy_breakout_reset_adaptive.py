@@ -124,7 +124,7 @@ def test_mtf_strategy_routes_premium_then_plus_then_free(monkeypatch):
 def test_strategy_only_publishes_breakout_when_live_price_touches_reset_zone(monkeypatch):
     import app.strategy as strategy
 
-    bars = strategy._required_history_bars()
+    bars = strategy._required_history_bars() + 1
     rows = []
     for idx in range(bars):
         rows.append({
@@ -146,17 +146,24 @@ def test_strategy_only_publishes_breakout_when_live_price_touches_reset_zone(mon
         enriched["atr_pct"] = 0.01
         enriched["body_ratio"] = 0.4
         enriched["vol_ma"] = 1000.0
-        # controlamos las dos últimas velas: breakout + continuación sin reset
-        enriched.iloc[-2, enriched.columns.get_loc("close")] = 100.7
-        enriched.iloc[-2, enriched.columns.get_loc("high")] = 100.9
-        enriched.iloc[-2, enriched.columns.get_loc("low")] = 100.1
-        enriched.iloc[-2, enriched.columns.get_loc("open")] = 100.2
-        enriched.iloc[-2, enriched.columns.get_loc("body_ratio")] = 0.52
-        enriched.iloc[-1, enriched.columns.get_loc("close")] = 100.8
-        enriched.iloc[-1, enriched.columns.get_loc("high")] = 101.0
-        enriched.iloc[-1, enriched.columns.get_loc("low")] = 100.5
-        enriched.iloc[-1, enriched.columns.get_loc("open")] = 100.4
-        enriched.iloc[-1, enriched.columns.get_loc("body_ratio")] = 0.38
+        # últimas tres velas: breakout cerrado, continuación cerrada, vela viva de ejecución
+        enriched.iloc[-3, enriched.columns.get_loc("close")] = 100.7
+        enriched.iloc[-3, enriched.columns.get_loc("high")] = 100.9
+        enriched.iloc[-3, enriched.columns.get_loc("low")] = 100.1
+        enriched.iloc[-3, enriched.columns.get_loc("open")] = 100.2
+        enriched.iloc[-3, enriched.columns.get_loc("body_ratio")] = 0.52
+
+        enriched.iloc[-2, enriched.columns.get_loc("close")] = 100.8
+        enriched.iloc[-2, enriched.columns.get_loc("high")] = 101.0
+        enriched.iloc[-2, enriched.columns.get_loc("low")] = 100.5
+        enriched.iloc[-2, enriched.columns.get_loc("open")] = 100.4
+        enriched.iloc[-2, enriched.columns.get_loc("body_ratio")] = 0.38
+
+        enriched.iloc[-1, enriched.columns.get_loc("close")] = 100.55
+        enriched.iloc[-1, enriched.columns.get_loc("high")] = 100.58
+        enriched.iloc[-1, enriched.columns.get_loc("low")] = 100.18
+        enriched.iloc[-1, enriched.columns.get_loc("open")] = 100.56
+        enriched.iloc[-1, enriched.columns.get_loc("body_ratio")] = 0.18
         return enriched
 
     monkeypatch.setattr(strategy, "add_indicators", fake_add_indicators)
@@ -173,6 +180,59 @@ def test_strategy_only_publishes_breakout_when_live_price_touches_reset_zone(mon
     assert candidate["setup_stage"] == strategy.SETUP_STAGE_RESET_TOUCH_LIVE
     assert float(candidate["entry_price"]) == 100.2
     assert float(candidate["entry_model_price"]) == 100.3
+
+
+def test_strategy_rejects_breakout_if_live_candle_already_rebounded_from_reset_zone(monkeypatch):
+    import app.strategy as strategy
+
+    bars = strategy._required_history_bars() + 1
+    rows = []
+    for _ in range(bars):
+        rows.append({
+            "open": 100.0,
+            "high": 100.3,
+            "low": 99.7,
+            "close": 100.0,
+            "volume": 1000.0,
+        })
+    df = pd.DataFrame(rows)
+
+    def fake_add_indicators(frame):
+        enriched = frame.copy()
+        enriched["ema20"] = 101.0
+        enriched["ema50"] = 100.7
+        enriched["ema200"] = 100.2
+        enriched["adx"] = 25.0
+        enriched["atr"] = 1.0
+        enriched["atr_pct"] = 0.01
+        enriched["body_ratio"] = 0.4
+        enriched["vol_ma"] = 1000.0
+
+        enriched.iloc[-3, enriched.columns.get_loc("close")] = 100.7
+        enriched.iloc[-3, enriched.columns.get_loc("high")] = 100.9
+        enriched.iloc[-3, enriched.columns.get_loc("low")] = 100.1
+        enriched.iloc[-3, enriched.columns.get_loc("open")] = 100.2
+        enriched.iloc[-3, enriched.columns.get_loc("body_ratio")] = 0.52
+
+        enriched.iloc[-2, enriched.columns.get_loc("close")] = 100.8
+        enriched.iloc[-2, enriched.columns.get_loc("high")] = 101.0
+        enriched.iloc[-2, enriched.columns.get_loc("low")] = 100.5
+        enriched.iloc[-2, enriched.columns.get_loc("open")] = 100.4
+        enriched.iloc[-2, enriched.columns.get_loc("body_ratio")] = 0.38
+
+        # La vela viva sí tocó la zona, pero ya rebotó fuera de ella antes de publicar.
+        enriched.iloc[-1, enriched.columns.get_loc("close")] = 100.72
+        enriched.iloc[-1, enriched.columns.get_loc("high")] = 100.75
+        enriched.iloc[-1, enriched.columns.get_loc("low")] = 100.18
+        enriched.iloc[-1, enriched.columns.get_loc("open")] = 100.24
+        enriched.iloc[-1, enriched.columns.get_loc("body_ratio")] = 0.32
+        return enriched
+
+    monkeypatch.setattr(strategy, "add_indicators", fake_add_indicators)
+    monkeypatch.setattr(strategy, "_passes_profile_score_floor", lambda *_args, **_kwargs: True)
+
+    blocked = strategy.mtf_strategy(df, df, df.copy(), reference_market_price=100.72)
+    assert blocked is None
 
 
 def test_mtf_strategy_downgrades_premium_candidate_to_plus_when_premium_floor_not_met(monkeypatch):
