@@ -69,10 +69,11 @@ BREAKOUT_LOOKBACK = 24
 
 MAX_SCORE = 100.0
 FREE_NORMALIZATION_PENALTY = 6.0
-SCORE_CALIBRATION_VERSION = "v8_breakout_reset_live_reset_touch_strength_guard"
-ENTRY_MODEL_NAME = "breakout_reset_live_reset_touch_v1"
+SCORE_CALIBRATION_VERSION = "v10_breakout_reset_first_touch_exact_guard"
+ENTRY_MODEL_NAME = "breakout_reset_first_touch_live_v2"
 SETUP_STAGE_PRE_RESET_WAITING_RETEST = "pre_reset_waiting_retest"
 SETUP_STAGE_RESET_TOUCH_LIVE = "reset_touch_live"
+SETUP_STAGE_RESET_REBOUNDED_BEFORE_PUBLISH = "reset_rebounded_before_publish"
 SEND_MODE_PENDING_ENTRY = "entry_zone_pending"
 ENTRY_ZONE_MIN_PCT = float(os.getenv("ENTRY_ZONE_MIN_PCT", "0.0015"))
 ENTRY_ZONE_MAX_PCT = float(os.getenv("ENTRY_ZONE_MAX_PCT", "0.0035"))
@@ -288,20 +289,36 @@ def _calculate_entry_zone(entry: float, stop_loss: float) -> Tuple[float, float]
     return low, high
 
 
-def _classify_live_reset_state(direction: str, current_price: float, zone_low: float, zone_high: float) -> str:
+def _candle_touched_entry_zone(zone_low: float, zone_high: float, candle_high: Optional[float], candle_low: Optional[float]) -> bool:
+    if candle_high is None or candle_low is None:
+        return False
+    return float(candle_low) <= float(zone_high) and float(candle_high) >= float(zone_low)
+
+
+def _classify_live_reset_state(
+    direction: str,
+    current_price: float,
+    zone_low: float,
+    zone_high: float,
+    *,
+    candle_high: Optional[float] = None,
+    candle_low: Optional[float] = None,
+) -> str:
     direction = str(direction).upper().strip()
     current_price = float(current_price)
+    touched_zone = _candle_touched_entry_zone(zone_low, zone_high, candle_high, candle_low)
+
     if direction == "LONG":
-        if current_price > zone_high:
-            return SETUP_STAGE_PRE_RESET_WAITING_RETEST
         if zone_low <= current_price <= zone_high:
             return SETUP_STAGE_RESET_TOUCH_LIVE
+        if current_price > zone_high:
+            return SETUP_STAGE_PRE_RESET_WAITING_RETEST if not touched_zone else SETUP_STAGE_RESET_REBOUNDED_BEFORE_PUBLISH
         return "reset_late_or_lost"
 
-    if current_price < zone_low:
-        return SETUP_STAGE_PRE_RESET_WAITING_RETEST
     if zone_low <= current_price <= zone_high:
         return SETUP_STAGE_RESET_TOUCH_LIVE
+    if current_price < zone_low:
+        return SETUP_STAGE_PRE_RESET_WAITING_RETEST if not touched_zone else SETUP_STAGE_RESET_REBOUNDED_BEFORE_PUBLISH
     return "reset_late_or_lost"
 
 
@@ -745,8 +762,11 @@ def _entry_freshness_score(level: float, close_price: float, atr: float) -> floa
 
 def _reset_entry_price(level: float, last: pd.Series, direction: str) -> float:
     """
-    Modelo predictivo de entrada: la señal se envía ANTES del reset, así que la
-    entrada debe permanecer anclada al nivel reclamado, no al precio actual.
+    Precio ancla del reset.
+
+    La señal pública ya no se libera antes del reset: se activa únicamente en el
+    primer toque vivo de la zona. Aun así, el modelo conserva este nivel como
+    referencia estructural para construir la banda de entrada y el riesgo.
     """
     del last, direction
     return round(float(level), 8)
@@ -889,7 +909,17 @@ def _evaluate_profile(
     reference_market_price: Optional[float] = None,
     debug_counts: Optional[Dict[str, int]] = None,
 ) -> Optional[Dict]:
-    last = df.iloc[-1]
+    if len(df) < 3:
+        _record_reject(debug_counts, 'insufficient_history')
+        return None
+
+    setup_df = df.iloc[:-1].copy()
+    live_row = df.iloc[-1]
+    if len(setup_df) < max(BREAKOUT_LOOKBACK + 4, 32):
+        setup_df = df
+        live_row = df.iloc[-1]
+
+    last = setup_df.iloc[-1]
 
     if not _indicators_ready(last):
         _record_reject(debug_counts, 'indicator_warmup')
@@ -918,10 +948,10 @@ def _evaluate_profile(
         return None
 
     breakout_ok, quality, breakout_reason = _confirm_breakout_prereset(
-        df,
+        setup_df,
         direction,
         profile,
-        reference_market_price=reference_market_price,
+        reference_market_price=None,
     )
     if not breakout_ok:
         _record_reject(debug_counts, breakout_reason or "breakout_retest")
@@ -943,18 +973,30 @@ def _evaluate_profile(
         return None
 
     zone_low, zone_high = _calculate_entry_zone(model_entry_price, model_stop_loss)
-    live_price = float(reference_market_price or close_price or model_entry_price)
-    live_stage = _classify_live_reset_state(direction, live_price, zone_low, zone_high)
+    live_price = float(reference_market_price or float(live_row.get("close", close_price)) or close_price or model_entry_price)
+    live_high = float(live_row.get("high", live_price) or live_price)
+    live_low = float(live_row.get("low", live_price) or live_price)
+    live_stage = _classify_live_reset_state(
+        direction,
+        live_price,
+        zone_low,
+        zone_high,
+        candle_high=live_high,
+        candle_low=live_low,
+    )
     if live_stage != SETUP_STAGE_RESET_TOUCH_LIVE:
-        _record_reject(debug_counts, "breakout_waiting_live_reset" if live_stage == SETUP_STAGE_PRE_RESET_WAITING_RETEST else "breakout_reset_late")
+        reject_reason = "breakout_waiting_live_reset" if live_stage == SETUP_STAGE_PRE_RESET_WAITING_RETEST else (
+            "breakout_reset_rebounded_before_publish" if live_stage == SETUP_STAGE_RESET_REBOUNDED_BEFORE_PUBLISH else "breakout_reset_late"
+        )
+        _record_reject(debug_counts, reject_reason)
         return None
 
-    entry_price = _round_price_dynamic(live_price)
+    entry_price = _round_price_dynamic(_clamp(live_price, zone_low, zone_high))
     trade_profiles = _build_trade_profiles(entry_price, direction, atr_pct)
 
-    raw_score, raw_components = _compute_raw_score(df, direction, profile, quality)
+    raw_score, raw_components = _compute_raw_score(setup_df, direction, profile, quality)
     normalized_score, normalized_components = _compute_normalized_score(
-        df=df,
+        df=setup_df,
         direction=direction,
         setup_group=str(profile["name"]),
         quality=quality,
@@ -984,7 +1026,7 @@ def _evaluate_profile(
         "reset_zone_high": round(float(zone_high), 8),
         "reset_level": round(float(level), 8),
         "reset_close_price": round(float(close_price), 8),
-        "signal_reference_price": round(float(close_price), 8),
+        "signal_reference_price": round(float(live_price), 8),
     }
 
 
