@@ -31,6 +31,8 @@ DEFAULT_EXISTING_USER_FIELDS = {
     "last_purchase_plan": None,
     "last_purchase_days": 0,
     "last_entitlement_source": None,
+    "queued_plus_seconds": 0,
+    "queued_plus_origin": None,
     "ref_plus_valid": 0,
     "ref_premium_valid": 0,
     "ref_plus_total": 0,
