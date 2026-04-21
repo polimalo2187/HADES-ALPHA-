@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from app.config import get_bot_username
 from app.database import referrals_collection, users_collection
@@ -16,7 +16,6 @@ from app.plans import (
     get_referral_reward_days,
     grant_plan_entitlement,
     normalize_plan,
-    plan_rank,
 )
 
 logger = logging.getLogger(__name__)
@@ -26,25 +25,36 @@ logger = logging.getLogger(__name__)
 # REGISTRO DE REFERIDO VÁLIDO
 # =========================
 
+def _build_fallback_purchase_key(
+    *,
+    referred_user: Dict[str, Any],
+    activated_plan: str,
+    purchased_days: int,
+    activation_source: str,
+) -> str:
+    last_purchase_at = referred_user.get("last_purchase_at")
+    timestamp_marker = getattr(last_purchase_at, "isoformat", lambda: None)() or "na"
+    return f"legacy:{int(referred_user.get('user_id') or 0)}:{activated_plan}:{int(purchased_days)}:{activation_source}:{timestamp_marker}"
+
+
+
 def register_valid_referral(
     referred_user_id: int,
     activated_plan: str,
     *,
     purchased_days: int,
+    purchase_key: Optional[str] = None,
+    activation_source: str = "unknown",
+    activation_metadata: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """
-    Registra un referido válido cuando un usuario compra un plan.
+    Registra una compra válida de un referido.
 
-    Reglas actuales:
-    - Solo cuentan compras válidas de subplanes configurados (7/15/21/30).
-    - La recompensa depende de la duración comprada:
-        7 -> 3 días
-        15 -> 7 días
-        21 -> 10 días
-        30 -> 15 días
-    - El tier de la recompensa es el mismo tier comprado por el referido.
-    - Si el referidor está en PLUS y el referido compra PREMIUM, sube a PREMIUM.
-    - Nunca se hace downgrade por una recompensa de tier inferior.
+    Reglas:
+    - Solo cuentan compras confirmadas de PLUS/PREMIUM con duraciones válidas.
+    - La recompensa depende de la duración comprada y mantiene el mismo tier comprado.
+    - El mismo referido puede generar nuevas recompensas en compras futuras válidas.
+    - Cada compra solo puede recompensar una vez (idempotencia por purchase_key/order_id).
     """
     try:
         purchased_days = int(purchased_days)
@@ -86,12 +96,19 @@ def register_valid_referral(
             logger.warning("Referidor %s no encontrado", referrer_id)
             return False
 
-        existing = refs_col.find_one({
-            "referrer_id": int(referrer_id),
-            "referred_id": int(referred_user_id),
-        })
+        purchase_key_value = str(
+            purchase_key
+            or _build_fallback_purchase_key(
+                referred_user=referred_user,
+                activated_plan=activated_plan,
+                purchased_days=purchased_days,
+                activation_source=activation_source,
+            )
+        )
+
+        existing = refs_col.find_one({"purchase_key": purchase_key_value})
         if existing:
-            logger.debug("Referido %s ya registrado para %s", referred_user_id, referrer_id)
+            logger.debug("Compra de referido ya registrada | purchase_key=%s", purchase_key_value)
             return False
 
         reward_plan = activated_plan
@@ -102,6 +119,7 @@ def register_valid_referral(
             activated_days=purchased_days,
             reward_days_applied=reward_days,
             reward_plan_applied=reward_plan,
+            purchase_key=purchase_key_value,
         )
         refs_col.insert_one(ref_doc)
 
@@ -129,34 +147,40 @@ def register_valid_referral(
             reason="referral_reward",
             metadata={
                 "referred_user_id": int(referred_user_id),
+                "purchase_key": purchase_key_value,
                 "purchased_plan": activated_plan,
                 "purchased_days": purchased_days,
+                "activation_source": activation_source,
+                **(activation_metadata or {}),
             },
         )
 
         if reward_applied:
             logger.info(
-                "🎁 Recompensa aplicada | referrer=%s referred=%s purchased=%s:%s reward=%s:%s",
+                "🎁 Recompensa aplicada | referrer=%s referred=%s purchased=%s:%s reward=%s:%s purchase_key=%s",
                 referrer_id,
                 referred_user_id,
                 activated_plan,
                 purchased_days,
                 reward_plan,
                 reward_days,
+                purchase_key_value,
             )
         else:
             logger.warning(
-                "⚠️ No se pudo aplicar recompensa | referrer=%s referred=%s",
+                "⚠️ No se pudo aplicar recompensa | referrer=%s referred=%s purchase_key=%s",
                 referrer_id,
                 referred_user_id,
+                purchase_key_value,
             )
 
         logger.info(
-            "✅ Referido registrado | %s → %s (%s %s días)",
+            "✅ Referido registrado | %s → %s (%s %s días) purchase_key=%s",
             referrer_id,
             referred_user_id,
             activated_plan,
             purchased_days,
+            purchase_key_value,
         )
         return True
 
@@ -180,15 +204,15 @@ def get_user_referral_stats(user_id: int) -> Optional[Dict]:
 
         ref_code = user.get("ref_code", f"ref_{user_id}")
 
-        total_referred = refs_col.count_documents({"referrer_id": int(user_id)})
-        plus_referred = refs_col.count_documents({
+        total_referred = len(refs_col.distinct("referred_id", {"referrer_id": int(user_id)})) if hasattr(refs_col, 'distinct') else refs_col.count_documents({"referrer_id": int(user_id)})
+        plus_referred = int(refs_col.count_documents({
             "referrer_id": int(user_id),
             "activated_plan": PLAN_PLUS,
-        })
-        premium_referred = refs_col.count_documents({
+        }))
+        premium_referred = int(refs_col.count_documents({
             "referrer_id": int(user_id),
             "activated_plan": PLAN_PREMIUM,
-        })
+        }))
 
         current_plus = int(user.get("ref_plus_valid", 0) or 0)
         current_premium = int(user.get("ref_premium_valid", 0) or 0)
@@ -196,7 +220,16 @@ def get_user_referral_stats(user_id: int) -> Optional[Dict]:
         reward_days_total = int(user.get("reward_days_total", 0) or 0)
 
         recent_rewards = list(
-            refs_col.find({"referrer_id": int(user_id)}, {"activated_plan": 1, "activated_days": 1, "reward_days_applied": 1})
+            refs_col.find(
+                {"referrer_id": int(user_id)},
+                {
+                    "activated_plan": 1,
+                    "activated_days": 1,
+                    "reward_days_applied": 1,
+                    "reward_plan_applied": 1,
+                    "purchase_key": 1,
+                },
+            )
             .sort("created_at", -1)
             .limit(5)
         )
@@ -258,41 +291,33 @@ def check_ref_rewards(referrer_id: int) -> bool:
 
 
 # =========================
-# FUNCIONES AUXILIARES
+# UTILIDADES PÚBLICAS
 # =========================
 
 def get_referral_link(user_id: int) -> str:
-    users_col = users_collection()
-    user = users_col.find_one({"user_id": int(user_id)})
-
-    if not user:
-        return f"https://t.me/{get_bot_username()}?start=ref_{user_id}"
-
-    ref_code = user.get("ref_code", f"ref_{user_id}")
-    return f"https://t.me/{get_bot_username()}?start={ref_code}"
+    bot_username = get_bot_username() or "HADES_ALPHA_bot"
+    return f"https://t.me/{bot_username}?start=ref_{int(user_id)}"
 
 
 
 def get_referral_summary(user_id: int) -> Dict:
     stats = get_user_referral_stats(user_id)
-    if not stats:
-        return {"total": 0, "plus": 0, "premium": 0}
-
     return {
-        "total": stats["total_referred"],
-        "plus": stats["plus_referred"],
-        "premium": stats["premium_referred"],
-        "current_plus": stats["current_plus"],
-        "current_premium": stats["current_premium"],
-        "valid_referrals_total": stats.get("valid_referrals_total", 0),
-        "reward_days_total": stats.get("reward_days_total", 0),
+        "user_id": int(user_id),
+        "referral_link": get_referral_link(user_id),
+        "total_referred": int((stats or {}).get("total_referred") or 0),
+        "plus_referred": int((stats or {}).get("plus_referred") or 0),
+        "premium_referred": int((stats or {}).get("premium_referred") or 0),
+        "valid_referrals_total": int((stats or {}).get("valid_referrals_total") or 0),
+        "reward_days_total": int((stats or {}).get("reward_days_total") or 0),
+        "reward_rules": get_referral_reward_rules(),
     }
 
 
 
 def reset_referral_counters(user_id: int) -> bool:
     try:
-        users_collection().update_one(
+        result = users_collection().update_one(
             {"user_id": int(user_id)},
             {
                 "$set": {
@@ -305,8 +330,7 @@ def reset_referral_counters(user_id: int) -> bool:
                 }
             },
         )
-        logger.info("♻️ Contadores de referidos reseteados para %s", user_id)
-        return True
+        return bool(getattr(result, "modified_count", 0))
     except Exception as exc:
-        logger.error("Error reseteando contadores: %s", exc)
+        logger.error("❌ Error reiniciando contadores de referidos para %s: %s", user_id, exc, exc_info=True)
         return False
