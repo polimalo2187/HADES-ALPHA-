@@ -394,6 +394,11 @@ def test_continuation_score_rewards_close_position_volume_and_progress():
 def test_profile_defaults_keep_free_plus_premium_hierarchy_after_rebalance():
     import app.strategy as strategy
 
+    assert strategy.FREE_PROFILE["adx_min"] < strategy.PLUS_PROFILE["adx_min"] < strategy.PREMIUM_PROFILE["adx_min"]
+    assert strategy.FREE_PROFILE["atr_pct_min"] < strategy.PLUS_PROFILE["atr_pct_min"] < strategy.PREMIUM_PROFILE["atr_pct_min"]
+    assert strategy.FREE_PROFILE["atr_pct_max"] > strategy.PLUS_PROFILE["atr_pct_max"] > strategy.PREMIUM_PROFILE["atr_pct_max"]
+    assert strategy.FREE_PROFILE["min_body_ratio_breakout"] < strategy.PLUS_PROFILE["min_body_ratio_breakout"] < strategy.PREMIUM_PROFILE["min_body_ratio_breakout"]
+    assert strategy.FREE_PROFILE["min_body_ratio_continuation"] < strategy.PLUS_PROFILE["min_body_ratio_continuation"] < strategy.PREMIUM_PROFILE["min_body_ratio_continuation"]
     assert strategy.FREE_PROFILE["min_rel_volume_continuation"] < strategy.PLUS_PROFILE["min_rel_volume_continuation"] < strategy.PREMIUM_PROFILE["min_rel_volume_continuation"]
     assert strategy.FREE_PROFILE["min_close_position_continuation"] < strategy.PLUS_PROFILE["min_close_position_continuation"] < strategy.PREMIUM_PROFILE["min_close_position_continuation"]
     assert strategy.FREE_PROFILE["min_post_breakout_progress_atr"] < strategy.PLUS_PROFILE["min_post_breakout_progress_atr"] < strategy.PREMIUM_PROFILE["min_post_breakout_progress_atr"]
