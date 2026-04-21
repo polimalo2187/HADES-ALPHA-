@@ -71,6 +71,7 @@ def build_signal_history_record(base_signal: Dict, result_doc: Dict) -> Dict:
         record["resolution"] = result_doc.get("resolution")
     if result_doc.get("completed") is not None:
         record["completed"] = bool(result_doc.get("completed"))
+    record["send_mode"] = base_signal.get("send_mode", result_doc.get("send_mode"))
     record["strategy_name"] = base_signal.get("strategy_name", result_doc.get("strategy_name"))
     record["strategy_version"] = base_signal.get("strategy_version", result_doc.get("strategy_version"))
     record["regime_state"] = base_signal.get("regime_state", result_doc.get("regime_state"))
@@ -129,6 +130,11 @@ def backfill_signal_history(limit: int = 200) -> int:
                     "evaluation_valid_until": result_doc.get("evaluation_valid_until"),
                     "telegram_valid_until": result_doc.get("telegram_valid_until"),
                     "market_validity_minutes": result_doc.get("market_validity_minutes"),
+                    "send_mode": result_doc.get("send_mode"),
+                    "strategy_name": result_doc.get("strategy_name"),
+                    "strategy_version": result_doc.get("strategy_version"),
+                    "regime_state": result_doc.get("regime_state"),
+                    "regime_reason": result_doc.get("regime_reason"),
                 }
             upsert_signal_history_record(base_signal, result_doc)
             processed += 1
