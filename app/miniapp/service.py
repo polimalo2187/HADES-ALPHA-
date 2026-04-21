@@ -2797,6 +2797,55 @@ def build_performance_center_payload(user: Dict[str, Any], *, focus_days: int = 
     ]
 
     focus_payload = next((item for item in windows if item["days"] == focus_days), windows[1])
+    return {
+        "overview": {
+            "focus_days": focus_payload["days"],
+            "focus_label": focus_payload["label"],
+            "user_plan": normalize_plan(plan_status(user).get("plan") or user.get("plan")),
+            "windows": [{"days": item["days"], "label": item["label"], "materialized": item["materialized"]} for item in windows],
+            "generated_at": utcnow().isoformat(),
+        },
+        "windows": windows,
+        "focus": focus_payload,
+    }
+
+
+def build_admin_performance_payload(*, focus_days: int = 30) -> Dict[str, Any]:
+    requested_focus = int(focus_days or 30)
+    focus_days = requested_focus if requested_focus in {7, 30, 3650} else 30
+
+    snapshot = _safe_call(get_performance_snapshot, {}) or {}
+    total_materialized = _safe_call(lambda: get_materialized_window(3650), None)
+    total_payload = total_materialized or (_safe_call(lambda: build_performance_window(3650), None) or {})
+
+    windows = [
+        _serialize_performance_window(
+            {
+                "summary": snapshot.get("summary_7d"),
+                "activity": snapshot.get("activity_7d"),
+            },
+            days=7,
+            label="7D",
+            materialized=bool(snapshot.get("materialized_7d")),
+        ),
+        _serialize_performance_window(
+            {
+                "summary": snapshot.get("summary_30d"),
+                "activity": snapshot.get("activity_30d"),
+            },
+            days=30,
+            label="30D",
+            materialized=bool(snapshot.get("materialized_30d")),
+        ),
+        _serialize_performance_window(
+            total_payload,
+            days=3650,
+            label="Total",
+            materialized=bool(total_materialized),
+        ),
+    ]
+
+    focus_payload = next((item for item in windows if item["days"] == focus_days), windows[1])
     by_plan = snapshot.get("by_plan_30d") if isinstance(snapshot.get("by_plan_30d"), dict) else {}
     activity_by_plan = snapshot.get("activity_by_plan_30d") if isinstance(snapshot.get("activity_by_plan_30d"), dict) else {}
 
@@ -2804,7 +2853,6 @@ def build_performance_center_payload(user: Dict[str, Any], *, focus_days: int = 
         "overview": {
             "focus_days": focus_payload["days"],
             "focus_label": focus_payload["label"],
-            "user_plan": normalize_plan(plan_status(user).get("plan") or user.get("plan")),
             "windows": [{"days": item["days"], "label": item["label"], "materialized": item["materialized"]} for item in windows],
             "generated_at": utcnow().isoformat(),
         },
