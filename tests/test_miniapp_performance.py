@@ -19,6 +19,8 @@ class MiniAppPerformanceEndpointTests(unittest.TestCase):
             'windows': [],
             'plan_breakdown_30d': [],
             'direction_30d': [],
+            'strategy_30d': [],
+            'strategy_direction_30d': [],
             'setup_groups_30d': [],
             'weak_symbols_30d': [],
             'score_buckets_30d': [],
