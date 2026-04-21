@@ -15,7 +15,7 @@ SIGNAL_RESULT_SCHEMA_VERSION = 1
 WATCHLIST_SCHEMA_VERSION = 1
 SIGNAL_JOB_SCHEMA_VERSION = 1
 SIGNAL_DELIVERY_SCHEMA_VERSION = 1
-STATS_SNAPSHOT_SCHEMA_VERSION = 3
+STATS_SNAPSHOT_SCHEMA_VERSION = 4
 SIGNAL_HISTORY_SCHEMA_VERSION = 1
 SUBSCRIPTION_EVENT_SCHEMA_VERSION = 1
 PAYMENT_ORDER_SCHEMA_VERSION = 1
@@ -455,6 +455,11 @@ def new_signal_result(
     score: Optional[float],
     normalized_score: Optional[float] = None,
     setup_group: Optional[str] = None,
+    send_mode: Optional[str] = None,
+    strategy_name: Optional[str] = None,
+    strategy_version: Optional[str] = None,
+    regime_state: Optional[str] = None,
+    regime_reason: Optional[str] = None,
     result: str,
     evaluated_profile: str,
     evaluation_scope: str,
@@ -491,6 +496,11 @@ def new_signal_result(
         "score": score,
         "normalized_score": normalized_score,
         "setup_group": setup_group,
+        "send_mode": send_mode,
+        "strategy_name": strategy_name,
+        "strategy_version": strategy_version,
+        "regime_state": regime_state,
+        "regime_reason": regime_reason,
         "result": result,
         "evaluated_at": now,
         "evaluated_profile": evaluated_profile,
@@ -677,6 +687,13 @@ def new_signal_history_record(
         "tp1_progress_max_pct": tp1_progress_max_pct,
         "max_favorable_excursion_r": max_favorable_excursion_r,
         "max_adverse_excursion_r": max_adverse_excursion_r,
+        "send_mode": None,
+        "strategy_name": None,
+        "strategy_version": None,
+        "regime_state": None,
+        "regime_reason": None,
+        "regime_bias": None,
+        "router_version": None,
         "schema_version": SIGNAL_HISTORY_SCHEMA_VERSION,
         "created_at": now,
         "updated_at": now,
