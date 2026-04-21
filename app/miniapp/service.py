@@ -2650,6 +2650,56 @@ def _serialize_performance_setup_row(row: Optional[Dict[str, Any]]) -> Dict[str,
     }
 
 
+def _serialize_performance_strategy_row(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    item = row if isinstance(row, dict) else {}
+    profit_factor_raw = item.get("profit_factor")
+    send_modes = item.get("send_modes") if isinstance(item.get("send_modes"), list) else []
+    return {
+        "strategy_key": str(item.get("strategy_key") or "legacy_unknown"),
+        "strategy_label": str(item.get("strategy_label") or "Legacy / Sin clasificar"),
+        "primary_send_mode": item.get("primary_send_mode"),
+        "primary_send_mode_label": str(item.get("primary_send_mode_label") or "Modelo no identificado"),
+        "send_modes": [str(mode) for mode in send_modes if str(mode or "").strip()],
+        "signals_total": int(item.get("signals_total") or 0),
+        "avg_score": _finite_metric(item.get("avg_score"), 2),
+        "resolved": int(item.get("resolved") or 0),
+        "won": int(item.get("won") or 0),
+        "lost": int(item.get("lost") or 0),
+        "expired": int(item.get("expired") or 0),
+        "expired_no_fill": int(item.get("expired_no_fill") or 0),
+        "expired_after_entry": int(item.get("expired_after_entry") or 0),
+        "fill_rate": _finite_metric(item.get("fill_rate"), 2) or 0.0,
+        "winrate": _finite_metric(item.get("winrate"), 2) or 0.0,
+        "profit_factor": _finite_metric(profit_factor_raw, 2),
+        "profit_factor_infinite": bool(profit_factor_raw == float("inf")),
+        "expectancy_r": _finite_metric(item.get("expectancy_r"), 4) or 0.0,
+        "tp1": int(item.get("tp1") or 0),
+        "tp2": int(item.get("tp2") or 0),
+        "sl": int(item.get("sl") or 0),
+    }
+
+
+
+def _serialize_performance_strategy_direction_row(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    item = row if isinstance(row, dict) else {}
+    profit_factor_raw = item.get("profit_factor")
+    return {
+        "strategy_key": str(item.get("strategy_key") or "legacy_unknown"),
+        "strategy_label": str(item.get("strategy_label") or "Legacy / Sin clasificar"),
+        "direction": str(item.get("direction") or "—").upper(),
+        "resolved": int(item.get("resolved") or 0),
+        "won": int(item.get("won") or 0),
+        "lost": int(item.get("lost") or 0),
+        "expired": int(item.get("expired") or 0),
+        "expired_no_fill": int(item.get("expired_no_fill") or 0),
+        "expired_after_entry": int(item.get("expired_after_entry") or 0),
+        "winrate": _finite_metric(item.get("winrate"), 2) or 0.0,
+        "profit_factor": _finite_metric(profit_factor_raw, 2),
+        "profit_factor_infinite": bool(profit_factor_raw == float("inf")),
+        "expectancy_r": _finite_metric(item.get("expectancy_r"), 4) or 0.0,
+    }
+
+
 def _serialize_performance_symbol_row(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     item = row if isinstance(row, dict) else {}
     profit_factor_raw = item.get("profit_factor")
@@ -2766,6 +2816,8 @@ def build_performance_center_payload(user: Dict[str, Any], *, focus_days: int = 
             _serialize_performance_breakdown_row("premium", by_plan.get("premium"), activity_by_plan.get("premium")),
         ],
         "direction_30d": [_serialize_performance_direction_row(row) for row in (snapshot.get("direction_30d") or [])],
+        "strategy_30d": [_serialize_performance_strategy_row(row) for row in (snapshot.get("strategy_30d") or [])],
+        "strategy_direction_30d": [_serialize_performance_strategy_direction_row(row) for row in (snapshot.get("strategy_direction_30d") or [])],
         "setup_groups_30d": [_serialize_performance_setup_row(row) for row in (snapshot.get("setup_groups_30d") or [])],
         "weak_symbols_30d": [_serialize_performance_symbol_row(row) for row in (snapshot.get("worst_symbols_30d") or [])],
         "score_buckets_30d": [_serialize_performance_score_bucket(row) for row in ((snapshot.get("by_score_30d") or {}).get("buckets") or [])],
