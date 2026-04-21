@@ -15,11 +15,12 @@ import pandas as pd
 import requests
 from telegram import Bot
 
-from app.database import signals_collection
+from app.database import signals_collection, scanner_cycle_stats_collection
 from app.realtime_pipeline import enqueue_signal_dispatch
 from app.plans import PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM
 from app.signals import create_base_signal
 from app.observability import heartbeat
+from app.models import new_scanner_cycle_stat
 from app import regime_engine, strategy_router
 from app import strategy as strategy_engine
 
@@ -1373,6 +1374,66 @@ def _extract_failure_reason(local: Dict[str, int]) -> Optional[str]:
     return max(local.items(), key=lambda item: item[1])[0]
 
 
+def _normalize_strategy_key(strategy_name: Optional[str]) -> str:
+    normalized = str(strategy_name or '').strip().lower()
+    if normalized in {'breakout_reset', 'strategy_breakout_reset', 'breakout+reset'}:
+        return 'breakout_reset'
+    if normalized in {'liquidity_sweep_reversal', 'strategy_liquidity_sweep', 'liquidity_sweep', 'liquidity_hunter'}:
+        return 'liquidity_sweep_reversal'
+    if normalized == 'risk_off':
+        return 'risk_off'
+    return normalized or 'legacy_unknown'
+
+
+def _merge_named_counts(target: Dict[str, int], source: Optional[Dict[str, int]]) -> None:
+    if not source:
+        return
+    for key, value in source.items():
+        normalized_key = _normalize_strategy_key(key)
+        target[normalized_key] = int(target.get(normalized_key, 0)) + int(value or 0)
+
+
+def _increment_reason_bucket(target: Dict[str, Dict[str, int]], strategy_key: str, reason: Optional[str]) -> None:
+    normalized_strategy = _normalize_strategy_key(strategy_key)
+    bucket_key = str(reason or 'unknown').strip() or 'unknown'
+    per_strategy = target.setdefault(normalized_strategy, {})
+    per_strategy[bucket_key] = int(per_strategy.get(bucket_key, 0)) + 1
+
+
+def _summarize_candidates_by_strategy(candidates: List[Dict[str, Any]]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for candidate in candidates:
+        strategy_key = _normalize_strategy_key(candidate.get('strategy_name'))
+        counts[strategy_key] = int(counts.get(strategy_key, 0)) + 1
+    return counts
+
+
+def _summarize_selected_by_strategy(signals: List[Dict[str, Any]]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for signal in signals:
+        strategy_key = _normalize_strategy_key(signal.get('strategy_name'))
+        counts[strategy_key] = int(counts.get(strategy_key, 0)) + 1
+    return counts
+
+
+def _market_regime_summary(snapshot: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    payload = dict(snapshot or {})
+    selected_strategy = _normalize_strategy_key(strategy_router.select_strategy_name(payload))
+    return {
+        'state': str(payload.get('state') or 'unknown').strip().lower() or 'unknown',
+        'bias': str(payload.get('bias') or 'neutral').strip().lower() or 'neutral',
+        'reason': str(payload.get('reason') or 'market_regime_unknown').strip() or 'market_regime_unknown',
+        'strategy_name': selected_strategy,
+    }
+
+
+def _persist_scanner_cycle_stat(payload: Dict[str, Any]) -> None:
+    try:
+        scanner_cycle_stats_collection().insert_one(payload)
+    except Exception as exc:
+        logger.error('❌ No se pudo persistir scanner_cycle_stat: %s', exc, exc_info=True)
+
+
 def _process_symbol(symbol: str, *, refresh_15m: bool = False, refresh_1h: bool = False, market_regime: Optional[Dict] = None) -> Tuple[Optional[Dict], Dict[str, int], Optional[str]]:
     local_debug: Dict[str, int] = {}
     try:
@@ -1459,16 +1520,39 @@ async def scan_market_async(bot: Bot):
                     )
 
             results = await asyncio.gather(*[_run(symbol) for symbol in active_symbols])
+            regime_summary = _market_regime_summary(market_regime)
+            regime_strategy_key = _normalize_strategy_key(regime_summary.get("strategy_name"))
+            attempted_symbols_total = max(len(active_symbols) - failures, 0)
+            rejected_symbols_total = 0
+            risk_off_symbols_total = 0
+            candidate_pool_by_strategy: Dict[str, int] = {}
+            selected_by_strategy: Dict[str, int] = {}
+            rejected_by_strategy: Dict[str, int] = {}
+            reject_reasons_by_strategy: Dict[str, Dict[str, int]] = {}
+            selected_signals: List[Dict[str, Any]] = []
+
             for candidate, local_debug, failure in results:
-                if candidate:
-                    candidates.append(candidate)
-                else:
-                    _merge_debug_counts(reject_totals, local_debug)
                 if failure:
                     failures += 1
                     if len(failure_samples) < 5:
                         failure_samples.append(failure)
+                    continue
 
+                if candidate:
+                    candidates.append(candidate)
+                    continue
+
+                rejected_symbols_total += 1
+                if regime_strategy_key == "risk_off":
+                    risk_off_symbols_total += 1
+                elif regime_strategy_key:
+                    rejected_by_strategy[regime_strategy_key] = int(rejected_by_strategy.get(regime_strategy_key, 0)) + 1
+                _merge_debug_counts(reject_totals, local_debug)
+                terminal_reason = _extract_failure_reason(local_debug) or "unknown"
+                if regime_strategy_key and regime_strategy_key != "risk_off":
+                    _increment_reason_bucket(reject_reasons_by_strategy, regime_strategy_key, terminal_reason)
+
+            attempted_symbols_total = max(len(active_symbols) - failures, 0)
             cycle_duration = (datetime.utcnow() - cycle_started_at).total_seconds()
             cache_stats = _kline_cache.delta(cache_stats_before)
 
@@ -1482,89 +1566,49 @@ async def scan_market_async(bot: Bot):
                     failure_samples,
                     cache_stats,
                 )
-                heartbeat(
-                    "scanner",
-                    status="warn",
-                    details={
-                        "cycle": cycle_number,
-                        "symbols": len(active_symbols),
-                        "candidates": 0,
-                        "selected": 0,
-                        "failures": failures,
-                        "failure_samples": failure_samples,
-                        "duration_seconds": cycle_duration,
-                        "kline_cache": cache_stats,
-                        "bootstrap_mode": bootstrap_mode,
-                        "universe_symbols": len(symbols),
-                        "active_symbols": len(active_symbols),
-                    },
-                )
-                cycle_number += 1
-                await asyncio.sleep(max(0.0, SCAN_INTERVAL_SECONDS - cycle_duration))
-                continue
 
-            if not candidates:
+            if candidates:
+                candidates.sort(
+                    key=lambda x: (
+                        x.get("final_score", _normalized_score(x)),
+                        x.get("normalized_score", x.get("score", _raw_score(x))),
+                        x.get("raw_score", x.get("score", 0)),
+                        x.get("entry_quality", 0),
+                        x.get("volume_quality", 0),
+                        x.get("symbol", ""),
+                    ),
+                    reverse=True,
+                )
+
+            premium_candidates = [c for c in candidates if _qualifies_for_premium(c)]
+            plus_candidates = [c for c in candidates if _qualifies_for_plus(c)]
+            free_candidates = [c for c in candidates if _qualifies_for_free(c)]
+            candidate_pool_by_strategy = _summarize_candidates_by_strategy(candidates)
+
+            if candidates:
+                logger.info(
+                    "📚 Candidatos | total=%s | premium=%s | plus=%s | free=%s | regime=%s/%s | strategy=%s | duration=%.3fs | bootstrap=%s active=%s universe=%s | rejects=%s | cache=%s",
+                    len(candidates),
+                    len(premium_candidates),
+                    len(plus_candidates),
+                    len(free_candidates),
+                    market_regime.get("state"),
+                    market_regime.get("bias"),
+                    market_regime.get("strategy_name"),
+                    cycle_duration,
+                    bootstrap_mode,
+                    len(active_symbols),
+                    len(symbols),
+                    _compact_rejects(reject_totals),
+                    cache_stats,
+                )
+            else:
                 logger.info(
                     "📭 No hay oportunidades fuertes en este ciclo | duration=%.3fs | rejects=%s | cache=%s",
                     cycle_duration,
                     _compact_rejects(reject_totals),
                     cache_stats,
                 )
-                heartbeat(
-                    "scanner",
-                    status="ok",
-                    details={
-                        "cycle": cycle_number,
-                        "symbols": len(active_symbols),
-                        "candidates": 0,
-                        "selected": 0,
-                        "failures": failures,
-                        "scan_interval_seconds": SCAN_INTERVAL_SECONDS,
-                        "cycle_started_at": cycle_started_at.isoformat(),
-                        "duration_seconds": cycle_duration,
-                        "rejects": reject_totals,
-                        "kline_cache": cache_stats,
-                        "bootstrap_mode": bootstrap_mode,
-                        "universe_symbols": len(symbols),
-                        "active_symbols": len(active_symbols),
-                    },
-                )
-                cycle_number += 1
-                await asyncio.sleep(max(0.0, SCAN_INTERVAL_SECONDS - cycle_duration))
-                continue
-
-            candidates.sort(
-                key=lambda x: (
-                    x.get("final_score", _normalized_score(x)),
-                    x.get("normalized_score", x.get("score", _raw_score(x))),
-                    x.get("raw_score", x.get("score", 0)),
-                    x.get("entry_quality", 0),
-                    x.get("volume_quality", 0),
-                    x.get("symbol", ""),
-                ),
-                reverse=True,
-            )
-
-            premium_candidates = [c for c in candidates if _qualifies_for_premium(c)]
-            plus_candidates = [c for c in candidates if _qualifies_for_plus(c)]
-            free_candidates = [c for c in candidates if _qualifies_for_free(c)]
-
-            logger.info(
-                "📚 Candidatos | total=%s | premium=%s | plus=%s | free=%s | regime=%s/%s | strategy=%s | duration=%.3fs | bootstrap=%s active=%s universe=%s | rejects=%s | cache=%s",
-                len(candidates),
-                len(premium_candidates),
-                len(plus_candidates),
-                len(free_candidates),
-                market_regime.get("state"),
-                market_regime.get("bias"),
-                market_regime.get("strategy_name"),
-                cycle_duration,
-                bootstrap_mode,
-                len(active_symbols),
-                len(symbols),
-                _compact_rejects(reject_totals),
-                cache_stats,
-            )
 
             used_symbols: Set[str] = set()
             selected = [
@@ -1589,6 +1633,7 @@ async def scan_market_async(bot: Bot):
                 try:
                     enqueue_signal_dispatch(base_signal)
                     selected_count += 1
+                    selected_signals.append(signal)
                 except Exception as e:
                     logger.error("⚠️ Error encolando señal para dispatch: %s", e, exc_info=True)
                     continue
@@ -1612,9 +1657,69 @@ async def scan_market_async(bot: Bot):
                     signal.get("regime_state", market_regime.get("state")),
                 )
 
+            selected_by_strategy = _summarize_selected_by_strategy(selected_signals)
+            attempts_by_strategy = {regime_strategy_key: attempted_symbols_total} if regime_strategy_key and regime_strategy_key != "risk_off" else {}
+            overall_terminal_reasons: Dict[str, int] = {}
+            for bucket in reject_reasons_by_strategy.values():
+                for reason, count in bucket.items():
+                    overall_terminal_reasons[reason] = int(overall_terminal_reasons.get(reason, 0)) + int(count or 0)
+
+            cycle_observability = {
+                "cycle": cycle_number,
+                "cycle_started_at": cycle_started_at.isoformat(),
+                "scan_interval_seconds": SCAN_INTERVAL_SECONDS,
+                "duration_seconds": round(cycle_duration, 6),
+                "bootstrap_mode": bootstrap_mode,
+                "universe_symbols": len(symbols),
+                "active_symbols": len(active_symbols),
+                "attempted_symbols_total": attempted_symbols_total,
+                "candidate_pool_total": len(candidates),
+                "selected_signals_total": selected_count,
+                "rejected_symbols_total": rejected_symbols_total,
+                "risk_off_symbols_total": risk_off_symbols_total,
+                "failures": failures,
+                "failure_samples": failure_samples,
+                "market_regime": regime_summary,
+                "attempts_by_strategy": attempts_by_strategy,
+                "candidate_pool_by_strategy": candidate_pool_by_strategy,
+                "selected_by_strategy": selected_by_strategy,
+                "rejected_by_strategy": rejected_by_strategy,
+                "reject_reasons": overall_terminal_reasons,
+                "reject_reasons_by_strategy": reject_reasons_by_strategy,
+                "kline_cache": cache_stats,
+            }
+
+            _persist_scanner_cycle_stat(
+                new_scanner_cycle_stat(
+                    cycle_number=cycle_number,
+                    status="warn" if failures else "ok",
+                    cycle_started_at=cycle_started_at,
+                    duration_seconds=cycle_duration,
+                    scan_interval_seconds=SCAN_INTERVAL_SECONDS,
+                    bootstrap_mode=bootstrap_mode,
+                    universe_symbols_total=len(symbols),
+                    active_symbols_total=len(active_symbols),
+                    attempted_symbols_total=attempted_symbols_total,
+                    candidate_pool_total=len(candidates),
+                    selected_signals_total=selected_count,
+                    rejected_symbols_total=rejected_symbols_total,
+                    risk_off_symbols_total=risk_off_symbols_total,
+                    failure_symbols_total=failures,
+                    failure_samples=failure_samples,
+                    market_regime=regime_summary,
+                    attempts_by_strategy=attempts_by_strategy,
+                    candidate_pool_by_strategy=candidate_pool_by_strategy,
+                    selected_by_strategy=selected_by_strategy,
+                    rejected_by_strategy=rejected_by_strategy,
+                    reject_reasons=overall_terminal_reasons,
+                    reject_reasons_by_strategy=reject_reasons_by_strategy,
+                    cache_stats=cache_stats,
+                )
+            )
+
             heartbeat(
                 "scanner",
-                status="ok",
+                status="warn" if failures else "ok",
                 details={
                     "cycle": cycle_number,
                     "symbols": len(symbols),
@@ -1631,6 +1736,7 @@ async def scan_market_async(bot: Bot):
                     "kline_cache": cache_stats,
                     "market_regime": market_regime,
                     "btc_regime": market_regime,
+                    "strategy_observability": cycle_observability,
                 },
             )
             cycle_number += 1
