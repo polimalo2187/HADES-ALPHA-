@@ -64,6 +64,11 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
             'adminModerationSummaryCard',
             'adminRuntimeStatusClass',
             'adminRuntimeRoleCard',
+            'adminStrategyPipelineCard',
+            'adminStrategyRejectCard',
+            'adminRegimeDistributionItem',
+            'adminRegimeStrategyItem',
+            'adminLatestCycleCard',
         ]:
             self.assertIn(f'function {name}(', text)
 
@@ -96,6 +101,9 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
         self.assertIn('Base de usuarios', text)
         self.assertIn('Salud operativa', text)
         self.assertIn('Inteligencia interna de rendimiento', text)
+        self.assertIn('Embudo interno por estrategia (telemetría admin)', text)
+        self.assertIn('Shadow actual del scanner', text)
+        self.assertIn('Régimen → estrategia (30D)', text)
         self.assertIn('Moderación de usuario', text)
         self.assertIn('data-admin-moderation-action', text)
         self.assertIn('data-admin-moderation-confirm', text)
