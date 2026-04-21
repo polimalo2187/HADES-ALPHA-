@@ -17,14 +17,6 @@ class MiniAppPerformanceEndpointTests(unittest.TestCase):
             'overview': {'focus_days': 30, 'focus_label': '30D', 'windows': [{'days': 7, 'label': '7D'}, {'days': 30, 'label': '30D'}]},
             'focus': {'days': 30, 'label': '30D', 'summary': {'resolved': 12}, 'activity': {'signals_total': 20}},
             'windows': [],
-            'plan_breakdown_30d': [],
-            'direction_30d': [],
-            'strategy_30d': [],
-            'strategy_direction_30d': [],
-            'setup_groups_30d': [],
-            'weak_symbols_30d': [],
-            'score_buckets_30d': [],
-            'diagnostics_30d': {},
         }
         with patch('app.miniapp.app.initialize_database'), \
              patch('app.miniapp.app.start_background_heartbeat'), \
