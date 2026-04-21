@@ -134,6 +134,11 @@ def system_health_collection():
     """Estado y heartbeat de componentes internos"""
     return get_db()["system_health"]
 
+
+def scanner_cycle_stats_collection():
+    """Telemetría histórica compacta del embudo del scanner"""
+    return get_db()["scanner_cycle_stats"]
+
 UNIQUE_INDEX_DUPLICATE_QUERIES = {
     "users.user_id": ["user_id"],
     "users.ref_code": ["ref_code"],
@@ -256,6 +261,12 @@ COLLECTION_INDEX_MODELS = {
         IndexModel([("status", ASCENDING), ("updated_at", DESCENDING)], name="status_updated_idx"),
         IndexModel([("schema_version", ASCENDING)], name="schema_version_idx"),
     ],
+    "scanner_cycle_stats": [
+        IndexModel([("cycle_started_at", DESCENDING)], name="cycle_started_idx"),
+        IndexModel([("status", ASCENDING), ("cycle_started_at", DESCENDING)], name="status_cycle_started_idx"),
+        IndexModel([("schema_version", ASCENDING)], name="schema_version_idx"),
+        IndexModel([("created_at", ASCENDING)], name="ttl_created_at_45d", expireAfterSeconds=45 * 24 * 60 * 60),
+    ],
 }
 
 
@@ -275,6 +286,7 @@ COLLECTION_GETTERS = {
     "payment_verification_logs": payment_verification_logs_collection,
     "audit_logs": audit_logs_collection,
     "system_health": system_health_collection,
+    "scanner_cycle_stats": scanner_cycle_stats_collection,
 }
 
 
