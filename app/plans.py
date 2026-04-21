@@ -91,13 +91,21 @@ REFERRAL_REWARD_BY_DURATION = {
     30: 15,
 }
 
+SECONDS_PER_DAY = 24 * 60 * 60
+
 
 # =========================
 # HELPERS DE USUARIO
 # =========================
 
 def get_user(user_id: int) -> Optional[dict]:
-    return users_collection().find_one({"user_id": int(user_id)})
+    user = users_collection().find_one({"user_id": int(user_id)})
+    if not user:
+        return None
+    synced_user, dirty = _sync_deferred_plan_state(user)
+    if dirty:
+        save_user(synced_user)
+    return synced_user
 
 
 
@@ -188,49 +196,54 @@ def can_count_as_valid_referral_purchase(plan: str, days: int) -> bool:
 # =========================
 
 def has_access(user: dict) -> bool:
-    return is_plan_active(user) or is_trial_active(user)
+    return plan_status(user).get("status") in {SUBSCRIPTION_STATUS_ACTIVE, SUBSCRIPTION_STATUS_TRIAL}
 
 
 
 def get_subscription_status(user: dict) -> str:
     if is_effectively_banned(user):
         return SUBSCRIPTION_STATUS_BANNED
-    if is_plan_active(user):
-        return SUBSCRIPTION_STATUS_ACTIVE
-    if is_trial_active(user):
-        return SUBSCRIPTION_STATUS_TRIAL
-    if normalize_plan(user.get("plan")) != PLAN_FREE:
-        return SUBSCRIPTION_STATUS_EXPIRED
-    return SUBSCRIPTION_STATUS_FREE
+    return str(plan_status(user).get("status") or SUBSCRIPTION_STATUS_FREE)
 
 
 
 def plan_status(user: dict) -> dict:
     now = utcnow()
-
-    if is_plan_active(user):
+    user_copy = dict(user or {})
+    current_plan = normalize_plan(user_copy.get("plan"))
+    plan_end = user_copy.get("plan_end")
+    if plan_end and plan_end > now and current_plan in {PLAN_PLUS, PLAN_PREMIUM}:
         return {
-            "plan": normalize_plan(user.get("plan")),
+            "plan": current_plan,
             "status": SUBSCRIPTION_STATUS_ACTIVE,
-            "expires": user.get("plan_end"),
-            "days_left": max(((user.get("plan_end") or now) - now).days, 0),
+            "expires": plan_end,
+            "days_left": max((plan_end - now).days, 0),
         }
 
-    if is_trial_active(user):
+    queued_plus_seconds = _queued_plus_seconds(user_copy)
+    if queued_plus_seconds > 0:
+        expires = now + timedelta(seconds=queued_plus_seconds)
+        return {
+            "plan": PLAN_PLUS,
+            "status": SUBSCRIPTION_STATUS_ACTIVE,
+            "expires": expires,
+            "days_left": max((expires - now).days, 0),
+        }
+
+    if is_trial_active(user_copy):
         return {
             "plan": PLAN_FREE,
             "status": SUBSCRIPTION_STATUS_TRIAL,
-            "expires": user.get("trial_end"),
-            "days_left": max(((user.get("trial_end") or now) - now).days, 0),
+            "expires": user_copy.get("trial_end"),
+            "days_left": max(((user_copy.get("trial_end") or now) - now).days, 0),
         }
 
     return {
         "plan": PLAN_FREE,
-        "status": SUBSCRIPTION_STATUS_EXPIRED if normalize_plan(user.get("plan")) != PLAN_FREE else SUBSCRIPTION_STATUS_FREE,
+        "status": SUBSCRIPTION_STATUS_EXPIRED if _is_paid_plan_value(current_plan) else SUBSCRIPTION_STATUS_FREE,
         "expires": None,
         "days_left": 0,
     }
-
 
 
 def can_access_feature(plan: Optional[str], feature_key: str, *, has_trial: bool = False, is_admin_user: bool = False) -> bool:
@@ -247,6 +260,106 @@ def can_access_feature(plan: Optional[str], feature_key: str, *, has_trial: bool
     if feature_key in {"signals_premium", "alerts_premium", "analysis_advanced", "tracking_advanced"}:
         return rank >= plan_rank(PLAN_PREMIUM)
     return rank >= plan_rank(PLAN_FREE)
+
+
+# =========================
+# HELPERS DE ENTITLEMENTS
+# =========================
+
+def _seconds_from_days(days: int) -> int:
+    return validate_entitlement_days(days) * SECONDS_PER_DAY
+
+
+def _queued_plus_seconds(user: Dict[str, Any]) -> int:
+    return max(int(user.get("queued_plus_seconds") or 0), 0)
+
+
+def _remaining_active_seconds(user: Dict[str, Any], now: Optional[datetime] = None) -> int:
+    now = now or utcnow()
+    plan_end = user.get("plan_end")
+    if not plan_end:
+        return 0
+    return max(int((plan_end - now).total_seconds()), 0)
+
+
+def _is_paid_plan_value(value: Optional[str]) -> bool:
+    return normalize_plan(value) in {PLAN_PLUS, PLAN_PREMIUM}
+
+
+def _sync_deferred_plan_state(user: Dict[str, Any]) -> tuple[Dict[str, Any], bool]:
+    now = utcnow()
+    dirty = False
+    current_plan = normalize_plan(user.get("plan"))
+    queued_plus_seconds = _queued_plus_seconds(user)
+    if user.get("queued_plus_seconds") != queued_plus_seconds:
+        user["queued_plus_seconds"] = queued_plus_seconds
+        dirty = True
+
+    plan_end = user.get("plan_end")
+    if plan_end and plan_end > now and current_plan in {PLAN_PLUS, PLAN_PREMIUM}:
+        if user.get("subscription_status") != SUBSCRIPTION_STATUS_ACTIVE:
+            user["subscription_status"] = SUBSCRIPTION_STATUS_ACTIVE
+            dirty = True
+        return user, dirty
+
+    if queued_plus_seconds > 0:
+        new_end = now + timedelta(seconds=queued_plus_seconds)
+        if current_plan != PLAN_PLUS or user.get("plan_end") != new_end:
+            user["plan"] = PLAN_PLUS
+            user["plan_end"] = new_end
+            user["queued_plus_seconds"] = 0
+            user["subscription_status"] = SUBSCRIPTION_STATUS_ACTIVE
+            user["trial_end"] = None
+            user["last_plan_change_at"] = now
+            user["last_entitlement_source"] = user.get("last_entitlement_source") or "queued_plus_restore"
+            dirty = True
+        return user, dirty
+
+    if current_plan != PLAN_FREE or user.get("plan_end") is not None:
+        if user.get("plan") != PLAN_FREE:
+            user["plan"] = PLAN_FREE
+            dirty = True
+        if user.get("plan_end") is not None:
+            user["plan_end"] = None
+            dirty = True
+        desired_status = SUBSCRIPTION_STATUS_TRIAL if is_trial_active(user) else (SUBSCRIPTION_STATUS_EXPIRED if _is_paid_plan_value(current_plan) else SUBSCRIPTION_STATUS_FREE)
+        if user.get("subscription_status") != desired_status:
+            user["subscription_status"] = desired_status
+            dirty = True
+    return user, dirty
+
+
+def _activate_plus_now(user: Dict[str, Any], seconds: int, *, now: datetime, source: str) -> None:
+    user["plan"] = PLAN_PLUS
+    user["plan_end"] = now + timedelta(seconds=max(int(seconds), 0))
+    user["trial_end"] = None
+    user["subscription_status"] = SUBSCRIPTION_STATUS_ACTIVE
+    user["last_plan_change_at"] = now
+    user["last_entitlement_source"] = source
+    user["plan_started_at"] = now
+
+
+def _activate_premium_now(user: Dict[str, Any], seconds: int, *, now: datetime, source: str) -> None:
+    user["plan"] = PLAN_PREMIUM
+    user["plan_end"] = now + timedelta(seconds=max(int(seconds), 0))
+    user["trial_end"] = None
+    user["subscription_status"] = SUBSCRIPTION_STATUS_ACTIVE
+    user["last_plan_change_at"] = now
+    user["last_entitlement_source"] = source
+    user["plan_started_at"] = now
+
+
+def _set_free_or_trial_state(user: Dict[str, Any], *, now: datetime, source: str) -> None:
+    user["plan"] = PLAN_FREE
+    user["plan_end"] = None
+    user["last_plan_change_at"] = now
+    user["last_entitlement_source"] = source
+    user["subscription_status"] = SUBSCRIPTION_STATUS_TRIAL if is_trial_active(user) else SUBSCRIPTION_STATUS_EXPIRED
+
+
+def get_effective_paid_plan(user: Dict[str, Any]) -> str:
+    snapshot = plan_status(user)
+    return normalize_plan(snapshot.get("plan"))
 
 
 # =========================
@@ -293,28 +406,43 @@ def _apply_entitlement_to_user(
     purchase: bool,
 ) -> Dict[str, Any]:
     now = utcnow()
+    user, _ = _sync_deferred_plan_state(user)
     plan_value = normalize_plan(target_plan)
+    grant_seconds = _seconds_from_days(days)
     current_plan = normalize_plan(user.get("plan"))
-    current_active = is_plan_active(user)
-    current_rank = plan_rank(current_plan if current_active else PLAN_FREE)
-    target_rank = plan_rank(plan_value)
+    current_active = bool(user.get("plan_end") and user.get("plan_end") > now and current_plan in {PLAN_PLUS, PLAN_PREMIUM})
+    queued_plus_seconds = _queued_plus_seconds(user)
 
-    base_end = user.get("plan_end") if current_active and user.get("plan_end") and user["plan_end"] > now else now
-
-    # No degradamos planes por una activación/recompensa de tier inferior.
-    if current_active and target_rank < current_rank:
-        effective_plan = current_plan
+    if plan_value == PLAN_PLUS:
+        if current_active and current_plan == PLAN_PREMIUM:
+            user["queued_plus_seconds"] = queued_plus_seconds + grant_seconds
+            user["queued_plus_origin"] = source
+            user["last_entitlement_source"] = source
+        elif current_active and current_plan == PLAN_PLUS:
+            base_end = user.get("plan_end") if user.get("plan_end") and user["plan_end"] > now else now
+            user["plan_end"] = base_end + timedelta(seconds=grant_seconds)
+            user["trial_end"] = None
+            user["subscription_status"] = SUBSCRIPTION_STATUS_ACTIVE
+            user["last_entitlement_source"] = source
+        else:
+            activation_seconds = grant_seconds + queued_plus_seconds
+            user["queued_plus_seconds"] = 0
+            user["queued_plus_origin"] = None
+            _activate_plus_now(user, activation_seconds, now=now, source=source)
+    elif plan_value == PLAN_PREMIUM:
+        if current_active and current_plan == PLAN_PREMIUM:
+            base_end = user.get("plan_end") if user.get("plan_end") and user["plan_end"] > now else now
+            user["plan_end"] = base_end + timedelta(seconds=grant_seconds)
+            user["trial_end"] = None
+            user["subscription_status"] = SUBSCRIPTION_STATUS_ACTIVE
+            user["last_entitlement_source"] = source
+        else:
+            if current_active and current_plan == PLAN_PLUS:
+                user["queued_plus_seconds"] = queued_plus_seconds + _remaining_active_seconds(user, now)
+                user["queued_plus_origin"] = current_plan
+            _activate_premium_now(user, grant_seconds, now=now, source=source)
     else:
-        effective_plan = plan_value
-
-    # Para upgrades conservamos el tiempo restante y sumamos los nuevos días.
-    user["plan"] = effective_plan
-    user["plan_end"] = base_end + timedelta(days=int(days))
-    user["trial_end"] = None
-    user["subscription_status"] = SUBSCRIPTION_STATUS_ACTIVE
-    user["plan_started_at"] = user.get("plan_started_at") or now
-    user["last_plan_change_at"] = now
-    user["last_entitlement_source"] = source
+        raise ValueError(f"Plan de entitlement no soportado: {target_plan}")
 
     if purchase:
         user["last_purchase_at"] = now
@@ -322,7 +450,6 @@ def _apply_entitlement_to_user(
         user["last_purchase_days"] = int(days)
 
     return update_timestamp(user)
-
 
 
 def grant_plan_entitlement(
@@ -401,7 +528,14 @@ def activate_plan_purchase(
     )
 
     if success and trigger_referral:
-        _register_referral_after_activation(user_id, plan_value, purchased_days=day_value)
+        _register_referral_after_activation(
+            user_id,
+            plan_value,
+            purchased_days=day_value,
+            purchase_key=(metadata or {}).get("order_id"),
+            activation_source=source,
+            activation_metadata=metadata or {},
+        )
 
     if success:
         logger.info("✅ Compra aplicada | user=%s plan=%s days=%s source=%s", user_id, plan_value, day_value, source)
@@ -413,22 +547,37 @@ def activate_plan_purchase(
 # =========================
 
 def activate_plus(user_id: int, days: int = PLAN_DURATION_DAYS) -> bool:
-    return activate_plan_purchase(user_id, PLAN_PLUS, days=days, source="admin_manual")
+    return activate_plan_purchase(user_id, PLAN_PLUS, days=days, source="admin_manual", trigger_referral=False)
 
 
 
 def activate_premium(user_id: int, days: int = PLAN_DURATION_DAYS) -> bool:
-    return activate_plan_purchase(user_id, PLAN_PREMIUM, days=days, source="admin_manual")
+    return activate_plan_purchase(user_id, PLAN_PREMIUM, days=days, source="admin_manual", trigger_referral=False)
 
 
 
-def _register_referral_after_activation(user_id: int, plan: str, *, purchased_days: int) -> None:
+def _register_referral_after_activation(
+    user_id: int,
+    plan: str,
+    *,
+    purchased_days: int,
+    purchase_key: Optional[str] = None,
+    activation_source: str = "unknown",
+    activation_metadata: Optional[Dict[str, Any]] = None,
+) -> None:
     try:
         from app.referrals import register_valid_referral
 
-        success = register_valid_referral(user_id, plan, purchased_days=purchased_days)
+        success = register_valid_referral(
+            user_id,
+            plan,
+            purchased_days=purchased_days,
+            purchase_key=purchase_key,
+            activation_source=activation_source,
+            activation_metadata=activation_metadata or {},
+        )
         if success:
-            logger.info("✅ Referido registrado | user=%s plan=%s purchased_days=%s", user_id, plan, purchased_days)
+            logger.info("✅ Referido registrado | user=%s plan=%s purchased_days=%s purchase_key=%s", user_id, plan, purchased_days, purchase_key)
         else:
             logger.debug("ℹ️ No se registró referido para %s", user_id)
     except ImportError as exc:
@@ -446,36 +595,30 @@ def expire_plans() -> int:
     users_col = users_collection()
     processed = 0
 
-    expired_users = users_col.find({
-        "plan_end": {"$lt": now, "$ne": None},
-        "plan": {"$ne": PLAN_FREE},
+    candidates = users_col.find({
+        "$or": [
+            {"plan_end": {"$lt": now, "$ne": None}},
+            {"queued_plus_seconds": {"$gt": 0}},
+        ]
     })
 
-    for user in expired_users:
-        result = users_col.update_one(
-            {"user_id": user["user_id"]},
-            {
-                "$set": {
-                    "plan": PLAN_FREE,
-                    "plan_end": None,
-                    "subscription_status": SUBSCRIPTION_STATUS_EXPIRED,
-                    "last_plan_change_at": now,
-                    "updated_at": now,
-                }
-            },
+    for user in candidates:
+        before_plan = normalize_plan(user.get("plan"))
+        synced_user, dirty = _sync_deferred_plan_state(user)
+        if not dirty:
+            continue
+        save_user(synced_user)
+        processed += 1
+        _record_subscription_event(
+            user_id=user["user_id"],
+            event_type="expired" if synced_user.get("plan") == PLAN_FREE else "restore_queued_plus",
+            plan=before_plan,
+            days=0,
+            source="scheduler",
+            before_plan=before_plan,
+            after_plan=synced_user.get("plan"),
+            metadata={"queued_plus_seconds": int(synced_user.get("queued_plus_seconds") or 0)},
         )
-        if result.modified_count > 0:
-            processed += 1
-            _record_subscription_event(
-                user_id=user["user_id"],
-                event_type="expired",
-                plan=user.get("plan") or PLAN_FREE,
-                days=0,
-                source="scheduler",
-                before_plan=user.get("plan"),
-                after_plan=PLAN_FREE,
-                metadata={},
-            )
     return processed
 
 
