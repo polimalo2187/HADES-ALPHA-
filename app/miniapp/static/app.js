@@ -1409,6 +1409,137 @@ function adminRuntimeRoleCard(role, report = {}) {
   `;
 }
 
+function adminStrategyPipelineCard(item = {}) {
+  return `
+    <div class="card card-span-6">
+      <div class="item-header">
+        <div>
+          <h2 style="margin:0;">${escapeHtml(item.strategy_label || '—')}</h2>
+          <div class="item-subtitle">Intentos ${escapeHtml(item.attempted_symbols ?? 0)} · Pool ${escapeHtml(item.candidate_pool ?? 0)} · Publicadas ${escapeHtml(item.selected_signals ?? 0)}</div>
+        </div>
+        <span class="plan-tag">ADMIN</span>
+      </div>
+      <div class="account-metric-grid">
+        ${accountMetricCard('Intentos', item.attempted_symbols ?? 0)}
+        ${accountMetricCard('Pool candidato', item.candidate_pool ?? 0)}
+        ${accountMetricCard('Publicadas', item.selected_signals ?? 0)}
+        ${accountMetricCard('Rechazadas', item.rejected_symbols ?? 0)}
+      </div>
+      <div class="pill-row compact-pill-row" style="margin-top:12px;">
+        <span class="pill">Candidate rate ${escapeHtml(formatNumber(item.candidate_rate || 0))}%</span>
+        <span class="pill">Publish rate ${escapeHtml(formatNumber(item.publish_rate || 0))}%</span>
+        <span class="pill">Selección desde pool ${escapeHtml(formatNumber(item.selection_from_candidates_rate || 0))}%</span>
+      </div>
+    </div>
+  `;
+}
+
+function adminStrategyRejectCard(item = {}) {
+  const reasons = Array.isArray(item.top_reasons) ? item.top_reasons : [];
+  return `
+    <div class="item compact-item">
+      <div class="item-header">
+        <div>
+          <div class="item-title">${escapeHtml(item.strategy_label || '—')}</div>
+          <div class="item-subtitle">Rechazos terminales ${escapeHtml(item.rejected_symbols ?? 0)}</div>
+        </div>
+        <span class="plan-tag">TOP 5</span>
+      </div>
+      <div class="pill-row compact-pill-row" style="margin-top:8px;">
+        ${reasons.length ? reasons.map(reason => `<span class="pill">${escapeHtml(reason.reason_label || 'UNKNOWN')} · ${escapeHtml(reason.count ?? 0)}</span>`).join('') : '<span class="pill">Sin razones registradas todavía</span>'}
+      </div>
+    </div>
+  `;
+}
+
+function adminRegimeDistributionItem(item = {}) {
+  return `
+    <div class="item compact-item">
+      <div class="item-header">
+        <div>
+          <div class="item-title">${escapeHtml(item.regime_label || '—')}</div>
+          <div class="item-subtitle">Ciclos ${escapeHtml(item.cycles ?? 0)} · Intentos ${escapeHtml(item.attempted_symbols ?? 0)}</div>
+        </div>
+        <span class="plan-tag">${escapeHtml(item.selected_signals ?? 0)} sel</span>
+      </div>
+      <div class="inline-meta">
+        <span>Pool ${escapeHtml(item.candidate_pool ?? 0)}</span>
+        <span>Publicadas ${escapeHtml(item.selected_signals ?? 0)}</span>
+      </div>
+    </div>
+  `;
+}
+
+function adminRegimeStrategyItem(item = {}) {
+  return `
+    <div class="item compact-item">
+      <div class="item-header">
+        <div>
+          <div class="item-title">${escapeHtml(item.regime_label || '—')} → ${escapeHtml(item.strategy_label || '—')}</div>
+          <div class="item-subtitle">Pool ${escapeHtml(item.candidate_pool ?? 0)} · Publicadas ${escapeHtml(item.selected_signals ?? 0)}</div>
+        </div>
+        <span class="plan-tag">${escapeHtml(formatNumber(item.publish_rate || 0))}%</span>
+      </div>
+    </div>
+  `;
+}
+
+function adminLatestCycleCard(latestCycle = {}) {
+  if (!latestCycle?.available) {
+    return `
+      <div class="card card-span-12">
+        <h2>Shadow actual del scanner</h2>
+        <div class="empty-state">Todavía no hay telemetría viva del scanner. En cuanto corra el scanner, este bloque mostrará el último ciclo.</div>
+      </div>
+    `;
+  }
+  const attempts = Array.isArray(latestCycle.attempts_by_strategy) ? latestCycle.attempts_by_strategy : [];
+  const pool = Array.isArray(latestCycle.candidate_pool_by_strategy) ? latestCycle.candidate_pool_by_strategy : [];
+  const selected = Array.isArray(latestCycle.selected_by_strategy) ? latestCycle.selected_by_strategy : [];
+  const rejected = Array.isArray(latestCycle.rejected_by_strategy) ? latestCycle.rejected_by_strategy : [];
+  const reasons = Array.isArray(latestCycle.top_reject_reasons) ? latestCycle.top_reject_reasons : [];
+  const chips = [];
+  attempts.forEach(item => chips.push(`Intentos ${item.strategy_label}: ${item.count}`));
+  pool.forEach(item => chips.push(`Pool ${item.strategy_label}: ${item.count}`));
+  selected.forEach(item => chips.push(`Publicadas ${item.strategy_label}: ${item.count}`));
+  rejected.forEach(item => chips.push(`Rechazos ${item.strategy_label}: ${item.count}`));
+  return `
+    <div class="card card-span-12">
+      <div class="item-header">
+        <div>
+          <h2 style="margin:0;">Shadow actual del scanner</h2>
+          <div class="item-subtitle">Último ciclo vivo del scanner para validar de inmediato qué régimen está dominando y cómo está quedando el embudo.</div>
+        </div>
+        <span class="plan-tag">${escapeHtml(formatStatusLabel(latestCycle.status || 'unknown'))}</span>
+      </div>
+      <div class="pill-row compact-pill-row" style="margin-top:12px;">
+        <span class="pill">Ciclo ${escapeHtml(latestCycle.cycle_number ?? 0)}</span>
+        <span class="pill">Régimen ${escapeHtml(latestCycle.market_regime_label || '—')}</span>
+        <span class="pill">Bias ${escapeHtml(String(latestCycle.market_regime_bias || 'neutral').toUpperCase())}</span>
+        <span class="pill">Estrategia ${escapeHtml(latestCycle.market_strategy_label || '—')}</span>
+        <span class="pill">Actualizado ${escapeHtml(formatDate(latestCycle.generated_at))}</span>
+      </div>
+      <div class="account-metric-grid" style="margin-top:12px;">
+        ${accountMetricCard('Intentos', latestCycle.attempted_symbols_total ?? 0)}
+        ${accountMetricCard('Pool', latestCycle.candidate_pool_total ?? 0)}
+        ${accountMetricCard('Publicadas', latestCycle.selected_signals_total ?? 0)}
+        ${accountMetricCard('Rechazos', latestCycle.rejected_symbols_total ?? 0)}
+      </div>
+      <div class="pill-row compact-pill-row" style="margin-top:12px;">
+        ${chips.length ? chips.map(chip => `<span class="pill">${escapeHtml(chip)}</span>`).join('') : '<span class="pill">Sin conteos por estrategia todavía</span>'}
+      </div>
+      <div class="pill-row compact-pill-row" style="margin-top:8px;">
+        <span class="pill">Risk off ${escapeHtml(latestCycle.risk_off_symbols_total ?? 0)}</span>
+        <span class="pill">Fallos scanner ${escapeHtml(latestCycle.failure_symbols_total ?? 0)}</span>
+        <span class="pill">Motivo régimen ${escapeHtml(latestCycle.market_regime_reason || '—')}</span>
+      </div>
+      <div class="pill-row compact-pill-row" style="margin-top:8px;">
+        ${reasons.length ? reasons.map(reason => `<span class="pill">${escapeHtml(reason.reason_label || 'UNKNOWN')} · ${escapeHtml(reason.count ?? 0)}</span>`).join('') : '<span class="pill">Sin rechazos terminales en el último ciclo</span>'}
+      </div>
+    </div>
+  `;
+}
+
 function setRiskNotice(message, tone = 'warning') {
   const normalized = String(message || '').trim();
   state.riskCenter.notice = normalized ? { message: normalized, tone: String(tone || 'warning') } : null;
@@ -2160,6 +2291,13 @@ function renderAdmin() {
   const strategyDirections = Array.isArray(performance.strategy_direction_30d) ? performance.strategy_direction_30d : [];
   const weakSymbols = Array.isArray(performance.weak_symbols_30d) ? performance.weak_symbols_30d : [];
   const scoreBuckets = Array.isArray(performance.score_buckets_30d) ? performance.score_buckets_30d : [];
+  const strategyObservability = performance.strategy_observability_30d || {};
+  const strategyTelemetryOverview = strategyObservability.overview || {};
+  const strategyPipeline = Array.isArray(strategyObservability.strategy_pipeline) ? strategyObservability.strategy_pipeline : [];
+  const strategyRejects = Array.isArray(strategyObservability.reject_reasons_by_strategy) ? strategyObservability.reject_reasons_by_strategy : [];
+  const regimeDistribution = Array.isArray(strategyObservability.regime_distribution) ? strategyObservability.regime_distribution : [];
+  const regimeStrategyMatrix = Array.isArray(strategyObservability.regime_strategy_matrix) ? strategyObservability.regime_strategy_matrix : [];
+  const latestCycle = strategyObservability.latest_cycle || {};
   const manualActivation = state.adminPanel.manualActivation || {};
   const activationDraft = manualActivation.draft || { userId: '', plan: 'plus', days: '30' };
   const moderationState = state.adminPanel.moderation || { actionLoading: false, confirmAction: null, draft: { durationValue: '7', durationUnit: 'days' } };
@@ -2292,6 +2430,59 @@ function renderAdmin() {
         <h2>Símbolos más débiles (30D)</h2>
         <div class="list">
           ${weakSymbols.length ? weakSymbols.map(performanceWeakSymbolItem).join('') : '<div class="empty-state">No hay suficientes señales resueltas para diagnosticar símbolos.</div>'}
+        </div>
+      </div>
+
+      <div class="card card-span-12">
+        <div class="item-header">
+          <div>
+            <h2 style="margin:0;">Embudo interno por estrategia (telemetría admin)</h2>
+            <div class="item-subtitle">Intentos, pool candidato, publicadas y rechazos terminales del scanner. Este bloque existe solo para administración.</div>
+          </div>
+          <span class="plan-tag">${escapeHtml(strategyTelemetryOverview.telemetry_ready ? 'ACTIVO' : 'PENDIENTE')}</span>
+        </div>
+        <div class="pill-row compact-pill-row" style="margin-top:12px;">
+          <span class="pill">Ciclos ${escapeHtml(strategyTelemetryOverview.cycles_total ?? 0)}</span>
+          <span class="pill">Intentos ${escapeHtml(strategyTelemetryOverview.attempted_symbols_total ?? 0)}</span>
+          <span class="pill">Pool ${escapeHtml(strategyTelemetryOverview.candidate_pool_total ?? 0)}</span>
+          <span class="pill">Publicadas ${escapeHtml(strategyTelemetryOverview.selected_signals_total ?? 0)}</span>
+          <span class="pill">Rechazos ${escapeHtml(strategyTelemetryOverview.rejected_symbols_total ?? 0)}</span>
+          <span class="pill">Risk off ${escapeHtml(strategyTelemetryOverview.risk_off_symbols_total ?? 0)}</span>
+          <span class="pill">Cobertura ${escapeHtml(formatDate(strategyTelemetryOverview.coverage_started_at || strategyTelemetryOverview.latest_cycle_at))}</span>
+        </div>
+        <div class="notice-list" style="margin-top:12px;">
+          <div class="notice-item">La telemetría profunda del embudo empieza a contar desde que este build queda desplegado en producción.</div>
+          <div class="notice-item">Los bloques de rendimiento histórico y este embudo no miden lo mismo: uno mide resultados, el otro mide selección/rechazo del scanner.</div>
+        </div>
+      </div>
+
+      ${adminLatestCycleCard(latestCycle)}
+
+      <div class="card card-span-12">
+        <h2>Embudo por estrategia (30D)</h2>
+        <div class="section-grid">
+          ${strategyPipeline.length ? strategyPipeline.map(adminStrategyPipelineCard).join('') : '<div class="empty-state">Todavía no hay suficiente telemetría del scanner para construir el embudo histórico. El shadow actual del scanner sí mostrará el último ciclo en vivo.</div>'}
+        </div>
+      </div>
+
+      <div class="card card-span-6">
+        <h2>Rechazos terminales por estrategia (30D)</h2>
+        <div class="list">
+          ${strategyRejects.length ? strategyRejects.map(adminStrategyRejectCard).join('') : '<div class="empty-state">Aún no hay razones terminales suficientes registradas.</div>'}
+        </div>
+      </div>
+
+      <div class="card card-span-6">
+        <h2>Distribución por régimen (30D)</h2>
+        <div class="list">
+          ${regimeDistribution.length ? regimeDistribution.map(adminRegimeDistributionItem).join('') : '<div class="empty-state">Sin telemetría histórica de régimen todavía.</div>'}
+        </div>
+      </div>
+
+      <div class="card card-span-12">
+        <h2>Régimen → estrategia (30D)</h2>
+        <div class="list">
+          ${regimeStrategyMatrix.length ? regimeStrategyMatrix.map(adminRegimeStrategyItem).join('') : '<div class="empty-state">Todavía no hay cruces suficientes entre régimen y estrategia.</div>'}
         </div>
       </div>
 
