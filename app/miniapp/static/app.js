@@ -1912,12 +1912,43 @@ function performanceDirectionItem(item) {
   `;
 }
 
-function performanceSetupItem(item) {
+function performanceStrategyCard(item) {
+  return `
+    <div class="card card-span-6">
+      <div class="item-header">
+        <div>
+          <h2 style="margin:0;">${escapeHtml(item.strategy_label || '—')}</h2>
+          <div class="item-subtitle">Scanner ${escapeHtml(item.signals_total ?? 0)} · Score norm. ${escapeHtml(item.avg_score === null ? '—' : formatNumber(item.avg_score, 2))} · ${escapeHtml(item.primary_send_mode_label || 'Modelo no identificado')}</div>
+        </div>
+        <span class="plan-tag">30D</span>
+      </div>
+      <div class="account-metric-grid">
+        ${accountMetricCard('Resueltas', item.resolved ?? 0)}
+        ${accountMetricCard('Win rate', `${formatNumber(item.winrate || 0)}%`, '', metricToneClass('winrate', item.winrate || 0))}
+        ${accountMetricCard('PF (R)', formatRatioValue(item.profit_factor, item.profit_factor_infinite), '', metricToneClass('pf', item.profit_factor_infinite ? 999 : item.profit_factor || 0))}
+        ${accountMetricCard('Expectancy', formatNumber(item.expectancy_r || 0, 4), 'R por resuelta', metricToneClass('expectancy', item.expectancy_r || 0))}
+      </div>
+      <div class="pill-row compact-pill-row" style="margin-top:12px;">
+        <span class="pill">Fill rate ${escapeHtml(formatNumber(item.fill_rate || 0))}%</span>
+        <span class="pill">Exp no fill ${escapeHtml(item.expired_no_fill ?? 0)}</span>
+        <span class="pill">Exp tras entry ${escapeHtml(item.expired_after_entry ?? 0)}</span>
+        <span class="pill">Exp total ${escapeHtml(item.expired ?? 0)}</span>
+      </div>
+      <div class="pill-row compact-pill-row" style="margin-top:8px;">
+        <span class="pill">TP1 ${escapeHtml(item.tp1 ?? 0)}</span>
+        <span class="pill">TP2 ${escapeHtml(item.tp2 ?? 0)}</span>
+        <span class="pill">SL ${escapeHtml(item.sl ?? 0)}</span>
+      </div>
+    </div>
+  `;
+}
+
+function performanceStrategyDirectionItem(item) {
   return `
     <div class="item compact-item">
       <div class="item-header">
         <div>
-          <div class="item-title">${escapeHtml(item.setup_group || '—')}</div>
+          <div class="item-title">${escapeHtml(item.strategy_label || '—')} · ${escapeHtml(item.direction || '—')}</div>
           <div class="item-subtitle">Resueltas ${escapeHtml(item.resolved ?? 0)} · Exp ${escapeHtml(item.expired ?? 0)}</div>
         </div>
         <span class="plan-tag ${metricToneClass('winrate', item.winrate || 0)}">${escapeHtml(formatNumber(item.winrate || 0))}%</span>
@@ -1925,6 +1956,7 @@ function performanceSetupItem(item) {
       <div class="inline-meta">
         <span>PF ${escapeHtml(formatRatioValue(item.profit_factor, item.profit_factor_infinite))}</span>
         <span>Expectancy ${escapeHtml(formatNumber(item.expectancy_r || 0, 4))}R</span>
+        <span>Loss ${escapeHtml(item.lost ?? 0)}</span>
         <span>No fill ${escapeHtml(item.expired_no_fill ?? 0)}</span>
         <span>Tras entry ${escapeHtml(item.expired_after_entry ?? 0)}</span>
       </div>
@@ -1980,7 +2012,8 @@ function renderPerformance() {
   const windows = Array.isArray(payload.windows) ? payload.windows : [];
   const planBreakdown = Array.isArray(payload.plan_breakdown_30d) ? payload.plan_breakdown_30d : [];
   const directions = Array.isArray(payload.direction_30d) ? payload.direction_30d : [];
-  const setupGroups = Array.isArray(payload.setup_groups_30d) ? payload.setup_groups_30d : [];
+  const strategies = Array.isArray(payload.strategy_30d) ? payload.strategy_30d : [];
+  const strategyDirections = Array.isArray(payload.strategy_direction_30d) ? payload.strategy_direction_30d : [];
   const weakSymbols = Array.isArray(payload.weak_symbols_30d) ? payload.weak_symbols_30d : [];
   const scoreBuckets = Array.isArray(payload.score_buckets_30d) ? payload.score_buckets_30d : [];
 
@@ -1994,7 +2027,7 @@ function renderPerformance() {
         ${performanceNoticeCard(state.performanceCenter.notice)}
         <div class="card card-span-12">
           <h2>Rendimiento serio</h2>
-          <p>Módulo dedicado para revisar PF por R, expectancy, TP1/TP2/SL, actividad del scanner y breakdown por plan.</p>
+          <p>Módulo dedicado para revisar PF por R, expectancy, TP1/TP2/SL, actividad del scanner, breakdown por plan y rendimiento real por estrategia.</p>
           <div class="action-row"><button class="button button-primary" data-open-performance-center="true">Abrir rendimiento</button></div>
         </div>
       </div>
@@ -2057,7 +2090,7 @@ function renderPerformance() {
           <span class="pill">Fallo tras fill ${escapeHtml(formatNumber(summary.after_entry_failure_rate || 0))}%</span>
           <span class="pill">Gross +${escapeHtml(formatNumber(summary.gross_profit_r || 0, 4))}R</span>
           <span class="pill">Gross -${escapeHtml(formatNumber(summary.gross_loss_r || 0, 4))}R</span>
-          <span class="pill">Tiempo medio ${escapeHtml(summary.avg_resolution_minutes === null ? '—' : formatNumber(summary.avg_resolution_minutes, 2))} min</span>
+          <span class="pill">Eval media ${escapeHtml(summary.avg_resolution_minutes === null ? '—' : formatNumber(summary.avg_resolution_minutes, 2))} min</span>
         </div>
       </div>
 
@@ -2097,10 +2130,17 @@ function renderPerformance() {
         </div>
       </div>
 
+      <div class="card card-span-12">
+        <h2>Rendimiento por estrategia (30D)</h2>
+        <div class="section-grid">
+          ${strategies.length ? strategies.map(performanceStrategyCard).join('') : '<div class="empty-state">Sin datos suficientes por estrategia.</div>'}
+        </div>
+      </div>
+
       <div class="card card-span-6">
-        <h2>Setup groups (30D)</h2>
+        <h2>Estrategia × dirección (30D)</h2>
         <div class="list">
-          ${setupGroups.length ? setupGroups.map(performanceSetupItem).join('') : '<div class="empty-state">Sin setup groups calculados.</div>'}
+          ${strategyDirections.length ? strategyDirections.map(performanceStrategyDirectionItem).join('') : '<div class="empty-state">Sin cruces de estrategia por dirección.</div>'}
         </div>
       </div>
 
@@ -2547,7 +2587,7 @@ function renderHome() {
         <div class="item-header">
           <div>
             <h2 style="margin:0;">Rendimiento serio</h2>
-            <div class="item-subtitle">Abre el módulo dedicado para revisar PF por R, expectancy, setup groups, score buckets y breakdown por plan.</div>
+            <div class="item-subtitle">Abre el módulo dedicado para revisar PF por R, expectancy, score buckets, breakdown por plan y rendimiento por estrategia.</div>
           </div>
           <span class="plan-tag">30D</span>
         </div>
