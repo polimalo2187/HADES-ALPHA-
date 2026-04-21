@@ -26,7 +26,13 @@ from app.plans import (
     plan_status,
     validate_entitlement_days,
 )
-from app.statistics import build_performance_window, get_materialized_window, get_performance_snapshot
+from app.statistics import (
+    build_admin_strategy_observability,
+    build_performance_window,
+    get_latest_scanner_cycle_snapshot,
+    get_materialized_window,
+    get_performance_snapshot,
+)
 from app.user_service import get_or_create_user
 from app.models import utcnow
 from app.watchlist import get_watchlist, get_watchlist_limit_for_plan
@@ -2761,6 +2767,152 @@ def _serialize_performance_diagnostics(payload: Optional[Dict[str, Any]]) -> Dic
     }
 
 
+
+def _serialize_admin_strategy_pipeline_row(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    item = row if isinstance(row, dict) else {}
+    return {
+        "strategy_key": str(item.get("strategy_key") or "legacy_unknown"),
+        "strategy_label": str(item.get("strategy_label") or "Legacy / Sin clasificar"),
+        "attempted_symbols": int(item.get("attempted_symbols") or 0),
+        "candidate_pool": int(item.get("candidate_pool") or 0),
+        "selected_signals": int(item.get("selected_signals") or 0),
+        "rejected_symbols": int(item.get("rejected_symbols") or 0),
+        "candidate_rate": _finite_metric(item.get("candidate_rate"), 2) or 0.0,
+        "publish_rate": _finite_metric(item.get("publish_rate"), 2) or 0.0,
+        "selection_from_candidates_rate": _finite_metric(item.get("selection_from_candidates_rate"), 2) or 0.0,
+    }
+
+
+
+def _serialize_admin_strategy_reject_row(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    item = row if isinstance(row, dict) else {}
+    top_reasons = item.get("top_reasons") if isinstance(item.get("top_reasons"), list) else []
+    return {
+        "strategy_key": str(item.get("strategy_key") or "legacy_unknown"),
+        "strategy_label": str(item.get("strategy_label") or "Legacy / Sin clasificar"),
+        "rejected_symbols": int(item.get("rejected_symbols") or 0),
+        "top_reasons": [
+            {
+                "reason": str(reason.get("reason") or "unknown"),
+                "reason_label": str(reason.get("reason_label") or "UNKNOWN"),
+                "count": int(reason.get("count") or 0),
+            }
+            for reason in top_reasons if isinstance(reason, dict)
+        ],
+    }
+
+
+
+def _serialize_admin_regime_distribution_row(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    item = row if isinstance(row, dict) else {}
+    return {
+        "regime_state": str(item.get("regime_state") or "unknown"),
+        "regime_label": str(item.get("regime_label") or "Sin clasificar"),
+        "cycles": int(item.get("cycles") or 0),
+        "attempted_symbols": int(item.get("attempted_symbols") or 0),
+        "candidate_pool": int(item.get("candidate_pool") or 0),
+        "selected_signals": int(item.get("selected_signals") or 0),
+    }
+
+
+
+def _serialize_admin_regime_strategy_row(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    item = row if isinstance(row, dict) else {}
+    return {
+        "regime_state": str(item.get("regime_state") or "unknown"),
+        "regime_label": str(item.get("regime_label") or "Sin clasificar"),
+        "strategy_key": str(item.get("strategy_key") or "legacy_unknown"),
+        "strategy_label": str(item.get("strategy_label") or "Legacy / Sin clasificar"),
+        "candidate_pool": int(item.get("candidate_pool") or 0),
+        "selected_signals": int(item.get("selected_signals") or 0),
+        "publish_rate": _finite_metric(item.get("publish_rate"), 2) or 0.0,
+    }
+
+
+
+def _serialize_admin_strategy_observability(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    base = payload if isinstance(payload, dict) else {}
+    overview = base.get("overview") if isinstance(base.get("overview"), dict) else {}
+    latest_cycle_raw = base.get("latest_cycle") if isinstance(base.get("latest_cycle"), dict) else (_safe_call(get_latest_scanner_cycle_snapshot, {}) or {})
+    return {
+        "overview": {
+            "window_days": int(overview.get("window_days") or 30),
+            "cycles_total": int(overview.get("cycles_total") or 0),
+            "attempted_symbols_total": int(overview.get("attempted_symbols_total") or 0),
+            "candidate_pool_total": int(overview.get("candidate_pool_total") or 0),
+            "selected_signals_total": int(overview.get("selected_signals_total") or 0),
+            "rejected_symbols_total": int(overview.get("rejected_symbols_total") or 0),
+            "risk_off_symbols_total": int(overview.get("risk_off_symbols_total") or 0),
+            "failure_symbols_total": int(overview.get("failure_symbols_total") or 0),
+            "telemetry_ready": bool(overview.get("telemetry_ready")),
+            "coverage_started_at": _iso(overview.get("coverage_started_at")),
+            "latest_cycle_at": _iso(overview.get("latest_cycle_at")),
+        },
+        "strategy_pipeline": [_serialize_admin_strategy_pipeline_row(row) for row in (base.get("strategy_pipeline") or [])],
+        "reject_reasons_by_strategy": [_serialize_admin_strategy_reject_row(row) for row in (base.get("reject_reasons_by_strategy") or [])],
+        "regime_distribution": [_serialize_admin_regime_distribution_row(row) for row in (base.get("regime_distribution") or [])],
+        "regime_strategy_matrix": [_serialize_admin_regime_strategy_row(row) for row in (base.get("regime_strategy_matrix") or [])],
+        "latest_cycle": {
+            "available": bool(latest_cycle_raw.get("available")),
+            "generated_at": _iso(latest_cycle_raw.get("generated_at")),
+            "status": str(latest_cycle_raw.get("status") or "unknown"),
+            "cycle_number": int(latest_cycle_raw.get("cycle_number") or 0),
+            "attempted_symbols_total": int(latest_cycle_raw.get("attempted_symbols_total") or 0),
+            "candidate_pool_total": int(latest_cycle_raw.get("candidate_pool_total") or 0),
+            "selected_signals_total": int(latest_cycle_raw.get("selected_signals_total") or 0),
+            "rejected_symbols_total": int(latest_cycle_raw.get("rejected_symbols_total") or 0),
+            "risk_off_symbols_total": int(latest_cycle_raw.get("risk_off_symbols_total") or 0),
+            "failure_symbols_total": int(latest_cycle_raw.get("failure_symbols_total") or 0),
+            "market_regime_state": str(latest_cycle_raw.get("market_regime_state") or "unknown"),
+            "market_regime_label": str(latest_cycle_raw.get("market_regime_label") or "Sin clasificar"),
+            "market_regime_bias": str(latest_cycle_raw.get("market_regime_bias") or "neutral"),
+            "market_regime_reason": str(latest_cycle_raw.get("market_regime_reason") or "market_regime_unknown"),
+            "market_strategy_key": str(latest_cycle_raw.get("market_strategy_key") or "legacy_unknown"),
+            "market_strategy_label": str(latest_cycle_raw.get("market_strategy_label") or "Legacy / Sin clasificar"),
+            "attempts_by_strategy": [
+                {
+                    "strategy_key": str(row.get("strategy_key") or "legacy_unknown"),
+                    "strategy_label": str(row.get("strategy_label") or "Legacy / Sin clasificar"),
+                    "count": int(row.get("count") or 0),
+                }
+                for row in (latest_cycle_raw.get("attempts_by_strategy") or []) if isinstance(row, dict)
+            ],
+            "candidate_pool_by_strategy": [
+                {
+                    "strategy_key": str(row.get("strategy_key") or "legacy_unknown"),
+                    "strategy_label": str(row.get("strategy_label") or "Legacy / Sin clasificar"),
+                    "count": int(row.get("count") or 0),
+                }
+                for row in (latest_cycle_raw.get("candidate_pool_by_strategy") or []) if isinstance(row, dict)
+            ],
+            "selected_by_strategy": [
+                {
+                    "strategy_key": str(row.get("strategy_key") or "legacy_unknown"),
+                    "strategy_label": str(row.get("strategy_label") or "Legacy / Sin clasificar"),
+                    "count": int(row.get("count") or 0),
+                }
+                for row in (latest_cycle_raw.get("selected_by_strategy") or []) if isinstance(row, dict)
+            ],
+            "rejected_by_strategy": [
+                {
+                    "strategy_key": str(row.get("strategy_key") or "legacy_unknown"),
+                    "strategy_label": str(row.get("strategy_label") or "Legacy / Sin clasificar"),
+                    "count": int(row.get("count") or 0),
+                }
+                for row in (latest_cycle_raw.get("rejected_by_strategy") or []) if isinstance(row, dict)
+            ],
+            "top_reject_reasons": [
+                {
+                    "reason": str(row.get("reason") or "unknown"),
+                    "reason_label": str(row.get("reason_label") or "UNKNOWN"),
+                    "count": int(row.get("count") or 0),
+                }
+                for row in (latest_cycle_raw.get("top_reject_reasons") or []) if isinstance(row, dict)
+            ],
+        },
+    }
+
+
 def build_performance_center_payload(user: Dict[str, Any], *, focus_days: int = 30) -> Dict[str, Any]:
     requested_focus = int(focus_days or 30)
     focus_days = requested_focus if requested_focus in {7, 30, 3650} else 30
@@ -2848,6 +3000,9 @@ def build_admin_performance_payload(*, focus_days: int = 30) -> Dict[str, Any]:
     focus_payload = next((item for item in windows if item["days"] == focus_days), windows[1])
     by_plan = snapshot.get("by_plan_30d") if isinstance(snapshot.get("by_plan_30d"), dict) else {}
     activity_by_plan = snapshot.get("activity_by_plan_30d") if isinstance(snapshot.get("activity_by_plan_30d"), dict) else {}
+    strategy_observability = _serialize_admin_strategy_observability(
+        _safe_call(lambda: build_admin_strategy_observability(days=30), {}) or {}
+    )
 
     return {
         "overview": {
@@ -2870,6 +3025,7 @@ def build_admin_performance_payload(*, focus_days: int = 30) -> Dict[str, Any]:
         "weak_symbols_30d": [_serialize_performance_symbol_row(row) for row in (snapshot.get("worst_symbols_30d") or [])],
         "score_buckets_30d": [_serialize_performance_score_bucket(row) for row in ((snapshot.get("by_score_30d") or {}).get("buckets") or [])],
         "diagnostics_30d": _serialize_performance_diagnostics(snapshot.get("diagnostics_30d")),
+        "strategy_observability_30d": strategy_observability,
     }
 
 def build_account_center_payload(user: Dict[str, Any]) -> Dict[str, Any]:
