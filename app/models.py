@@ -7,8 +7,8 @@ from typing import Any, Dict, List, Optional
 # CONSTANTES CONFIGURABLES
 # =========================
 TRIAL_DAYS = 7
-USER_SCHEMA_VERSION = 3
-REFERRAL_SCHEMA_VERSION = 2
+USER_SCHEMA_VERSION = 4
+REFERRAL_SCHEMA_VERSION = 3
 SIGNAL_SCHEMA_VERSION = 1
 USER_SIGNAL_SCHEMA_VERSION = 1
 SIGNAL_RESULT_SCHEMA_VERSION = 1
@@ -53,6 +53,8 @@ def new_user(
         "last_purchase_plan": None,
         "last_purchase_days": 0,
         "last_entitlement_source": None,
+        "queued_plus_seconds": 0,
+        "queued_plus_origin": None,
         "ref_code": f"ref_{user_id}",
         "referred_by": referred_by,
         "ref_plus_valid": 0,
@@ -144,9 +146,12 @@ def is_trial_active(user: Dict[str, Any]) -> bool:
 
 
 def is_plan_active(user: Dict[str, Any]) -> bool:
-    if user.get("plan_end") is None:
-        return False
-    return user["plan_end"] >= utcnow()
+    now = utcnow()
+    plan_end = user.get("plan_end")
+    if plan_end is not None and plan_end >= now:
+        return True
+    queued_plus_seconds = int(user.get("queued_plus_seconds") or 0)
+    return queued_plus_seconds > 0
 
 
 # =========================
@@ -159,6 +164,7 @@ def new_referral(
     reward_days_applied: int = 7,
     activated_days: int = 30,
     reward_plan_applied: Optional[str] = None,
+    purchase_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     now = utcnow()
     return {
@@ -169,6 +175,7 @@ def new_referral(
         "activated_at": now,
         "reward_days_applied": int(reward_days_applied),
         "reward_plan_applied": reward_plan_applied or activated_plan,
+        "purchase_key": str(purchase_key or f"legacy:{referrer_id}:{referred_id}:{activated_plan}:{activated_days}"),
         "schema_version": REFERRAL_SCHEMA_VERSION,
         "created_at": now,
         "updated_at": now,
