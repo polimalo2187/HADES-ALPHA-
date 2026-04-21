@@ -35,6 +35,17 @@ class MiniAppAdminEndpointTests(unittest.TestCase):
             'payments': {'configuration_ready': True, 'pending_orders': 1, 'awaiting_confirmation': 0, 'paid_last_24h': 2},
             'audit': {'errors_last_24h': 0, 'warnings_last_24h': 1},
         }
+        performance_payload = {
+            'overview': {'focus_days': 30, 'focus_label': '30D'},
+            'focus': {'summary': {'resolved': 12}, 'activity': {'signals_total': 20}},
+            'plan_breakdown_30d': [],
+            'direction_30d': [],
+            'strategy_30d': [{'strategy_key': 'breakout_reset'}],
+            'strategy_direction_30d': [],
+            'weak_symbols_30d': [],
+            'score_buckets_30d': [],
+            'diagnostics_30d': {},
+        }
         with patch('app.miniapp.app.initialize_database'), \
              patch('app.miniapp.app.start_background_heartbeat'), \
              patch('app.miniapp.app.get_mini_app_cors_origins', return_value=['https://hades.example.com']), \
@@ -42,7 +53,8 @@ class MiniAppAdminEndpointTests(unittest.TestCase):
              patch('app.miniapp.app.parse_session_token', return_value={'uid': 999}), \
              patch('app.miniapp.app.get_user_by_id', return_value={'user_id': 999, 'banned': False}), \
              patch('app.miniapp.app.is_admin', return_value=True), \
-             patch('app.miniapp.app.get_admin_operational_overview', return_value=payload):
+             patch('app.miniapp.app.get_admin_operational_overview', return_value=payload), \
+             patch('app.miniapp.app.build_admin_performance_payload', return_value=performance_payload):
             with self._build_client() as client:
                 response = client.get('/api/miniapp/admin/overview', headers={'Authorization': 'Bearer token'})
 
@@ -53,6 +65,7 @@ class MiniAppAdminEndpointTests(unittest.TestCase):
         self.assertEqual(body['users']['plus_active'], 2)
         self.assertEqual(body['users']['premium_active'], 2)
         self.assertTrue(body['runtime']['ok'])
+        self.assertEqual(body['performance']['strategy_30d'][0]['strategy_key'], 'breakout_reset')
 
 
     def test_admin_incidents_returns_payload_for_admin(self):
