@@ -22,6 +22,7 @@ PAYMENT_ORDER_SCHEMA_VERSION = 1
 PAYMENT_VERIFICATION_LOG_SCHEMA_VERSION = 1
 AUDIT_LOG_SCHEMA_VERSION = 1
 HEALTH_STATUS_SCHEMA_VERSION = 1
+SCANNER_CYCLE_STAT_SCHEMA_VERSION = 1
 
 
 def utcnow() -> datetime:
@@ -334,6 +335,64 @@ def new_health_status(
         "status": str(status),
         "details": details or {},
         "schema_version": HEALTH_STATUS_SCHEMA_VERSION,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+
+def new_scanner_cycle_stat(
+    *,
+    cycle_number: int,
+    status: str,
+    cycle_started_at: datetime,
+    duration_seconds: float,
+    scan_interval_seconds: int,
+    bootstrap_mode: bool,
+    universe_symbols_total: int,
+    active_symbols_total: int,
+    attempted_symbols_total: int,
+    candidate_pool_total: int,
+    selected_signals_total: int,
+    rejected_symbols_total: int,
+    risk_off_symbols_total: int,
+    failure_symbols_total: int,
+    failure_samples: Optional[List[str]] = None,
+    market_regime: Optional[Dict[str, Any]] = None,
+    attempts_by_strategy: Optional[Dict[str, int]] = None,
+    candidate_pool_by_strategy: Optional[Dict[str, int]] = None,
+    selected_by_strategy: Optional[Dict[str, int]] = None,
+    rejected_by_strategy: Optional[Dict[str, int]] = None,
+    reject_reasons: Optional[Dict[str, int]] = None,
+    reject_reasons_by_strategy: Optional[Dict[str, Dict[str, int]]] = None,
+    cache_stats: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    now = utcnow()
+    return {
+        "cycle_number": int(cycle_number),
+        "status": str(status),
+        "cycle_started_at": cycle_started_at,
+        "duration_seconds": round(float(duration_seconds), 6),
+        "scan_interval_seconds": int(scan_interval_seconds),
+        "bootstrap_mode": bool(bootstrap_mode),
+        "universe_symbols_total": int(universe_symbols_total),
+        "active_symbols_total": int(active_symbols_total),
+        "attempted_symbols_total": int(attempted_symbols_total),
+        "candidate_pool_total": int(candidate_pool_total),
+        "selected_signals_total": int(selected_signals_total),
+        "rejected_symbols_total": int(rejected_symbols_total),
+        "risk_off_symbols_total": int(risk_off_symbols_total),
+        "failure_symbols_total": int(failure_symbols_total),
+        "failure_samples": list(failure_samples or []),
+        "market_regime": market_regime or {},
+        "attempts_by_strategy": attempts_by_strategy or {},
+        "candidate_pool_by_strategy": candidate_pool_by_strategy or {},
+        "selected_by_strategy": selected_by_strategy or {},
+        "rejected_by_strategy": rejected_by_strategy or {},
+        "reject_reasons": reject_reasons or {},
+        "reject_reasons_by_strategy": reject_reasons_by_strategy or {},
+        "cache_stats": cache_stats or {},
+        "schema_version": SCANNER_CYCLE_STAT_SCHEMA_VERSION,
         "created_at": now,
         "updated_at": now,
     }
