@@ -48,6 +48,19 @@ def test_liquidity_strategy_emits_pending_pullback_candidate(monkeypatch):
 
 
 
+def test_liquidity_profiles_preserve_quality_hierarchy():
+    free = strategy.FREE_PROFILE
+    plus = strategy.PLUS_PROFILE
+    premium = strategy.PREMIUM_PROFILE
+
+    assert free["min_sweep_atr"] < plus["min_sweep_atr"] < premium["min_sweep_atr"]
+    assert free["min_rel_volume"] < plus["min_rel_volume"] < premium["min_rel_volume"]
+    assert free["min_confirm_rel_volume"] < plus["min_confirm_rel_volume"] < premium["min_confirm_rel_volume"]
+    assert free["min_body_ratio_confirmation"] < plus["min_body_ratio_confirmation"] < premium["min_body_ratio_confirmation"]
+    assert free["min_close_position"] < plus["min_close_position"] < premium["min_close_position"]
+    assert free["min_rr"] < plus["min_rr"] < premium["min_rr"]
+
+
 def test_liquidity_higher_timeframe_context_is_tiered(monkeypatch):
     prepared = pd.DataFrame([
         {"close": 100.0, "ema20": 100.6, "ema50": 101.0},
@@ -66,11 +79,15 @@ def test_liquidity_higher_timeframe_context_is_tiered(monkeypatch):
 def test_directional_profile_hardens_long_and_premium():
     free_long = strategy._directional_profile(strategy.FREE_PROFILE, "LONG")
     free_short = strategy._directional_profile(strategy.FREE_PROFILE, "SHORT")
+    plus_long = strategy._directional_profile(strategy.PLUS_PROFILE, "LONG")
+    plus_short = strategy._directional_profile(strategy.PLUS_PROFILE, "SHORT")
     premium_long = strategy._directional_profile(strategy.PREMIUM_PROFILE, "LONG")
     premium_short = strategy._directional_profile(strategy.PREMIUM_PROFILE, "SHORT")
 
     assert free_long["min_sweep_atr"] > strategy.FREE_PROFILE["min_sweep_atr"]
     assert free_long["min_rr"] > free_short["min_rr"]
+    assert plus_long["min_confirm_rel_volume"] > plus_short["min_confirm_rel_volume"]
+    assert plus_long["min_rr"] > plus_short["min_rr"]
     assert premium_short["min_confirm_rel_volume"] > strategy.PREMIUM_PROFILE["min_confirm_rel_volume"]
     assert premium_long["min_confirm_rel_volume"] > premium_short["min_confirm_rel_volume"]
     assert premium_long["htf_required_score"] >= premium_short["htf_required_score"]
