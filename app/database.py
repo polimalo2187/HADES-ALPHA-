@@ -142,7 +142,7 @@ def scanner_cycle_stats_collection():
 UNIQUE_INDEX_DUPLICATE_QUERIES = {
     "users.user_id": ["user_id"],
     "users.ref_code": ["ref_code"],
-    "referrals.referrer_id_referred_id": ["referrer_id", "referred_id"],
+    "referrals.purchase_key": ["purchase_key"],
     "user_signals.user_id_signal_id": ["user_id", "signal_id"],
     "signal_results.base_signal_id": ["base_signal_id"],
     "watchlists.user_id": ["user_id"],
@@ -165,7 +165,8 @@ COLLECTION_INDEX_MODELS = {
         IndexModel([("updated_at", DESCENDING)], name="updated_at_idx"),
     ],
     "referrals": [
-        IndexModel([("referrer_id", ASCENDING), ("referred_id", ASCENDING)], name="referrer_referred_unique", unique=True),
+        IndexModel([("purchase_key", ASCENDING)], name="purchase_key_unique", unique=True, sparse=True),
+        IndexModel([("referrer_id", ASCENDING), ("referred_id", ASCENDING)], name="referrer_referred_idx"),
         IndexModel([("referred_id", ASCENDING)], name="referred_id_idx"),
         IndexModel([("activated_plan", ASCENDING), ("activated_at", DESCENDING)], name="activated_plan_idx"),
         IndexModel([("schema_version", ASCENDING)], name="schema_version_idx"),
@@ -306,6 +307,30 @@ def _find_duplicate_groups(collection_name: str, fields: Sequence[str], limit: i
 
 
 
+def _reconcile_referrals_purchase_index() -> None:
+    collection = referrals_collection()
+    legacy_name = "referrer_referred_unique"
+    desired_name = "purchase_key_unique"
+
+    try:
+        existing_indexes = {item.get("name"): item for item in collection.list_indexes()}
+    except PyMongoError as exc:
+        logger.error("❌ No se pudieron leer índices de referrals: %s", exc, exc_info=True)
+        return
+
+    legacy = existing_indexes.get(legacy_name)
+    if legacy and legacy.get("unique"):
+        try:
+            collection.drop_index(legacy_name)
+            logger.warning("⚠️ Índice legacy %s eliminado en referrals para permitir múltiples compras por referido", legacy_name)
+        except PyMongoError as exc:
+            logger.error("❌ No se pudo eliminar índice legacy %s en referrals: %s", legacy_name, exc, exc_info=True)
+            return
+
+    purchase_idx = existing_indexes.get(desired_name)
+    if purchase_idx and purchase_idx.get("unique"):
+        return
+
 def _reconcile_payment_orders_tx_hash_index() -> None:
     """Corrige el índice único de tx_hash para no bloquear órdenes sin pago asociado."""
     collection = payment_orders_collection()
@@ -402,6 +427,7 @@ def initialize_database() -> None:
         return
 
     _reconcile_payment_orders_tx_hash_index()
+    _reconcile_referrals_purchase_index()
 
     for collection_name, index_models in COLLECTION_INDEX_MODELS.items():
         _safe_create_indexes(collection_name, index_models)
