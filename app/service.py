@@ -15,6 +15,7 @@ from app.market import get_market_state_snapshot
 from app.payment_service import get_active_payment_order_for_user
 from app.referrals import get_referral_link, get_referral_reward_rules, get_user_referral_stats
 from app.plans import (
+    get_user as get_user_with_plan_sync,
     PLAN_FREE,
     PLAN_PLUS,
     PLAN_PREMIUM,
@@ -3143,4 +3144,4 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
-    return users_collection().find_one({"user_id": int(user_id)})
+    return get_user_with_plan_sync(int(user_id))
