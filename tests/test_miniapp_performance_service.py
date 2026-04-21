@@ -88,9 +88,19 @@ class MiniAppPerformanceServiceTests(unittest.TestCase):
             'computed_for_range': {'from': None, 'to': None},
         }
 
+        strategy_observability = {
+            'overview': {'window_days': 30, 'cycles_total': 120, 'attempted_symbols_total': 2400, 'candidate_pool_total': 80, 'selected_signals_total': 40, 'rejected_symbols_total': 2320, 'risk_off_symbols_total': 10, 'failure_symbols_total': 2, 'telemetry_ready': True, 'coverage_started_at': None, 'latest_cycle_at': None},
+            'strategy_pipeline': [{'strategy_key': 'breakout_reset', 'strategy_label': 'Breakout + Reset', 'attempted_symbols': 1000, 'candidate_pool': 20, 'selected_signals': 8, 'rejected_symbols': 980, 'candidate_rate': 2.0, 'publish_rate': 0.8, 'selection_from_candidates_rate': 40.0}],
+            'reject_reasons_by_strategy': [{'strategy_key': 'breakout_reset', 'strategy_label': 'Breakout + Reset', 'rejected_symbols': 980, 'top_reasons': [{'reason': 'trend_structure', 'reason_label': 'TREND STRUCTURE', 'count': 400}]}],
+            'regime_distribution': [{'regime_state': 'continuation_clean', 'regime_label': 'Continuation clean', 'cycles': 20, 'attempted_symbols': 1000, 'candidate_pool': 20, 'selected_signals': 8}],
+            'regime_strategy_matrix': [{'regime_state': 'continuation_clean', 'regime_label': 'Continuation clean', 'strategy_key': 'breakout_reset', 'strategy_label': 'Breakout + Reset', 'candidate_pool': 20, 'selected_signals': 8, 'publish_rate': 40.0}],
+            'latest_cycle': {'available': True, 'generated_at': None, 'status': 'ok', 'cycle_number': 55, 'attempted_symbols_total': 48, 'candidate_pool_total': 2, 'selected_signals_total': 1, 'rejected_symbols_total': 46, 'risk_off_symbols_total': 0, 'failure_symbols_total': 0, 'market_regime_state': 'continuation_clean', 'market_regime_label': 'Continuation clean', 'market_regime_bias': 'bullish', 'market_regime_reason': 'clean_breakout', 'market_strategy_key': 'breakout_reset', 'market_strategy_label': 'Breakout + Reset', 'attempts_by_strategy': [{'strategy_key': 'breakout_reset', 'strategy_label': 'Breakout + Reset', 'count': 48}], 'candidate_pool_by_strategy': [{'strategy_key': 'breakout_reset', 'strategy_label': 'Breakout + Reset', 'count': 2}], 'selected_by_strategy': [{'strategy_key': 'breakout_reset', 'strategy_label': 'Breakout + Reset', 'count': 1}], 'rejected_by_strategy': [{'strategy_key': 'breakout_reset', 'strategy_label': 'Breakout + Reset', 'count': 46}], 'top_reject_reasons': [{'reason': 'trend_structure', 'reason_label': 'TREND STRUCTURE', 'count': 16}]},
+        }
+
         with patch('app.miniapp.service.get_performance_snapshot', return_value=snapshot), \
              patch('app.miniapp.service.get_materialized_window', return_value=None), \
-             patch('app.miniapp.service.build_performance_window', return_value=total_payload):
+             patch('app.miniapp.service.build_performance_window', return_value=total_payload), \
+             patch('app.miniapp.service.build_admin_strategy_observability', return_value=strategy_observability):
             payload = build_admin_performance_payload(focus_days=3650)
 
         self.assertEqual(payload['focus']['label'], 'Total')
@@ -102,6 +112,9 @@ class MiniAppPerformanceServiceTests(unittest.TestCase):
         self.assertEqual(payload['weak_symbols_30d'][0]['symbol'], 'BTCUSDT')
         self.assertEqual(payload['score_buckets_30d'][0]['label'], '90+')
         self.assertEqual(payload['diagnostics_30d']['expired_after_entry'], 1)
+        self.assertEqual(payload['strategy_observability_30d']['overview']['cycles_total'], 120)
+        self.assertEqual(payload['strategy_observability_30d']['strategy_pipeline'][0]['attempted_symbols'], 1000)
+        self.assertEqual(payload['strategy_observability_30d']['latest_cycle']['market_strategy_key'], 'breakout_reset')
 
 
 if __name__ == '__main__':
