@@ -95,6 +95,7 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
         self.assertIn('function resetRadarView(', text)
         self.assertIn('Base de usuarios', text)
         self.assertIn('Salud operativa', text)
+        self.assertIn('Inteligencia interna de rendimiento', text)
         self.assertIn('Moderación de usuario', text)
         self.assertIn('data-admin-moderation-action', text)
         self.assertIn('data-admin-moderation-confirm', text)
@@ -118,6 +119,7 @@ class MiniAppFrontendHelpersTests(unittest.TestCase):
         self.assertIn("Fallo tras fill", text)
         self.assertIn("Exp no fill ${escapeHtml(summary.expired_no_fill ?? 0)}", text)
         self.assertIn("Exp tras entry ${escapeHtml(summary.expired_after_entry ?? 0)}", text)
+        self.assertIn('Los diagnósticos internos por estrategia, score, dirección y setup viven solo dentro del panel de administración.', text)
 
 if __name__ == '__main__':
     unittest.main()
