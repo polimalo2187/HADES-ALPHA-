@@ -5,10 +5,12 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional
 
 from app.database import (
+    scanner_cycle_stats_collection,
     signal_results_collection,
     signals_collection,
     signal_history_collection,
     stats_snapshots_collection,
+    system_health_collection,
     user_signals_collection,
 )
 from app.models import new_stats_snapshot, STATS_SNAPSHOT_SCHEMA_VERSION
@@ -193,6 +195,55 @@ def _resolve_result_signal_meta(
 def _strategy_sort_key(strategy_key: Any) -> tuple[int, str]:
     normalized = str(strategy_key or "legacy_unknown").strip().lower()
     return (_STRATEGY_SORT_ORDER.get(normalized, 50), normalized)
+
+
+
+def _regime_label(regime_state: Any) -> str:
+    normalized = str(regime_state or "unknown").strip().lower() or "unknown"
+    return {
+        "continuation_clean": "Continuation clean",
+        "sweep_reversal": "Sweep reversal",
+        "risk_off": "Risk off",
+        "unknown": "Sin clasificar",
+    }.get(normalized, normalized.replace("_", " ").title())
+
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        if value is None:
+            return 0
+        return int(value)
+    except Exception:
+        return 0
+
+
+
+def _normalize_count_dict(payload: Any) -> Dict[str, int]:
+    if not isinstance(payload, dict):
+        return {}
+    normalized: Dict[str, int] = {}
+    for key, value in payload.items():
+        key_normalized = _normalize_strategy_key(key)
+        normalized[key_normalized] = int(normalized.get(key_normalized, 0)) + _safe_int(value)
+    return normalized
+
+
+
+def _normalize_reason_count_dict(payload: Any) -> Dict[str, int]:
+    if not isinstance(payload, dict):
+        return {}
+    normalized: Dict[str, int] = {}
+    for key, value in payload.items():
+        reason = str(key or "unknown").strip() or "unknown"
+        normalized[reason] = int(normalized.get(reason, 0)) + _safe_int(value)
+    return normalized
+
+
+
+def _format_reject_reason(reason: Any) -> str:
+    normalized = str(reason or "unknown").strip() or "unknown"
+    return normalized.replace("_", " ").upper()
 
 
 
@@ -743,6 +794,268 @@ def _build_diagnostics_summary(results: List[Dict[str, Any]], signals: List[Dict
         "expectancy_r": stats["expectancy_r"],
         "max_drawdown_r": stats["max_drawdown_r"],
         "avg_resolution_minutes": stats["avg_resolution_minutes"],
+    }
+
+
+
+def _fetch_scanner_cycle_stats(from_date: datetime) -> List[Dict[str, Any]]:
+    query: Dict[str, Any] = {"cycle_started_at": {"$gte": from_date}}
+    projection = {
+        "cycle_number": 1,
+        "cycle_started_at": 1,
+        "duration_seconds": 1,
+        "scan_interval_seconds": 1,
+        "bootstrap_mode": 1,
+        "universe_symbols_total": 1,
+        "active_symbols_total": 1,
+        "attempted_symbols_total": 1,
+        "candidate_pool_total": 1,
+        "selected_signals_total": 1,
+        "rejected_symbols_total": 1,
+        "risk_off_symbols_total": 1,
+        "failure_symbols_total": 1,
+        "failure_samples": 1,
+        "market_regime": 1,
+        "attempts_by_strategy": 1,
+        "candidate_pool_by_strategy": 1,
+        "selected_by_strategy": 1,
+        "rejected_by_strategy": 1,
+        "reject_reasons": 1,
+        "reject_reasons_by_strategy": 1,
+        "created_at": 1,
+    }
+    return list(scanner_cycle_stats_collection().find(query, projection))
+
+
+
+def get_latest_scanner_cycle_snapshot() -> Dict[str, Any]:
+    row = system_health_collection().find_one({"component": "scanner"}) or {}
+    details = row.get("details") if isinstance(row.get("details"), dict) else {}
+    payload = details.get("strategy_observability") if isinstance(details.get("strategy_observability"), dict) else {}
+    market_regime = payload.get("market_regime") if isinstance(payload.get("market_regime"), dict) else {}
+    candidate_pool_by_strategy = _normalize_count_dict(payload.get("candidate_pool_by_strategy"))
+    selected_by_strategy = _normalize_count_dict(payload.get("selected_by_strategy"))
+    rejected_by_strategy = _normalize_count_dict(payload.get("rejected_by_strategy"))
+    attempts_by_strategy = _normalize_count_dict(payload.get("attempts_by_strategy"))
+    reject_reasons = _normalize_reason_count_dict(payload.get("reject_reasons"))
+
+    candidate_rows = [
+        {
+            "strategy_key": strategy_key,
+            "strategy_label": _strategy_label(strategy_key),
+            "count": count,
+        }
+        for strategy_key, count in sorted(candidate_pool_by_strategy.items(), key=lambda item: (_strategy_sort_key(item[0]), -item[1]))
+    ]
+    selected_rows = [
+        {
+            "strategy_key": strategy_key,
+            "strategy_label": _strategy_label(strategy_key),
+            "count": count,
+        }
+        for strategy_key, count in sorted(selected_by_strategy.items(), key=lambda item: (_strategy_sort_key(item[0]), -item[1]))
+    ]
+    top_reject_reasons = [
+        {"reason": reason, "reason_label": _format_reject_reason(reason), "count": count}
+        for reason, count in sorted(reject_reasons.items(), key=lambda item: (-item[1], item[0]))[:5]
+    ]
+
+    return {
+        "available": bool(payload),
+        "generated_at": row.get("updated_at"),
+        "status": str(row.get("status") or "unknown"),
+        "cycle_number": _safe_int(payload.get("cycle")),
+        "attempted_symbols_total": _safe_int(payload.get("attempted_symbols_total")),
+        "candidate_pool_total": _safe_int(payload.get("candidate_pool_total")),
+        "selected_signals_total": _safe_int(payload.get("selected_signals_total")),
+        "rejected_symbols_total": _safe_int(payload.get("rejected_symbols_total")),
+        "risk_off_symbols_total": _safe_int(payload.get("risk_off_symbols_total")),
+        "failure_symbols_total": _safe_int(payload.get("failures")),
+        "market_regime_state": str(market_regime.get("state") or "unknown"),
+        "market_regime_label": _regime_label(market_regime.get("state")),
+        "market_regime_bias": str(market_regime.get("bias") or "neutral"),
+        "market_regime_reason": str(market_regime.get("reason") or "market_regime_unknown"),
+        "market_strategy_key": _normalize_strategy_key(market_regime.get("strategy_name")),
+        "market_strategy_label": _strategy_label(_normalize_strategy_key(market_regime.get("strategy_name"))),
+        "attempts_by_strategy": [
+            {
+                "strategy_key": strategy_key,
+                "strategy_label": _strategy_label(strategy_key),
+                "count": count,
+            }
+            for strategy_key, count in sorted(attempts_by_strategy.items(), key=lambda item: (_strategy_sort_key(item[0]), -item[1]))
+        ],
+        "candidate_pool_by_strategy": candidate_rows,
+        "selected_by_strategy": selected_rows,
+        "rejected_by_strategy": [
+            {
+                "strategy_key": strategy_key,
+                "strategy_label": _strategy_label(strategy_key),
+                "count": count,
+            }
+            for strategy_key, count in sorted(rejected_by_strategy.items(), key=lambda item: (_strategy_sort_key(item[0]), -item[1]))
+        ],
+        "top_reject_reasons": top_reject_reasons,
+    }
+
+
+
+def build_admin_strategy_observability(days: int = 30) -> Dict[str, Any]:
+    now = datetime.utcnow()
+    from_date = now - timedelta(days=max(int(days or 30), 1))
+    rows = _fetch_scanner_cycle_stats(from_date)
+
+    attempts_by_strategy: Dict[str, int] = defaultdict(int)
+    candidate_pool_by_strategy: Dict[str, int] = defaultdict(int)
+    selected_by_strategy: Dict[str, int] = defaultdict(int)
+    rejected_by_strategy: Dict[str, int] = defaultdict(int)
+    reject_reasons_by_strategy: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    regime_cycle_counts: Dict[str, int] = defaultdict(int)
+    regime_attempted_symbols: Dict[str, int] = defaultdict(int)
+    regime_selected_signals: Dict[str, int] = defaultdict(int)
+    regime_candidate_pool: Dict[str, int] = defaultdict(int)
+    regime_strategy_selected: Dict[tuple[str, str], int] = defaultdict(int)
+    regime_strategy_candidates: Dict[tuple[str, str], int] = defaultdict(int)
+
+    attempted_symbols_total = 0
+    candidate_pool_total = 0
+    selected_signals_total = 0
+    rejected_symbols_total = 0
+    risk_off_symbols_total = 0
+    failure_symbols_total = 0
+    first_cycle_at: Optional[datetime] = None
+    last_cycle_at: Optional[datetime] = None
+
+    for row in rows:
+        cycle_started_at = _safe_dt(row.get("cycle_started_at"))
+        if cycle_started_at:
+            first_cycle_at = cycle_started_at if first_cycle_at is None else min(first_cycle_at, cycle_started_at)
+            last_cycle_at = cycle_started_at if last_cycle_at is None else max(last_cycle_at, cycle_started_at)
+
+        attempted_symbols = _safe_int(row.get("attempted_symbols_total"))
+        candidate_pool = _safe_int(row.get("candidate_pool_total"))
+        selected_signals = _safe_int(row.get("selected_signals_total"))
+        rejected_symbols = _safe_int(row.get("rejected_symbols_total"))
+        risk_off_symbols = _safe_int(row.get("risk_off_symbols_total"))
+        failures = _safe_int(row.get("failure_symbols_total"))
+
+        attempted_symbols_total += attempted_symbols
+        candidate_pool_total += candidate_pool
+        selected_signals_total += selected_signals
+        rejected_symbols_total += rejected_symbols
+        risk_off_symbols_total += risk_off_symbols
+        failure_symbols_total += failures
+
+        market_regime = row.get("market_regime") if isinstance(row.get("market_regime"), dict) else {}
+        regime_state = str(market_regime.get("state") or "unknown").strip().lower() or "unknown"
+        regime_cycle_counts[regime_state] += 1
+        regime_attempted_symbols[regime_state] += attempted_symbols
+        regime_selected_signals[regime_state] += selected_signals
+        regime_candidate_pool[regime_state] += candidate_pool
+
+        for strategy_key, count in _normalize_count_dict(row.get("attempts_by_strategy")).items():
+            attempts_by_strategy[strategy_key] += count
+        for strategy_key, count in _normalize_count_dict(row.get("candidate_pool_by_strategy")).items():
+            candidate_pool_by_strategy[strategy_key] += count
+            regime_strategy_candidates[(regime_state, strategy_key)] += count
+        for strategy_key, count in _normalize_count_dict(row.get("selected_by_strategy")).items():
+            selected_by_strategy[strategy_key] += count
+            regime_strategy_selected[(regime_state, strategy_key)] += count
+        for strategy_key, count in _normalize_count_dict(row.get("rejected_by_strategy")).items():
+            rejected_by_strategy[strategy_key] += count
+
+        raw_reason_map = row.get("reject_reasons_by_strategy") if isinstance(row.get("reject_reasons_by_strategy"), dict) else {}
+        for strategy_key, reasons in raw_reason_map.items():
+            normalized_strategy = _normalize_strategy_key(strategy_key)
+            for reason, count in _normalize_reason_count_dict(reasons).items():
+                reject_reasons_by_strategy[normalized_strategy][reason] += count
+
+    strategy_keys = set(attempts_by_strategy.keys()) | set(candidate_pool_by_strategy.keys()) | set(selected_by_strategy.keys()) | set(rejected_by_strategy.keys())
+    strategy_pipeline = []
+    for strategy_key in sorted(strategy_keys, key=_strategy_sort_key):
+        attempted = int(attempts_by_strategy.get(strategy_key, 0))
+        candidate_pool = int(candidate_pool_by_strategy.get(strategy_key, 0))
+        selected = int(selected_by_strategy.get(strategy_key, 0))
+        rejected = int(rejected_by_strategy.get(strategy_key, 0))
+        strategy_pipeline.append(
+            {
+                "strategy_key": strategy_key,
+                "strategy_label": _strategy_label(strategy_key),
+                "attempted_symbols": attempted,
+                "candidate_pool": candidate_pool,
+                "selected_signals": selected,
+                "rejected_symbols": rejected,
+                "candidate_rate": round((candidate_pool / attempted) * 100, 2) if attempted > 0 else 0.0,
+                "publish_rate": round((selected / attempted) * 100, 2) if attempted > 0 else 0.0,
+                "selection_from_candidates_rate": round((selected / candidate_pool) * 100, 2) if candidate_pool > 0 else 0.0,
+            }
+        )
+
+    reject_rows = []
+    for strategy_key in sorted(reject_reasons_by_strategy.keys(), key=_strategy_sort_key):
+        reasons = reject_reasons_by_strategy.get(strategy_key, {})
+        top_reasons = [
+            {"reason": reason, "reason_label": _format_reject_reason(reason), "count": count}
+            for reason, count in sorted(reasons.items(), key=lambda item: (-item[1], item[0]))[:5]
+        ]
+        reject_rows.append(
+            {
+                "strategy_key": strategy_key,
+                "strategy_label": _strategy_label(strategy_key),
+                "rejected_symbols": int(rejected_by_strategy.get(strategy_key, 0)),
+                "top_reasons": top_reasons,
+            }
+        )
+
+    regime_distribution = []
+    for regime_state in sorted(regime_cycle_counts.keys()):
+        regime_distribution.append(
+            {
+                "regime_state": regime_state,
+                "regime_label": _regime_label(regime_state),
+                "cycles": int(regime_cycle_counts.get(regime_state, 0)),
+                "attempted_symbols": int(regime_attempted_symbols.get(regime_state, 0)),
+                "candidate_pool": int(regime_candidate_pool.get(regime_state, 0)),
+                "selected_signals": int(regime_selected_signals.get(regime_state, 0)),
+            }
+        )
+
+    matrix_rows = []
+    matrix_keys = set(regime_strategy_selected.keys()) | set(regime_strategy_candidates.keys())
+    for regime_state, strategy_key in sorted(matrix_keys, key=lambda item: (item[0], _strategy_sort_key(item[1]))):
+        candidate_pool = int(regime_strategy_candidates.get((regime_state, strategy_key), 0))
+        selected = int(regime_strategy_selected.get((regime_state, strategy_key), 0))
+        matrix_rows.append(
+            {
+                "regime_state": regime_state,
+                "regime_label": _regime_label(regime_state),
+                "strategy_key": strategy_key,
+                "strategy_label": _strategy_label(strategy_key),
+                "candidate_pool": candidate_pool,
+                "selected_signals": selected,
+                "publish_rate": round((selected / candidate_pool) * 100, 2) if candidate_pool > 0 else 0.0,
+            }
+        )
+
+    return {
+        "overview": {
+            "window_days": int(days),
+            "cycles_total": len(rows),
+            "attempted_symbols_total": attempted_symbols_total,
+            "candidate_pool_total": candidate_pool_total,
+            "selected_signals_total": selected_signals_total,
+            "rejected_symbols_total": rejected_symbols_total,
+            "risk_off_symbols_total": risk_off_symbols_total,
+            "failure_symbols_total": failure_symbols_total,
+            "telemetry_ready": len(rows) > 0,
+            "coverage_started_at": first_cycle_at,
+            "latest_cycle_at": last_cycle_at,
+        },
+        "strategy_pipeline": strategy_pipeline,
+        "reject_reasons_by_strategy": reject_rows,
+        "regime_distribution": regime_distribution,
+        "regime_strategy_matrix": matrix_rows,
+        "latest_cycle": get_latest_scanner_cycle_snapshot(),
     }
 
 
