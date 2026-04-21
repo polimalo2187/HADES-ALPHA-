@@ -67,6 +67,134 @@ def _signal_plan(signal_doc: Dict[str, Any]) -> str:
     return str(signal_doc.get("visibility") or signal_doc.get("plan") or "").lower()
 
 
+_BREAKOUT_STRATEGY_NAMES = {
+    "breakout_reset",
+    "strategy_breakout_reset",
+    "breakout+reset",
+    "breakout_reset_prereset_anticipatory_v2",
+}
+
+_LIQUIDITY_STRATEGY_NAMES = {
+    "liquidity_sweep_reversal",
+    "strategy_liquidity_sweep",
+    "liquidity_sweep",
+    "liquidity_hunter",
+    "liquidity_sweep_reversal_pullback_execution_v2",
+}
+
+_STRATEGY_SORT_ORDER = {
+    "breakout_reset": 0,
+    "liquidity_sweep_reversal": 1,
+    "market_execution": 2,
+    "legacy_unknown": 98,
+}
+
+
+def _normalize_strategy_key(strategy_name: Any, send_mode: Any = None) -> str:
+    normalized = str(strategy_name or "").strip().lower()
+    send_mode_normalized = str(send_mode or "").strip().lower()
+
+    if normalized in _BREAKOUT_STRATEGY_NAMES:
+        return "breakout_reset"
+    if normalized in _LIQUIDITY_STRATEGY_NAMES:
+        return "liquidity_sweep_reversal"
+    if normalized == "market_execution":
+        return "market_execution"
+    if send_mode_normalized == "entry_zone_pending":
+        return "liquidity_sweep_reversal"
+    if send_mode_normalized == "market_on_close":
+        return "breakout_reset"
+    if normalized:
+        return normalized.replace("strategy_", "")
+    return "legacy_unknown"
+
+
+
+def _strategy_label(strategy_key: Any) -> str:
+    normalized = str(strategy_key or "legacy_unknown").strip().lower()
+    return {
+        "breakout_reset": "Breakout + Reset",
+        "liquidity_sweep_reversal": "Liquidity Sweep Reversal",
+        "market_execution": "Entrada directa",
+        "legacy_unknown": "Legacy / Sin clasificar",
+    }.get(normalized, normalized.replace("_", " ").title())
+
+
+
+def _send_mode_label(send_mode: Any) -> str:
+    normalized = str(send_mode or "").strip().lower()
+    return {
+        "market_on_close": "Entrada al envío",
+        "entry_zone_pending": "Entrada por pullback",
+    }.get(normalized, "Modelo no identificado")
+
+
+
+def _signal_key(doc: Dict[str, Any]) -> str:
+    for candidate in (doc.get("_id"), doc.get("signal_id"), doc.get("base_signal_id")):
+        if candidate is None:
+            continue
+        value = str(candidate).strip()
+        if value:
+            return value
+    return ""
+
+
+
+def _fetch_signal_history(from_date: datetime, extra_query: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    query: Dict[str, Any] = {
+        "$or": [
+            {"signal_created_at": {"$gte": from_date}},
+            {
+                "signal_created_at": {"$exists": False},
+                "created_at": {"$gte": from_date},
+            },
+        ],
+    }
+    if extra_query:
+        query.update(extra_query)
+    projection = {
+        "signal_id": 1,
+        "signal_created_at": 1,
+        "created_at": 1,
+        "send_mode": 1,
+        "strategy_name": 1,
+        "strategy_version": 1,
+        "regime_state": 1,
+        "regime_reason": 1,
+    }
+    return list(signal_history_collection().find(query, projection))
+
+
+
+def _resolve_result_signal_meta(
+    result_doc: Dict[str, Any],
+    signal_lookup: Optional[Dict[str, Dict[str, Any]]] = None,
+    history_lookup: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    signal_id = _signal_key({"base_signal_id": result_doc.get("base_signal_id"), "signal_id": result_doc.get("signal_id")})
+    signal_doc = signal_lookup.get(signal_id, {}) if signal_lookup and signal_id else {}
+    history_doc = history_lookup.get(signal_id, {}) if history_lookup and signal_id else {}
+
+    strategy_name = result_doc.get("strategy_name") or signal_doc.get("strategy_name") or history_doc.get("strategy_name")
+    send_mode = result_doc.get("send_mode") or signal_doc.get("send_mode") or history_doc.get("send_mode")
+    strategy_key = _normalize_strategy_key(strategy_name, send_mode)
+    return {
+        "signal_id": signal_id,
+        "strategy_name": strategy_name,
+        "strategy_key": strategy_key,
+        "strategy_label": _strategy_label(strategy_key),
+        "send_mode": str(send_mode or "").strip().lower() or None,
+        "send_mode_label": _send_mode_label(send_mode),
+    }
+
+
+
+def _strategy_sort_key(strategy_key: Any) -> tuple[int, str]:
+    normalized = str(strategy_key or "legacy_unknown").strip().lower()
+    return (_STRATEGY_SORT_ORDER.get(normalized, 50), normalized)
+
+
 
 def _score_value(result_doc: Dict[str, Any]) -> Optional[float]:
     return _safe_float(result_doc.get("normalized_score", result_doc.get("score")))
@@ -479,6 +607,110 @@ def _build_setup_group_stats(results: Iterable[Dict[str, Any]], signals: Iterabl
     return rows
 
 
+def _build_strategy_stats(
+    results: Iterable[Dict[str, Any]],
+    signals: Iterable[Dict[str, Any]],
+    signal_history: Optional[Iterable[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    signal_lookup = {_signal_key(signal): signal for signal in signals if _signal_key(signal)}
+    history_lookup = {_signal_key(history): history for history in (signal_history or []) if _signal_key(history)}
+
+    grouped_results: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    strategy_send_modes: Dict[str, set[str]] = defaultdict(set)
+    grouped_signals: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+
+    for signal in signals:
+        strategy_key = _normalize_strategy_key(signal.get("strategy_name"), signal.get("send_mode"))
+        grouped_signals[strategy_key].append(signal)
+        send_mode = str(signal.get("send_mode") or "").strip().lower()
+        if send_mode:
+            strategy_send_modes[strategy_key].add(send_mode)
+
+    for result in results:
+        meta = _resolve_result_signal_meta(result, signal_lookup, history_lookup)
+        strategy_key = meta.get("strategy_key") or "legacy_unknown"
+        grouped_results[strategy_key].append(result)
+        send_mode = str(meta.get("send_mode") or "").strip().lower()
+        if send_mode:
+            strategy_send_modes[strategy_key].add(send_mode)
+
+    rows: List[Dict[str, Any]] = []
+    for strategy_key in sorted(set(grouped_results.keys()) | set(grouped_signals.keys()), key=_strategy_sort_key):
+        result_rows = grouped_results.get(strategy_key, [])
+        signal_rows = grouped_signals.get(strategy_key, [])
+        if not result_rows and not signal_rows:
+            continue
+        stats = _calculate_stats_from_results(result_rows)
+        activity = _activity_stats_from_signals(signal_rows)
+        send_modes = sorted(mode for mode in strategy_send_modes.get(strategy_key, set()) if mode)
+        primary_send_mode = send_modes[0] if len(send_modes) == 1 else (send_modes[0] if send_modes else None)
+        rows.append(
+            {
+                "strategy_key": strategy_key,
+                "strategy_label": _strategy_label(strategy_key),
+                "send_modes": send_modes,
+                "primary_send_mode": primary_send_mode,
+                "primary_send_mode_label": _send_mode_label(primary_send_mode),
+                "signals_total": activity.get("signals_total", 0),
+                "avg_score": activity.get("avg_score"),
+                "resolved": stats["resolved"],
+                "won": stats["won"],
+                "lost": stats["lost"],
+                "expired": stats["expired"],
+                "expired_no_fill": stats["expired_no_fill"],
+                "expired_after_entry": stats["expired_after_entry"],
+                "fill_rate": stats["fill_rate"],
+                "winrate": stats["winrate"],
+                "profit_factor": stats["profit_factor"],
+                "expectancy_r": stats["expectancy_r"],
+                "tp1": stats["tp1"],
+                "tp2": stats["tp2"],
+                "sl": stats["sl"],
+            }
+        )
+
+    return rows
+
+
+
+def _build_strategy_direction_stats(
+    results: Iterable[Dict[str, Any]],
+    signals: Iterable[Dict[str, Any]],
+    signal_history: Optional[Iterable[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    signal_lookup = {_signal_key(signal): signal for signal in signals if _signal_key(signal)}
+    history_lookup = {_signal_key(history): history for history in (signal_history or []) if _signal_key(history)}
+    grouped: Dict[tuple[str, str], List[Dict[str, Any]]] = defaultdict(list)
+
+    for result in results:
+        meta = _resolve_result_signal_meta(result, signal_lookup, history_lookup)
+        strategy_key = meta.get("strategy_key") or "legacy_unknown"
+        direction = str(result.get("direction") or "?").upper()
+        grouped[(strategy_key, direction)].append(result)
+
+    rows: List[Dict[str, Any]] = []
+    for strategy_key, direction in sorted(grouped.keys(), key=lambda item: (_strategy_sort_key(item[0]), item[1])):
+        stats = _calculate_stats_from_results(grouped[(strategy_key, direction)])
+        rows.append(
+            {
+                "strategy_key": strategy_key,
+                "strategy_label": _strategy_label(strategy_key),
+                "direction": direction,
+                "resolved": stats["resolved"],
+                "won": stats["won"],
+                "lost": stats["lost"],
+                "expired": stats["expired"],
+                "expired_no_fill": stats["expired_no_fill"],
+                "expired_after_entry": stats["expired_after_entry"],
+                "winrate": stats["winrate"],
+                "profit_factor": stats["profit_factor"],
+                "expectancy_r": stats["expectancy_r"],
+            }
+        )
+
+    return rows
+
+
 
 def _build_diagnostics_summary(results: List[Dict[str, Any]], signals: List[Dict[str, Any]]) -> Dict[str, Any]:
     stats = _calculate_stats_from_results(results)
@@ -529,6 +761,7 @@ def build_performance_window(days: int) -> Dict[str, Any]:
     from_date = now - timedelta(days=days)
     results = _fetch_results(from_date)
     signals = _fetch_signals(from_date)
+    signal_history = _fetch_signal_history(from_date)
 
     by_plan = {
         "free": _calculate_stats_from_results(r for r in results if _result_plan(r) == "free"),
@@ -549,6 +782,8 @@ def build_performance_window(days: int) -> Dict[str, Any]:
         "activity_by_plan": activity_by_plan,
         "by_score": {"days": days, **_build_score_buckets(results)},
         "direction": _build_direction_stats(results),
+        "strategy": _build_strategy_stats(results, signals, signal_history),
+        "strategy_direction": _build_strategy_direction_stats(results, signals, signal_history),
         "worst_symbols": _build_symbol_diagnostics(results, min_resolved=3, limit=3),
         "setup_groups": _build_setup_group_stats(results, signals),
         "diagnostics": _build_diagnostics_summary(results, signals),
@@ -790,6 +1025,8 @@ def get_performance_snapshot(
         "activity_by_plan_30d": long_payload.get("activity_by_plan", {}),
         "by_score_30d": long_payload.get("by_score", {}),
         "direction_30d": long_payload.get("direction", []),
+        "strategy_30d": long_payload.get("strategy", []),
+        "strategy_direction_30d": long_payload.get("strategy_direction", []),
         "worst_symbols_30d": worst_symbols,
         "setup_groups_30d": long_payload.get("setup_groups", []),
         "diagnostics_30d": long_payload.get("diagnostics", {}),
