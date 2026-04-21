@@ -32,6 +32,7 @@ from app.miniapp.service import (
     build_market_payload,
     build_me_payload,
     build_plans_payload,
+    build_admin_performance_payload,
     build_performance_center_payload,
     build_risk_center_payload,
     build_signals_payload,
@@ -743,6 +744,7 @@ def create_mini_app() -> FastAPI:
     @app.get("/api/miniapp/admin/overview")
     async def miniapp_admin_overview(admin_user: Dict[str, Any] = Depends(get_authenticated_admin_user)) -> Dict[str, Any]:
         payload = get_admin_operational_overview()
+        payload["performance"] = build_admin_performance_payload(focus_days=30)
         payload["requested_by"] = int(admin_user.get("user_id") or 0)
         return payload
 
