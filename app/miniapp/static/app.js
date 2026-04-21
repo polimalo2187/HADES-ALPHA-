@@ -2008,14 +2008,7 @@ function renderPerformance() {
   const focus = payload.focus || {};
   const summary = focus.summary || {};
   const activity = focus.activity || {};
-  const diagnostics = payload.diagnostics_30d || {};
   const windows = Array.isArray(payload.windows) ? payload.windows : [];
-  const planBreakdown = Array.isArray(payload.plan_breakdown_30d) ? payload.plan_breakdown_30d : [];
-  const directions = Array.isArray(payload.direction_30d) ? payload.direction_30d : [];
-  const strategies = Array.isArray(payload.strategy_30d) ? payload.strategy_30d : [];
-  const strategyDirections = Array.isArray(payload.strategy_direction_30d) ? payload.strategy_direction_30d : [];
-  const weakSymbols = Array.isArray(payload.weak_symbols_30d) ? payload.weak_symbols_30d : [];
-  const scoreBuckets = Array.isArray(payload.score_buckets_30d) ? payload.score_buckets_30d : [];
 
   const loadingBanner = state.performanceCenter.loading
     ? '<div class="card card-span-12"><div class="empty-state">Actualizando rendimiento...</div></div>'
@@ -2044,7 +2037,7 @@ function renderPerformance() {
         <div class="item-header">
           <div>
             <h2 style="margin:0;">Rendimiento serio</h2>
-            <div class="item-subtitle">Lectura consolidada del bot en R, por ventanas de tiempo y con diagnóstico operativo real.</div>
+            <div class="item-subtitle">Lectura consolidada del sistema en R, por ventanas de tiempo y sin exponer inteligencia interna del motor.</div>
           </div>
           <div class="action-row compact">
             <button class="button button-secondary" data-goto="home">Volver al dashboard</button>
@@ -2060,6 +2053,7 @@ function renderPerformance() {
           <span class="pill">Score medio (norm.): ${escapeHtml(activity.avg_score === null ? '—' : formatNumber(activity.avg_score, 2))}</span>
           <span class="pill">Generado: ${escapeHtml(formatDate(overview.generated_at))}</span>
         </div>
+        <div class="detail-note" style="margin-top:12px;">Los diagnósticos internos por estrategia, score, dirección y setup viven solo dentro del panel de administración.</div>
       </div>
 
       ${performanceMetricCard('Evaluadas', summary.total ?? 0, 'Dentro de la ventana activa')}
@@ -2091,63 +2085,6 @@ function renderPerformance() {
           <span class="pill">Gross +${escapeHtml(formatNumber(summary.gross_profit_r || 0, 4))}R</span>
           <span class="pill">Gross -${escapeHtml(formatNumber(summary.gross_loss_r || 0, 4))}R</span>
           <span class="pill">Eval media ${escapeHtml(summary.avg_resolution_minutes === null ? '—' : formatNumber(summary.avg_resolution_minutes, 2))} min</span>
-        </div>
-      </div>
-
-      <div class="card card-span-12">
-        <h2>Diagnóstico 30D</h2>
-        <div class="account-metric-grid">
-          ${accountMetricCard('Pendientes', diagnostics.pending_to_evaluate ?? 0)}
-          ${accountMetricCard('Loss rate', `${formatNumber(diagnostics.loss_rate || 0)}%`, '', metricToneClass('drawdown', -(diagnostics.loss_rate || 0)))}
-          ${accountMetricCard('Expiry rate', `${formatNumber(diagnostics.expiry_rate || 0)}%`)}
-          ${accountMetricCard('Exp no fill', diagnostics.expired_no_fill ?? 0, `${formatNumber(diagnostics.no_fill_rate || 0)}% del total`, metricToneClass('drawdown', -(diagnostics.no_fill_rate || 0)))}
-          ${accountMetricCard('Exp tras entry', diagnostics.expired_after_entry ?? 0, `${formatNumber(diagnostics.after_entry_failure_rate || 0)}% de fills`, metricToneClass('drawdown', -(diagnostics.after_entry_failure_rate || 0)))}
-          ${accountMetricCard('Fill rate', `${formatNumber(diagnostics.fill_rate || 0)}%`, 'Señales que tocaron entry', metricToneClass('winrate', diagnostics.fill_rate || 0))}
-          ${accountMetricCard('Score resultados', diagnostics.avg_result_score === null ? '—' : formatNumber(diagnostics.avg_result_score, 2))}
-          ${accountMetricCard('PF 30D', formatRatioValue(diagnostics.profit_factor, diagnostics.profit_factor_infinite), '', metricToneClass('pf', diagnostics.profit_factor_infinite ? 999 : diagnostics.profit_factor || 0))}
-          ${accountMetricCard('DD 30D', formatNumber(diagnostics.max_drawdown_r || 0, 4), 'R', metricToneClass('drawdown', diagnostics.max_drawdown_r || 0))}
-        </div>
-      </div>
-
-      <div class="card card-span-12">
-        <h2>Breakdown por plan (30D)</h2>
-        <div class="section-grid">
-          ${planBreakdown.length ? planBreakdown.map(performancePlanCard).join('') : '<div class="empty-state">No hay breakdown por plan disponible.</div>'}
-        </div>
-      </div>
-
-      <div class="card card-span-6">
-        <h2>Por dirección (30D)</h2>
-        <div class="list">
-          ${directions.length ? directions.map(performanceDirectionItem).join('') : '<div class="empty-state">Sin datos por dirección.</div>'}
-        </div>
-      </div>
-
-      <div class="card card-span-6">
-        <h2>Win rate por score normalizado (30D)</h2>
-        <div class="list">
-          ${scoreBuckets.length ? scoreBuckets.map(performanceScoreBucketItem).join('') : '<div class="empty-state">Sin buckets de score disponibles.</div>'}
-        </div>
-      </div>
-
-      <div class="card card-span-12">
-        <h2>Rendimiento por estrategia (30D)</h2>
-        <div class="section-grid">
-          ${strategies.length ? strategies.map(performanceStrategyCard).join('') : '<div class="empty-state">Sin datos suficientes por estrategia.</div>'}
-        </div>
-      </div>
-
-      <div class="card card-span-6">
-        <h2>Estrategia × dirección (30D)</h2>
-        <div class="list">
-          ${strategyDirections.length ? strategyDirections.map(performanceStrategyDirectionItem).join('') : '<div class="empty-state">Sin cruces de estrategia por dirección.</div>'}
-        </div>
-      </div>
-
-      <div class="card card-span-6">
-        <h2>Símbolos más débiles (30D)</h2>
-        <div class="list">
-          ${weakSymbols.length ? weakSymbols.map(performanceWeakSymbolItem).join('') : '<div class="empty-state">No hay suficientes señales resueltas para diagnosticar símbolos.</div>'}
         </div>
       </div>
     </div>
@@ -2211,6 +2148,18 @@ function renderAdmin() {
   const signals = overview.signals || {};
   const payments = overview.payments || {};
   const audit = overview.audit || {};
+  const performance = overview.performance || {};
+  const performanceOverview = performance.overview || {};
+  const performanceFocus = performance.focus || {};
+  const performanceSummary = performanceFocus.summary || {};
+  const performanceActivity = performanceFocus.activity || {};
+  const performanceDiagnostics = performance.diagnostics_30d || {};
+  const planBreakdown = Array.isArray(performance.plan_breakdown_30d) ? performance.plan_breakdown_30d : [];
+  const directions = Array.isArray(performance.direction_30d) ? performance.direction_30d : [];
+  const strategies = Array.isArray(performance.strategy_30d) ? performance.strategy_30d : [];
+  const strategyDirections = Array.isArray(performance.strategy_direction_30d) ? performance.strategy_direction_30d : [];
+  const weakSymbols = Array.isArray(performance.weak_symbols_30d) ? performance.weak_symbols_30d : [];
+  const scoreBuckets = Array.isArray(performance.score_buckets_30d) ? performance.score_buckets_30d : [];
   const manualActivation = state.adminPanel.manualActivation || {};
   const activationDraft = manualActivation.draft || { userId: '', plan: 'plus', days: '30' };
   const moderationState = state.adminPanel.moderation || { actionLoading: false, confirmAction: null, draft: { durationValue: '7', durationUnit: 'days' } };
@@ -2280,6 +2229,69 @@ function renderAdmin() {
         <h2>Salud operativa</h2>
         <div class="section-grid" style="margin-top:12px;">
           ${Object.entries(runtime.runtimes || {}).length ? Object.entries(runtime.runtimes || {}).map(([role, report]) => adminRuntimeRoleCard(role, report)).join('') : '<div class="empty-state">No hay matriz de salud disponible todavía.</div>'}
+        </div>
+      </div>
+
+      <div class="card card-span-12">
+        <div class="item-header">
+          <div>
+            <h2 style="margin:0;">Inteligencia interna de rendimiento</h2>
+            <div class="item-subtitle">Bloque exclusivo para administración con los desgloses sensibles del motor y del desempeño comercial.</div>
+          </div>
+          <span class="plan-tag">${escapeHtml(performanceOverview.focus_label || '30D')}</span>
+        </div>
+        <div class="pill-row compact-pill-row" style="margin-top:12px;">
+          <span class="pill">Scanner ${escapeHtml(performanceActivity.signals_total ?? 0)}</span>
+          <span class="pill">Score medio ${escapeHtml(performanceActivity.avg_score === null ? '—' : formatNumber(performanceActivity.avg_score, 2))}</span>
+          <span class="pill">Pendientes ${escapeHtml(performanceDiagnostics.pending_to_evaluate ?? 0)}</span>
+          <span class="pill">Generado ${escapeHtml(formatDate(performanceOverview.generated_at || overview.generated_at))}</span>
+        </div>
+      </div>
+
+      ${adminOverviewMetricCard('PF 30D', formatRatioValue(performanceDiagnostics.profit_factor, performanceDiagnostics.profit_factor_infinite), 'Diagnóstico interno', metricToneClass('pf', performanceDiagnostics.profit_factor_infinite ? 999 : performanceDiagnostics.profit_factor || 0))}
+      ${adminOverviewMetricCard('DD 30D', formatNumber(performanceDiagnostics.max_drawdown_r || 0, 4), 'R acumulado', metricToneClass('drawdown', performanceDiagnostics.max_drawdown_r || 0))}
+      ${adminOverviewMetricCard('Loss rate', `${formatNumber(performanceDiagnostics.loss_rate || 0)}%`, 'Solo admin', metricToneClass('drawdown', -(performanceDiagnostics.loss_rate || 0)))}
+      ${adminOverviewMetricCard('Expiry rate', `${formatNumber(performanceDiagnostics.expiry_rate || 0)}%`, 'Solo admin', metricToneClass('drawdown', -(performanceDiagnostics.expiry_rate || 0)))}
+
+      <div class="card card-span-12">
+        <h2>Breakdown por plan (30D)</h2>
+        <div class="section-grid">
+          ${planBreakdown.length ? planBreakdown.map(performancePlanCard).join('') : '<div class="empty-state">No hay breakdown por plan disponible.</div>'}
+        </div>
+      </div>
+
+      <div class="card card-span-6">
+        <h2>Por dirección (30D)</h2>
+        <div class="list">
+          ${directions.length ? directions.map(performanceDirectionItem).join('') : '<div class="empty-state">Sin datos por dirección.</div>'}
+        </div>
+      </div>
+
+      <div class="card card-span-6">
+        <h2>Win rate por score normalizado (30D)</h2>
+        <div class="list">
+          ${scoreBuckets.length ? scoreBuckets.map(performanceScoreBucketItem).join('') : '<div class="empty-state">Sin buckets de score disponibles.</div>'}
+        </div>
+      </div>
+
+      <div class="card card-span-12">
+        <h2>Rendimiento por estrategia (30D)</h2>
+        <div class="section-grid">
+          ${strategies.length ? strategies.map(performanceStrategyCard).join('') : '<div class="empty-state">Sin datos suficientes por estrategia.</div>'}
+        </div>
+      </div>
+
+      <div class="card card-span-6">
+        <h2>Estrategia × dirección (30D)</h2>
+        <div class="list">
+          ${strategyDirections.length ? strategyDirections.map(performanceStrategyDirectionItem).join('') : '<div class="empty-state">Sin cruces de estrategia por dirección.</div>'}
+        </div>
+      </div>
+
+      <div class="card card-span-6">
+        <h2>Símbolos más débiles (30D)</h2>
+        <div class="list">
+          ${weakSymbols.length ? weakSymbols.map(performanceWeakSymbolItem).join('') : '<div class="empty-state">No hay suficientes señales resueltas para diagnosticar símbolos.</div>'}
         </div>
       </div>
 
