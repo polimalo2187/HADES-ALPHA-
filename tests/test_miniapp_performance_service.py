@@ -24,6 +24,8 @@ class MiniAppPerformanceServiceTests(unittest.TestCase):
                 'premium': {'signals_total': 12, 'avg_score': 89.1},
             },
             'direction_30d': [{'direction': 'LONG', 'resolved': 7, 'won': 4, 'lost': 3, 'expired': 1, 'expired_no_fill': 1, 'expired_after_entry': 0, 'winrate': 57.14, 'profit_factor': 1.2, 'expectancy_r': 0.1}],
+            'strategy_30d': [{'strategy_key': 'breakout_reset', 'strategy_label': 'Breakout + Reset', 'primary_send_mode': 'market_on_close', 'primary_send_mode_label': 'Entrada al envío', 'signals_total': 11, 'avg_score': 88.2, 'resolved': 6, 'won': 4, 'lost': 2, 'expired': 1, 'expired_no_fill': 0, 'expired_after_entry': 1, 'fill_rate': 85.71, 'winrate': 66.67, 'profit_factor': 2.0, 'expectancy_r': 0.5, 'tp1': 2, 'tp2': 2, 'sl': 2}],
+            'strategy_direction_30d': [{'strategy_key': 'breakout_reset', 'strategy_label': 'Breakout + Reset', 'direction': 'LONG', 'resolved': 4, 'won': 3, 'lost': 1, 'expired': 1, 'expired_no_fill': 0, 'expired_after_entry': 1, 'winrate': 75.0, 'profit_factor': 3.0, 'expectancy_r': 0.75}],
             'setup_groups_30d': [{'setup_group': 'breakout', 'resolved': 6, 'won': 4, 'lost': 2, 'expired': 1, 'expired_no_fill': 0, 'expired_after_entry': 1, 'winrate': 66.67, 'profit_factor': 2.0, 'expectancy_r': 0.5}],
             'worst_symbols_30d': [{'symbol': 'BTCUSDT', 'resolved': 3, 'won': 1, 'lost': 2, 'expired': 0, 'expired_no_fill': 0, 'expired_after_entry': 0, 'winrate': 33.33, 'loss_rate': 66.67, 'profit_factor': 0.5, 'expectancy_r': -0.33}],
             'by_score_30d': {'buckets': [{'label': '90+', 'n': 4, 'won': 3, 'lost': 1, 'winrate': 75.0, 'net_r': 2.0}]},
@@ -52,6 +54,9 @@ class MiniAppPerformanceServiceTests(unittest.TestCase):
         self.assertEqual(len(payload['windows']), 3)
         self.assertEqual(payload['plan_breakdown_30d'][2]['summary']['profit_factor'], None)
         self.assertTrue(payload['plan_breakdown_30d'][2]['summary']['profit_factor_infinite'])
+        self.assertEqual(payload['strategy_30d'][0]['strategy_key'], 'breakout_reset')
+        self.assertEqual(payload['strategy_30d'][0]['primary_send_mode_label'], 'Entrada al envío')
+        self.assertEqual(payload['strategy_direction_30d'][0]['direction'], 'LONG')
         self.assertEqual(payload['weak_symbols_30d'][0]['symbol'], 'BTCUSDT')
         self.assertEqual(payload['score_buckets_30d'][0]['label'], '90+')
 
