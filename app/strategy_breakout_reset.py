@@ -69,7 +69,7 @@ BREAKOUT_LOOKBACK = 24
 
 MAX_SCORE = 100.0
 FREE_NORMALIZATION_PENALTY = 6.0
-SCORE_CALIBRATION_VERSION = "v11_breakout_reset_shape_adx_rebalance"
+SCORE_CALIBRATION_VERSION = "v12_breakout_reset_relaxed_shape_trend_rebalance"
 ENTRY_MODEL_NAME = "breakout_reset_first_touch_live_v2"
 SETUP_STAGE_PRE_RESET_WAITING_RETEST = "pre_reset_waiting_retest"
 SETUP_STAGE_RESET_TOUCH_LIVE = "reset_touch_live"
@@ -111,11 +111,11 @@ def _required_history_bars() -> int:
 
 SHARED_PROFILE = {
     "name": "shared",
-    "adx_min": _env_float("PLUS_ADX_MIN", 17.9),
-    "atr_pct_min": _env_float("PLUS_ATR_PCT_MIN", 0.0026),
-    "atr_pct_max": _env_float("PLUS_ATR_PCT_MAX", 0.0120),
-    "min_body_ratio_breakout": _env_float("PLUS_MIN_BODY_RATIO_BREAKOUT", 0.32),
-    "min_body_ratio_continuation": _env_float("PLUS_MIN_BODY_RATIO_CONTINUATION", 0.22),
+    "adx_min": _env_float("PLUS_ADX_MIN", 17.1),
+    "atr_pct_min": _env_float("PLUS_ATR_PCT_MIN", 0.0023),
+    "atr_pct_max": _env_float("PLUS_ATR_PCT_MAX", 0.0128),
+    "min_body_ratio_breakout": _env_float("PLUS_MIN_BODY_RATIO_BREAKOUT", 0.27),
+    "min_body_ratio_continuation": _env_float("PLUS_MIN_BODY_RATIO_CONTINUATION", 0.19),
     "min_extension_atr": _env_float("PLUS_MIN_EXTENSION_ATR", 0.22),
     "max_extension_atr": _env_float("PLUS_MAX_EXTENSION_ATR", 0.78),
     "min_breakout_overshoot_atr": _env_float("PLUS_MIN_BREAKOUT_OVERSHOOT_ATR", 0.12),
@@ -127,11 +127,11 @@ SHARED_PROFILE = {
 
 FREE_PROFILE = {
     "name": "free",
-    "adx_min": _env_float("FREE_ADX_MIN", 16.4),
-    "atr_pct_min": _env_float("FREE_ATR_PCT_MIN", 0.0023),
-    "atr_pct_max": _env_float("FREE_ATR_PCT_MAX", 0.0132),
-    "min_body_ratio_breakout": _env_float("FREE_MIN_BODY_RATIO_BREAKOUT", 0.27),
-    "min_body_ratio_continuation": _env_float("FREE_MIN_BODY_RATIO_CONTINUATION", 0.18),
+    "adx_min": _env_float("FREE_ADX_MIN", 15.8),
+    "atr_pct_min": _env_float("FREE_ATR_PCT_MIN", 0.0020),
+    "atr_pct_max": _env_float("FREE_ATR_PCT_MAX", 0.0142),
+    "min_body_ratio_breakout": _env_float("FREE_MIN_BODY_RATIO_BREAKOUT", 0.22),
+    "min_body_ratio_continuation": _env_float("FREE_MIN_BODY_RATIO_CONTINUATION", 0.16),
     "min_extension_atr": _env_float("FREE_MIN_EXTENSION_ATR", 0.18),
     "max_extension_atr": _env_float("FREE_MAX_EXTENSION_ATR", 0.86),
     "min_breakout_overshoot_atr": _env_float("FREE_MIN_BREAKOUT_OVERSHOOT_ATR", 0.08),
@@ -151,11 +151,11 @@ PLUS_PROFILE = {
 PREMIUM_PROFILE = {
     **SHARED_PROFILE,
     "name": "premium",
-    "adx_min": _env_float("PREMIUM_ADX_MIN", 18.6),
-    "atr_pct_min": _env_float("PREMIUM_ATR_PCT_MIN", 0.0028),
-    "atr_pct_max": _env_float("PREMIUM_ATR_PCT_MAX", 0.0114),
-    "min_body_ratio_breakout": _env_float("PREMIUM_MIN_BODY_RATIO_BREAKOUT", 0.35),
-    "min_body_ratio_continuation": _env_float("PREMIUM_MIN_BODY_RATIO_CONTINUATION", 0.24),
+    "adx_min": _env_float("PREMIUM_ADX_MIN", 17.8),
+    "atr_pct_min": _env_float("PREMIUM_ATR_PCT_MIN", 0.0025),
+    "atr_pct_max": _env_float("PREMIUM_ATR_PCT_MAX", 0.0122),
+    "min_body_ratio_breakout": _env_float("PREMIUM_MIN_BODY_RATIO_BREAKOUT", 0.30),
+    "min_body_ratio_continuation": _env_float("PREMIUM_MIN_BODY_RATIO_CONTINUATION", 0.21),
     "min_extension_atr": _env_float("PREMIUM_MIN_EXTENSION_ATR", 0.26),
     "max_extension_atr": _env_float("PREMIUM_MAX_EXTENSION_ATR", 0.70),
     "min_breakout_overshoot_atr": _env_float("PREMIUM_MIN_BREAKOUT_OVERSHOOT_ATR", 0.16),
@@ -363,6 +363,7 @@ def _trend_direction(last: pd.Series) -> Optional[str]:
     ema50 = float(last["ema50"])
     ema200 = float(last["ema200"])
     close = float(last["close"])
+    tolerance = max(close * 0.0010, 1e-9)
 
     # Regla original estricta primero.
     if ema20 > ema50 > ema200:
@@ -371,11 +372,19 @@ def _trend_direction(last: pd.Series) -> Optional[str]:
         return "SHORT"
 
     # Relajación mínima del filtro de estructura:
-    # seguimos exigiendo alineación EMA20/EMA50, pero permitimos que EMA50 y EMA200
-    # todavía estén muy cerca siempre que el precio ya esté del lado correcto de EMA200.
+    # seguimos exigiendo sesgo de continuación, pero permitimos estados de transición
+    # donde EMA50 todavía va retrasada o EMA20/EMA50 están casi cruzadas.
     if ema20 > ema50 and close > ema200:
         return "LONG"
     if ema20 < ema50 and close < ema200:
+        return "SHORT"
+
+    near_bull_cross = ema20 >= (ema50 - tolerance)
+    near_bear_cross = ema20 <= (ema50 + tolerance)
+
+    if ema20 > ema200 and close > ema50 and near_bull_cross:
+        return "LONG"
+    if ema20 < ema200 and close < ema50 and near_bear_cross:
         return "SHORT"
     return None
 
