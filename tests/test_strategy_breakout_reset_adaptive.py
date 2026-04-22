@@ -528,3 +528,44 @@ def test_breakout_filter_rejects_stale_reset_when_pre_reset_space_is_too_thin(mo
 
     candidate = strategy.mtf_strategy(df, df, df.copy(), reference_market_price=100.2)
     assert candidate is None
+
+
+def test_trend_direction_accepts_near_cross_continuation_state():
+    import app.strategy as strategy
+
+    long_last = pd.Series({
+        "ema20": 100.94,
+        "ema50": 101.00,
+        "ema200": 100.10,
+        "close": 101.18,
+    })
+    short_last = pd.Series({
+        "ema20": 99.08,
+        "ema50": 99.00,
+        "ema200": 99.90,
+        "close": 98.82,
+    })
+
+    assert strategy._trend_direction(long_last) == "LONG"
+    assert strategy._trend_direction(short_last) == "SHORT"
+
+
+
+def test_trend_direction_still_rejects_when_fast_ema_is_too_far_from_medium():
+    import app.strategy as strategy
+
+    rejected_long = pd.Series({
+        "ema20": 100.70,
+        "ema50": 101.00,
+        "ema200": 100.10,
+        "close": 101.18,
+    })
+    rejected_short = pd.Series({
+        "ema20": 99.30,
+        "ema50": 99.00,
+        "ema200": 99.90,
+        "close": 98.82,
+    })
+
+    assert strategy._trend_direction(rejected_long) is None
+    assert strategy._trend_direction(rejected_short) is None
