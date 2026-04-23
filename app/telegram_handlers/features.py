@@ -12,7 +12,7 @@ from app.config import is_admin, is_payment_configuration_ready
 from app.database import users_collection
 from app.market_ui import render_market_state
 from app.menus import back_to_menu, my_account_menu, main_menu
-from app.models import is_plan_active, is_trial_active, update_timestamp
+from app.models import get_effective_trial_end, is_plan_active, is_trial_active, update_timestamp
 from app.plans import PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM, activate_plus, activate_premium, get_plan_catalog, get_plan_name, get_plan_price
 from app.payment_service import cancel_payment_order, confirm_payment_order, create_payment_order
 from app.risk import get_user_risk_profile
@@ -350,7 +350,7 @@ async def handle_my_account(query, user, admin=False):
     now = datetime.utcnow()
     plan = user.get("plan", PLAN_FREE)
     plan_end = user.get("plan_end")
-    trial_end = user.get("trial_end")
+    trial_end = get_effective_trial_end(user)
     days_left = None
     expires_str = "—"
     if plan_end:
