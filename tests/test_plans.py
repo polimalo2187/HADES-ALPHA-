@@ -2,7 +2,7 @@ import tests._bootstrap
 import unittest
 from datetime import timedelta
 
-from app.models import new_user, utcnow
+from app.models import TRIAL_DAYS, is_trial_active, new_user, utcnow
 from app.plans import (
     PLAN_PLUS,
     PLAN_PREMIUM,
@@ -45,6 +45,20 @@ class PlanLogicTests(unittest.TestCase):
     def test_feature_access_by_plan(self):
         self.assertTrue(can_access_feature(PLAN_PLUS, 'history'))
         self.assertFalse(can_access_feature('free', 'signals_premium'))
+
+    def test_new_user_trial_defaults_to_configured_days(self):
+        now = utcnow()
+        user = new_user(999, 'trialer')
+        delta = user['trial_end'] - now
+        self.assertGreaterEqual(delta.total_seconds(), (TRIAL_DAYS * 86400) - 5)
+        self.assertLessEqual(delta.total_seconds(), (TRIAL_DAYS * 86400) + 5)
+
+    def test_existing_trial_is_capped_to_configured_days(self):
+        now = utcnow()
+        user = new_user(1000, 'legacy')
+        user['created_at'] = now - timedelta(days=6)
+        user['trial_end'] = user['created_at'] + timedelta(days=7)
+        self.assertFalse(is_trial_active(user))
 
 
 if __name__ == '__main__':
