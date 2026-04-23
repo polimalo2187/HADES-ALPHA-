@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 import logging
 
 from app.database import subscription_events_collection, users_collection
-from app.models import activate_plan, is_plan_active, is_trial_active, new_subscription_event, update_timestamp, utcnow
+from app.models import activate_plan, get_effective_trial_end, is_plan_active, is_trial_active, new_subscription_event, update_timestamp, utcnow
 from app.services.admin_service import is_effectively_banned
 
 logger = logging.getLogger(__name__)
@@ -230,12 +230,13 @@ def plan_status(user: dict) -> dict:
             "days_left": max((expires - now).days, 0),
         }
 
-    if is_trial_active(user_copy):
+    effective_trial_end = get_effective_trial_end(user_copy)
+    if effective_trial_end and effective_trial_end > now:
         return {
             "plan": PLAN_FREE,
             "status": SUBSCRIPTION_STATUS_TRIAL,
-            "expires": user_copy.get("trial_end"),
-            "days_left": max(((user_copy.get("trial_end") or now) - now).days, 0),
+            "expires": effective_trial_end,
+            "days_left": max((effective_trial_end - now).days, 0),
         }
 
     return {
