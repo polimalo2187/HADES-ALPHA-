@@ -35,7 +35,7 @@ from app.statistics import (
     get_performance_snapshot,
 )
 from app.user_service import get_or_create_user
-from app.models import utcnow
+from app.models import get_effective_trial_end, utcnow
 from app.watchlist import get_watchlist, get_watchlist_limit_for_plan
 from app.signals import get_signal_analysis_for_user, get_signal_tracking_for_user, get_user_signal_by_signal_id
 from app.risk import (
@@ -272,7 +272,7 @@ def _serialize_admin_target_user(user: Dict[str, Any]) -> Dict[str, Any]:
         "subscription_status_label": _label_subscription_status(status.get("status") or "free"),
         "days_left": int(status.get("days_left") or 0),
         "expires_at": _iso(status.get("expires")),
-        "trial_end": _iso(refreshed_user.get("trial_end")),
+        "trial_end": _iso(get_effective_trial_end(refreshed_user)),
         "plan_end": _iso(refreshed_user.get("plan_end")),
         "free_manual_allowed": _admin_manual_free_allowed(refreshed_user),
     }
@@ -2521,7 +2521,7 @@ def build_me_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         subscription_status = "banned"
 
     plan_for_display = raw_plan if raw_plan != "free" else effective_plan
-    expires_at = status.get("expires") or refreshed_user.get("plan_end") or refreshed_user.get("trial_end")
+    expires_at = status.get("expires") or refreshed_user.get("plan_end") or get_effective_trial_end(refreshed_user)
 
     return {
         "user_id": int(refreshed_user.get("user_id") or 0),
