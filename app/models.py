@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 # =========================
 # CONSTANTES CONFIGURABLES
 # =========================
-TRIAL_DAYS = 7
+TRIAL_DAYS = 5
 USER_SCHEMA_VERSION = 4
 REFERRAL_SCHEMA_VERSION = 3
 SIGNAL_SCHEMA_VERSION = 1
@@ -27,6 +27,19 @@ SCANNER_CYCLE_STAT_SCHEMA_VERSION = 1
 
 def utcnow() -> datetime:
     return datetime.utcnow()
+
+
+def get_effective_trial_end(user: Dict[str, Any]) -> Optional[datetime]:
+    trial_end = user.get("trial_end")
+    if not isinstance(trial_end, datetime):
+        return None
+
+    created_at = user.get("created_at")
+    if isinstance(created_at, datetime):
+        capped_trial_end = created_at + timedelta(days=TRIAL_DAYS)
+        return min(trial_end, capped_trial_end)
+
+    return trial_end
 
 
 # =========================
@@ -139,9 +152,10 @@ def activate_plan(user: Dict[str, Any], plan: str, days: int = 30) -> Dict[str, 
 
 
 def is_trial_active(user: Dict[str, Any]) -> bool:
-    if user.get("trial_end") is None:
+    effective_trial_end = get_effective_trial_end(user)
+    if effective_trial_end is None:
         return False
-    return user["trial_end"] >= utcnow()
+    return effective_trial_end >= utcnow()
 
 
 
