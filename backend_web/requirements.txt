@@ -1,0 +1,9 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.4.2
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+firebase-admin==6.3.0
+twilio==8.11.1
+pymongo==4.6.0
+python-dotenv==1.0.0
