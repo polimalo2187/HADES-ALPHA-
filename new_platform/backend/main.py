@@ -14,10 +14,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
 from backend.config import settings
-from backend.database import initialize_database, close_database
+from backend.database import initialize_database, close_database, get_database
 from backend.routes import auth, users, signals, market, payments, admin, websocket
-from backend.services.scheduler_service import start_scheduler, stop_scheduler
-from backend.services.scanner_service import start_scanner, stop_scanner
+from backend.services import scanner_service, scheduler_service, register_default_tasks
 from backend.observability import start_observability, stop_observability
 
 logging.basicConfig(
@@ -34,15 +33,22 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 Iniciando Hades Platform...")
     
     await initialize_database()
+    db = await get_database()
     logger.info("✅ Base de datos conectada")
     
     await start_observability()
     logger.info("✅ Observabilidad iniciada")
     
-    await start_scheduler()
+    # Registrar tareas por defecto en el scheduler
+    from backend.routes.websocket import websocket_manager
+    register_default_tasks(scheduler_service, db, websocket_manager)
+    
+    # Iniciar servicios
+    await scheduler_service.start()
     logger.info("✅ Scheduler iniciado")
     
-    await start_scanner()
+    scanner_service.set_database(db)
+    await scanner_service.start()
     logger.info("✅ Scanner iniciado")
     
     yield
@@ -50,8 +56,8 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("🛑 Deteniendo Hades Platform...")
     
-    await stop_scanner()
-    await stop_scheduler()
+    await scanner_service.stop()
+    await scheduler_service.stop()
     await stop_observability()
     await close_database()
     

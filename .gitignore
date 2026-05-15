@@ -1,38 +1,39 @@
-```gitignore
+```
 # Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.py~
-*.py.class
-*.py.backup
-*.swp
-*.swo
-
-# Virtual environments
+.Python
+env/
 venv/
 .venv/
-env/
-.env/
+.ENV
+.ENV.local
+.env
+.env.local
+.env.*
+.venv/
+venv/
+ENV/
+env.bak/
+.ENV.bak/
 
-# Dependencies
-pip-wheel-metadata/
-requirements.txt.bak
-.tox/
-.coverage
-htmlcov/
-
-# Build artifacts
+# Build and distribution artifacts
 build/
 dist/
-*.egg-info/
-.installed.cfg
 *.egg
+*.egg-info/
+*.so
+*.whl
+
+# Docker
+.dockerenv
+Dockerfile
+docker-compose.yml
 
 # Logs
 *.log
-*.log.*
 
 # OS generated files
 .DS_Store
@@ -42,5 +43,18 @@ dist/
 .Trashes
 ehthumbs.db
 Thumbs.db
-Icon?
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+
+# Testing
+.coverage
+coverage/
+htmlcov/
+.pytest_cache/
+.mypy_cache/
 ```
