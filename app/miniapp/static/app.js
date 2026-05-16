@@ -2918,6 +2918,41 @@ function renderMarket() {
         </div>
       </div>
 
+      <div class="card card-span-12 chart-card" id="chartCard">
+        <div class="chart-header">
+          <div>
+            <div class="eyebrow">BINANCE · EN VIVO</div>
+            <h2 class="chart-title">Gráfica de Mercado</h2>
+          </div>
+          <div class="chart-controls">
+            <select id="chartSymbolSelect" class="text-input compact-select chart-select">
+              <option value="BINANCE:BTCUSDT">BTC/USDT</option>
+              <option value="BINANCE:ETHUSDT">ETH/USDT</option>
+              <option value="BINANCE:BNBUSDT">BNB/USDT</option>
+              <option value="BINANCE:SOLUSDT">SOL/USDT</option>
+              <option value="BINANCE:XRPUSDT">XRP/USDT</option>
+              <option value="BINANCE:ADAUSDT">ADA/USDT</option>
+              <option value="BINANCE:DOGEUSDT">DOGE/USDT</option>
+              <option value="BINANCE:AVAXUSDT">AVAX/USDT</option>
+              <option value="BINANCE:DOTUSDT">DOT/USDT</option>
+              <option value="BINANCE:LINKUSDT">LINK/USDT</option>
+            </select>
+            <div class="chart-interval-group">
+              <button class="chart-interval-btn" data-interval="1">1m</button>
+              <button class="chart-interval-btn" data-interval="5">5m</button>
+              <button class="chart-interval-btn" data-interval="15">15m</button>
+              <button class="chart-interval-btn active" data-interval="30">30m</button>
+              <button class="chart-interval-btn" data-interval="60">1h</button>
+              <button class="chart-interval-btn" data-interval="240">4h</button>
+              <button class="chart-interval-btn" data-interval="D">1D</button>
+            </div>
+          </div>
+        </div>
+        <div id="tradingview-chart" class="tradingview-chart-container">
+          <div class="chart-loading"><div class="spinner"></div><span>Cargando gráfica...</span></div>
+        </div>
+      </div>
+
       <div class="card card-span-6">
         <h2>Mayores subidas</h2>
         <div class="list">${movementList(gainers, 'gainers')}</div>
@@ -3261,7 +3296,78 @@ function renderMarket() {
       </div>
     </div>
   `;
+  // Inicializar gráfica TradingView tras renderizar el HTML
+  requestAnimationFrame(() => initChartWidget());
 }
+
+// ── TradingView Live Chart ────────────────────────────────────────────────────
+const _chartState = { symbol: 'BINANCE:BTCUSDT', interval: '30', scriptLoaded: false };
+
+function initChartWidget(symbol, interval) {
+  if (symbol) _chartState.symbol = symbol;
+  if (interval) _chartState.interval = interval;
+
+  const container = document.getElementById('tradingview-chart');
+  if (!container) return;
+
+  // Reset container
+  container.innerHTML = '';
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'tradingview-widget-container';
+  wrapper.style.height = '420px';
+
+  const widgetDiv = document.createElement('div');
+  widgetDiv.className = 'tradingview-widget-container__widget';
+  widgetDiv.style.height = '100%';
+
+  const script = document.createElement('script');
+  script.type = 'text/javascript';
+  script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+  script.async = true;
+  script.textContent = JSON.stringify({
+    autosize: true,
+    symbol: _chartState.symbol,
+    interval: _chartState.interval,
+    timezone: 'Etc/UTC',
+    theme: 'dark',
+    style: '1',
+    locale: 'es',
+    gridColor: 'rgba(255,255,255,0.04)',
+    hide_top_toolbar: false,
+    hide_legend: false,
+    allow_symbol_change: false,
+    save_image: false,
+    studies: ['STD;EMA', 'STD;RSI', 'STD;MACD'],
+    calendar: false,
+    support_host: 'https://www.tradingview.com'
+  });
+
+  wrapper.appendChild(widgetDiv);
+  wrapper.appendChild(script);
+  container.appendChild(wrapper);
+
+  // Bind controls after insertion
+  requestAnimationFrame(bindChartControls);
+}
+
+function bindChartControls() {
+  const symSelect = document.getElementById('chartSymbolSelect');
+  if (symSelect) {
+    symSelect.value = _chartState.symbol;
+    symSelect.onchange = () => initChartWidget(symSelect.value, _chartState.interval);
+  }
+  document.querySelectorAll('.chart-interval-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.interval === _chartState.interval);
+    btn.onclick = () => {
+      _chartState.interval = btn.dataset.interval;
+      document.querySelectorAll('.chart-interval-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      initChartWidget(_chartState.symbol, _chartState.interval);
+    };
+  });
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 function watchlistLimitText(meta) {
   if (!meta) return '—';
