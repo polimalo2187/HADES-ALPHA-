@@ -63,6 +63,7 @@ from app.statistics import reset_statistics
 from app.plans import normalize_plan, plan_status
 from app.watchlist import add_symbol, normalize_many, remove_symbol, set_symbols, clear_watchlist
 from app.risk import RiskConfigurationError, get_exchange_fee_preset, normalize_exchange_name, normalize_entry_mode, save_user_risk_profile
+from app.binance_api import get_futures_24h_tickers
 
 logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
@@ -452,6 +453,21 @@ def create_mini_app() -> FastAPI:
     @app.get("/api/miniapp/market")
     async def miniapp_market(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
         return build_market_payload(user)
+
+    @app.get("/api/miniapp/symbols")
+    async def miniapp_symbols(user: Dict[str, Any] = Depends(get_authenticated_user)):
+        """Devuelve todos los pares USDT-M de Binance Futures ordenados por volumen."""
+        tickers = get_futures_24h_tickers()
+        symbols = [
+            {
+                "symbol": t["symbol"],
+                "volume": float(t.get("quoteVolume", 0)),
+            }
+            for t in tickers
+            if isinstance(t, dict) and str(t.get("symbol", "")).endswith("USDT")
+        ]
+        symbols.sort(key=lambda x: x["volume"], reverse=True)
+        return {"symbols": symbols}
 
     @app.get("/api/miniapp/radar/{symbol}")
     async def miniapp_radar_detail(symbol: str, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
