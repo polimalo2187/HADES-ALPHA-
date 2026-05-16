@@ -2884,23 +2884,35 @@ function renderMarket() {
   }
   const watchlistSymbols = new Set((watchlistMeta.symbols || []).map(item => String(item || '').toUpperCase()));
 
-  const movementList = (items, type) => items.length ? items.map(item => `
-    <div class="item compact-item">
+  const movementList = (items, type) => items.length ? items.map(item => {
+    const base = item.symbol.replace(/USDT$/, '');
+    const name = _coinName(base);
+    return `
+    <div class="item compact-item live-ticker-item" data-live-symbol="${escapeHtml(item.symbol)}">
       <div class="item-header">
-        <div class="item-title">${escapeHtml(item.symbol)}</div>
-        <span class="${Number(item.change || 0) >= 0 ? 'positive-text' : 'negative-text'}">${escapeHtml(formatPercentSigned(item.change, 2))}</span>
+        <div class="coin-identity">
+          <img class="coin-logo" src="https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons/svg/color/${base.toLowerCase()}.svg"
+               onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"
+               alt="${escapeHtml(base)}" />
+          <div class="coin-logo-fallback" style="display:none;">${escapeHtml(base.slice(0,3))}</div>
+          <div>
+            <div class="item-title">${escapeHtml(base)} <span class="coin-quote">/ USDT</span></div>
+            ${name ? `<div class="coin-name">${escapeHtml(name)}</div>` : ''}
+          </div>
+        </div>
+        <span class="${Number(item.change || 0) >= 0 ? 'positive-text' : 'negative-text'} live-change" data-live-change="${escapeHtml(item.symbol)}">${escapeHtml(formatPercentSigned(item.change, 2))}</span>
       </div>
       <div class="inline-meta">
-        ${item.quote_volume ? `<span>Vol: ${escapeHtml(formatCompactAmount(item.quote_volume))}</span>` : ''}
-        ${item.last_price ? `<span>Px: ${escapeHtml(formatPrice(item.last_price, 4))}</span>` : ''}
+        ${item.quote_volume ? `<span>Vol: <span data-live-vol="${escapeHtml(item.symbol)}">${escapeHtml(formatCompactAmount(item.quote_volume))}</span></span>` : ''}
+        ${item.last_price ? `<span>Px: <span data-live-price="${escapeHtml(item.symbol)}">${escapeHtml(formatPrice(item.last_price, 4))}</span></span>` : ''}
       </div>
     </div>
-  `).join('') : `<div class="empty-state">${marketLoading ? 'Actualizando datos...' : (marketError ? 'Sin datos frescos por ahora.' : `Sin ${type} disponibles.`)}</div>`;
+  `; }).join('') : `<div class="empty-state">${marketLoading ? 'Actualizando datos...' : (marketError ? 'Sin datos frescos por ahora.' : `Sin ${type} disponibles.`)}</div>`;
 
   els.market.innerHTML = `
     <div class="section-grid">
       <div class="card card-span-12 market-hero-card">
-        <div class="hero-topline">PULSO DEL MERCADO</div>
+        <div class="hero-topline">PULSO DEL MERCADO <span class="live-dot"></span></div>
         <div class="hero-grid">
           <div>
             <h2 class="hero-title">${escapeHtml(market.bias || 'Neutral')} · ${escapeHtml(market.preferred_side || 'Selectivo')}</h2>
@@ -2964,22 +2976,36 @@ function renderMarket() {
       <div class="card card-span-6">
         <h2>BTC / ETH</h2>
         <div class="list">
-          <div class="item compact-item">
+          <div class="item compact-item live-ticker-item" data-live-symbol="BTCUSDT">
             <div class="item-header">
-              <div class="item-title">BTCUSDT</div>
-              <span class="${sideClassByValue(btc.change)}">${escapeHtml(formatPercentSigned(btc.change, 2))}</span>
+              <div class="coin-identity">
+                <img class="coin-logo" src="https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons/svg/color/btc.svg" alt="BTC" />
+                <div>
+                  <div class="item-title">BTC <span class="coin-quote">/ USDT</span></div>
+                  <div class="coin-name">Bitcoin</div>
+                </div>
+              </div>
+              <span class="${sideClassByValue(btc.change)} live-change" data-live-change="BTCUSDT">${escapeHtml(formatPercentSigned(btc.change, 2))}</span>
             </div>
             <div class="inline-meta">
+              <span>Px: <span data-live-price="BTCUSDT">${escapeHtml(formatPrice(btc.last_price || 0, 2))}</span></span>
               <span>Funding: ${escapeHtml(formatPercentSigned(btc.funding_rate_pct, 3))}</span>
               <span>OI: ${escapeHtml(formatCompactAmount(btc.open_interest))}</span>
             </div>
           </div>
-          <div class="item compact-item">
+          <div class="item compact-item live-ticker-item" data-live-symbol="ETHUSDT">
             <div class="item-header">
-              <div class="item-title">ETHUSDT</div>
-              <span class="${sideClassByValue(eth.change)}">${escapeHtml(formatPercentSigned(eth.change, 2))}</span>
+              <div class="coin-identity">
+                <img class="coin-logo" src="https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons/svg/color/eth.svg" alt="ETH" />
+                <div>
+                  <div class="item-title">ETH <span class="coin-quote">/ USDT</span></div>
+                  <div class="coin-name">Ethereum</div>
+                </div>
+              </div>
+              <span class="${sideClassByValue(eth.change)} live-change" data-live-change="ETHUSDT">${escapeHtml(formatPercentSigned(eth.change, 2))}</span>
             </div>
             <div class="inline-meta">
+              <span>Px: <span data-live-price="ETHUSDT">${escapeHtml(formatPrice(eth.last_price || 0, 2))}</span></span>
               <span>Funding: ${escapeHtml(formatPercentSigned(eth.funding_rate_pct, 3))}</span>
               <span>OI: ${escapeHtml(formatCompactAmount(eth.open_interest))}</span>
             </div>
@@ -3448,7 +3474,130 @@ async function bindChartControls() {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
-function watchlistLimitText(meta) {
+// ── Coin Name Lookup ─────────────────────────────────────────────────────────
+const _COIN_NAMES = {
+  BTC:'Bitcoin',ETH:'Ethereum',BNB:'BNB',SOL:'Solana',XRP:'Ripple',
+  ADA:'Cardano',DOGE:'Dogecoin',AVAX:'Avalanche',DOT:'Polkadot',LINK:'Chainlink',
+  MATIC:'Polygon',LTC:'Litecoin',UNI:'Uniswap',ATOM:'Cosmos',NEAR:'NEAR',
+  APT:'Aptos',ARB:'Arbitrum',OP:'Optimism',INJ:'Injective',SUI:'Sui',
+  PEPE:'Pepe',SHIB:'Shiba Inu',TRX:'TRON',TON:'Toncoin',FET:'Fetch.ai',
+  RENDER:'Render',WLD:'Worldcoin',FIL:'Filecoin',ICP:'Internet Computer',
+  IMX:'Immutable',SAND:'The Sandbox',MANA:'Decentraland',GALA:'Gala',
+  CRV:'Curve',AAVE:'Aave',MKR:'Maker',SNX:'Synthetix',COMP:'Compound',
+  LDO:'Lido',RUNE:'THORChain',SEI:'Sei',TIA:'Celestia',JUP:'Jupiter',
+  PYTH:'Pyth',STRK:'Starknet',ENA:'Ethena',W:'Wormhole',NEIRO:'Neiro',
+  FLOKI:'Floki',BONK:'Bonk',WIF:'dogwifhat',POPCAT:'Popcat',
+  NOT:'Notcoin',HMSTR:'Hamster Kombat',DOGS:'Dogs',CATI:'Catizen',
+  LAB:'LabDAO',GUA:'Gua',PHB:'Phoenix',CLOU:'Cloud',AI:'Sleepless AI',
+  UB:'UB',
+};
+function _coinName(base) { return _COIN_NAMES[base.toUpperCase()] || ''; }
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Live Market WebSocket ─────────────────────────────────────────────────────
+const _marketStream = {
+  ws: null,
+  active: false,
+  reconnectTimer: null,
+  tickBuffer: {},   // symbol → latest tick data
+  rafPending: false,
+};
+
+const _WS_URL = 'wss://fstream.binance.com/ws/!miniTicker@arr';
+
+function startMarketStream() {
+  if (_marketStream.ws && _marketStream.ws.readyState <= 1) return;
+  _marketStream.active = true;
+  _openMarketWS();
+}
+
+function stopMarketStream() {
+  _marketStream.active = false;
+  clearTimeout(_marketStream.reconnectTimer);
+  if (_marketStream.ws) {
+    try { _marketStream.ws.close(); } catch(_) {}
+    _marketStream.ws = null;
+  }
+}
+
+function _openMarketWS() {
+  if (!_marketStream.active) return;
+  try {
+    const ws = new WebSocket(_WS_URL);
+    _marketStream.ws = ws;
+
+    ws.onmessage = (evt) => {
+      let ticks;
+      try { ticks = JSON.parse(evt.data); } catch(_) { return; }
+      if (!Array.isArray(ticks)) return;
+      for (const t of ticks) {
+        if (!t.s) continue;
+        const open = parseFloat(t.o);
+        const close = parseFloat(t.c);
+        const changePct = open > 0 ? ((close - open) / open) * 100 : 0;
+        _marketStream.tickBuffer[t.s] = {
+          price: close,
+          change: changePct,
+          vol: parseFloat(t.q),
+        };
+      }
+      if (!_marketStream.rafPending) {
+        _marketStream.rafPending = true;
+        requestAnimationFrame(_flushMarketTicks);
+      }
+    };
+
+    ws.onerror = () => { ws.close(); };
+    ws.onclose = () => {
+      _marketStream.ws = null;
+      if (_marketStream.active) {
+        _marketStream.reconnectTimer = setTimeout(_openMarketWS, 3000);
+      }
+    };
+  } catch(_) {
+    if (_marketStream.active) {
+      _marketStream.reconnectTimer = setTimeout(_openMarketWS, 5000);
+    }
+  }
+}
+
+function _flushMarketTicks() {
+  _marketStream.rafPending = false;
+  const buffer = _marketStream.tickBuffer;
+  _marketStream.tickBuffer = {};
+
+  for (const [symbol, data] of Object.entries(buffer)) {
+    // Update all [data-live-change], [data-live-price], [data-live-vol] for this symbol
+    const changeEls = document.querySelectorAll(`[data-live-change="${symbol}"]`);
+    changeEls.forEach(el => {
+      const formatted = formatPercentSigned(data.change, 2);
+      if (el.textContent !== formatted) {
+        el.textContent = formatted;
+        const positive = data.change >= 0;
+        el.className = el.className.replace(/positive-text|negative-text/g, '').trim()
+          + ' ' + (positive ? 'positive-text' : 'negative-text') + ' live-flash';
+        setTimeout(() => el.classList.remove('live-flash'), 600);
+      }
+    });
+
+    const priceEls = document.querySelectorAll(`[data-live-price="${symbol}"]`);
+    priceEls.forEach(el => {
+      const formatted = formatPrice(data.price, data.price < 1 ? 6 : data.price < 100 ? 4 : 2);
+      if (el.textContent !== formatted) {
+        el.textContent = formatted;
+        el.classList.add('live-flash');
+        setTimeout(() => el.classList.remove('live-flash'), 600);
+      }
+    });
+
+    const volEls = document.querySelectorAll(`[data-live-vol="${symbol}"]`);
+    volEls.forEach(el => {
+      const formatted = formatCompactAmount(data.vol);
+      if (el.textContent !== formatted) el.textContent = formatted;
+    });
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
   if (!meta) return '—';
   if (meta.max_symbols === null || meta.max_symbols === undefined) return 'Sin límite';
   return `${meta.symbols_count || 0} / ${meta.max_symbols}`;
@@ -4259,6 +4408,10 @@ function renderAll() {
 }
 
 function setView(view) {
+  // Stop live stream when leaving market view
+  if (state.currentView === 'market' && view !== 'market') {
+    stopMarketStream();
+  }
   state.currentView = view;
   document.querySelectorAll('.view').forEach(node => node.classList.remove('active'));
   document.getElementById(`view-${view}`).classList.add('active');
@@ -4268,6 +4421,10 @@ function setView(view) {
   bindViewButtons();
   ensureViewData(view);
   syncLiveSignalsPolling();
+  // Start live stream when entering market view
+  if (view === 'market') {
+    startMarketStream();
+  }
 }
 
 async function copyValue(value, successMessage = 'Copiado correctamente.') {
