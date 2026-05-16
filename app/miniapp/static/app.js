@@ -2925,18 +2925,16 @@ function renderMarket() {
             <h2 class="chart-title">Gráfica de Mercado</h2>
           </div>
           <div class="chart-controls">
-            <select id="chartSymbolSelect" class="text-input compact-select chart-select">
-              <option value="BINANCE:BTCUSDT">BTC/USDT</option>
-              <option value="BINANCE:ETHUSDT">ETH/USDT</option>
-              <option value="BINANCE:BNBUSDT">BNB/USDT</option>
-              <option value="BINANCE:SOLUSDT">SOL/USDT</option>
-              <option value="BINANCE:XRPUSDT">XRP/USDT</option>
-              <option value="BINANCE:ADAUSDT">ADA/USDT</option>
-              <option value="BINANCE:DOGEUSDT">DOGE/USDT</option>
-              <option value="BINANCE:AVAXUSDT">AVAX/USDT</option>
-              <option value="BINANCE:DOTUSDT">DOT/USDT</option>
-              <option value="BINANCE:LINKUSDT">LINK/USDT</option>
-            </select>
+            <div class="chart-symbol-search-wrapper" id="chartSymbolWrapper">
+              <input
+                id="chartSymbolInput"
+                class="text-input chart-symbol-input"
+                placeholder="🔍 Buscar par (ej: BTC, SOL, PEPE...)"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <div id="chartSymbolDropdown" class="chart-symbol-dropdown hidden"></div>
+            </div>
             <div class="chart-interval-group">
               <button class="chart-interval-btn" data-interval="1">1m</button>
               <button class="chart-interval-btn" data-interval="5">5m</button>
@@ -3301,7 +3299,42 @@ function renderMarket() {
 }
 
 // ── TradingView Live Chart ────────────────────────────────────────────────────
-const _chartState = { symbol: 'BINANCE:BTCUSDT', interval: '30', scriptLoaded: false };
+const _chartState = { symbol: 'BINANCE:BTCUSDT', interval: '30', allPairs: [], filteredPairs: [] };
+
+async function _loadBinancePairs() {
+  if (_chartState.allPairs.length) return _chartState.allPairs;
+  try {
+    const data = await api('/api/miniapp/symbols');
+    _chartState.allPairs = data.symbols || [];
+  } catch (e) {
+    _chartState.allPairs = [
+      'BTCUSDT','ETHUSDT','BNBUSDT','SOLUSDT','XRPUSDT','ADAUSDT','DOGEUSDT',
+      'AVAXUSDT','DOTUSDT','LINKUSDT','MATICUSDT','LTCUSDT','UNIUSDT','ATOMUSDT',
+      'NEARUSDT','APTUSDT','ARBUSDT','OPUSDT','INJUSDT','SUIUSDT','PEPEUSDT',
+      'SHIBUSDT','TRXUSDT','TONUSDT','FETUSDT','RENDERUSDT','WLDUSDT'
+    ].map(s => ({ symbol: s, volume: 0 }));
+  }
+  return _chartState.allPairs;
+}
+
+function _searchPairs(query) {
+  const q = query.toUpperCase().replace(/[\/\s-]/g, '');
+  if (!q) return _chartState.allPairs.slice(0, 30);
+  return _chartState.allPairs
+    .filter(p => p.symbol.includes(q))
+    .slice(0, 40);
+}
+
+function _formatPairLabel(symbol) {
+  // e.g. BTCUSDT → BTC / USDT
+  const bases = ['USDT','BUSD','BTC','ETH','BNB','USDC'];
+  for (const quote of bases) {
+    if (symbol.endsWith(quote)) {
+      return `${symbol.slice(0, -quote.length)} / ${quote}`;
+    }
+  }
+  return symbol;
+}
 
 function initChartWidget(symbol, interval) {
   if (symbol) _chartState.symbol = symbol;
@@ -3310,7 +3343,6 @@ function initChartWidget(symbol, interval) {
   const container = document.getElementById('tradingview-chart');
   if (!container) return;
 
-  // Reset container
   container.innerHTML = '';
 
   const wrapper = document.createElement('div');
@@ -3347,16 +3379,63 @@ function initChartWidget(symbol, interval) {
   wrapper.appendChild(script);
   container.appendChild(wrapper);
 
-  // Bind controls after insertion
   requestAnimationFrame(bindChartControls);
 }
 
-function bindChartControls() {
-  const symSelect = document.getElementById('chartSymbolSelect');
-  if (symSelect) {
-    symSelect.value = _chartState.symbol;
-    symSelect.onchange = () => initChartWidget(symSelect.value, _chartState.interval);
+function _renderDropdown(pairs, input) {
+  const dd = document.getElementById('chartSymbolDropdown');
+  if (!dd) return;
+  if (!pairs.length) {
+    dd.innerHTML = '<div class="chart-dd-empty">Sin resultados</div>';
+    dd.classList.remove('hidden');
+    return;
   }
+  dd.innerHTML = pairs.map(p => `
+    <div class="chart-dd-item" data-symbol="BINANCE:${p.symbol}">
+      <span class="chart-dd-label">${_formatPairLabel(p.symbol)}</span>
+      <span class="chart-dd-vol">${p.volume > 0 ? '$' + (p.volume / 1e6).toFixed(1) + 'M' : ''}</span>
+    </div>
+  `).join('');
+  dd.classList.remove('hidden');
+  dd.querySelectorAll('.chart-dd-item').forEach(item => {
+    item.onclick = () => {
+      const sym = item.dataset.symbol;
+      _chartState.symbol = sym;
+      if (input) input.value = _formatPairLabel(sym.replace('BINANCE:', ''));
+      dd.classList.add('hidden');
+      initChartWidget(sym, _chartState.interval);
+    };
+  });
+}
+
+async function bindChartControls() {
+  const input = document.getElementById('chartSymbolInput');
+  const dd = document.getElementById('chartSymbolDropdown');
+
+  if (input) {
+    // Set current value label
+    input.value = _formatPairLabel(_chartState.symbol.replace('BINANCE:', ''));
+
+    // Load pairs and show top 30 on focus
+    input.addEventListener('focus', async () => {
+      await _loadBinancePairs();
+      const results = _searchPairs(input.value === _formatPairLabel(_chartState.symbol.replace('BINANCE:', '')) ? '' : input.value);
+      _renderDropdown(results, input);
+    });
+
+    input.addEventListener('input', async () => {
+      await _loadBinancePairs();
+      _renderDropdown(_searchPairs(input.value), input);
+    });
+
+    // Close dropdown on outside click
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#chartSymbolWrapper')) {
+        dd && dd.classList.add('hidden');
+      }
+    }, { capture: true });
+  }
+
   document.querySelectorAll('.chart-interval-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.interval === _chartState.interval);
     btn.onclick = () => {
