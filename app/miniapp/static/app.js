@@ -3598,6 +3598,8 @@ function _flushMarketTicks() {
   }
 }
 // ─────────────────────────────────────────────────────────────────────────────
+
+function watchlistLimitText(meta) {
   if (!meta) return '—';
   if (meta.max_symbols === null || meta.max_symbols === undefined) return 'Sin límite';
   return `${meta.symbols_count || 0} / ${meta.max_symbols}`;
