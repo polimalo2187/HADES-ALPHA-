@@ -2709,117 +2709,308 @@ function renderHome() {
   const recentHistory = dashboard.recent_history || [];
   const generatedAt = state.payload.generated_at;
   const diagnosis = summaryDiagnosis(summary);
+  const activeCount = Number(dashboard.active_signals_count || 0);
+
+  // Bias utilities
+  const biasRaw = String(market.bias || '').toLowerCase();
+  const biasIsBull = biasRaw.includes('bull') || biasRaw.includes('long') || biasRaw.includes('buy') || biasRaw === 'alcista';
+  const biasIsBear = biasRaw.includes('bear') || biasRaw.includes('short') || biasRaw.includes('sell') || biasRaw === 'bajista';
+  const biasDotClass = biasIsBull ? 'bias-dot-bull' : biasIsBear ? 'bias-dot-bear' : 'bias-dot-neutral';
+  const heroGradientClass = biasIsBull ? 'hero-gradient-bull' : biasIsBear ? 'hero-gradient-bear' : 'hero-gradient-neutral';
+
+  // Metric classes
+  const winRate = Number(summary.winrate || 0);
+  const winRateClass = winRate >= 60 ? 'stat-positive' : winRate >= 45 ? 'stat-warning' : 'stat-negative';
+  const pf = Number(summary.profit_factor || 0);
+  const pfClass = pf >= 1.5 ? 'stat-positive' : pf >= 1.0 ? 'stat-warning' : 'stat-negative';
+  const exp = Number(summary.expectancy_r || 0);
+  const expClass = exp > 0 ? 'stat-positive' : exp < 0 ? 'stat-negative' : 'stat-warning';
+  const dd = Number(summary.max_drawdown_r || 0);
+  const ddClass = dd <= 3 ? 'stat-positive' : dd <= 6 ? 'stat-warning' : 'stat-negative';
+
+  // Scoreboard bars
+  const tp1Count = Number(summary.tp1 || 0);
+  const tp2Count = Number(summary.tp2 || 0);
+  const slCount = Number(summary.sl || 0);
+  const expCount = Number(summary.expired || 0);
+  const barTotal = Math.max(tp1Count + tp2Count + slCount + expCount, 1);
+  const tp1Pct = Math.round(tp1Count / barTotal * 100);
+  const tp2Pct = Math.round(tp2Count / barTotal * 100);
+  const slPct = Math.round(slCount / barTotal * 100);
+  const expPct = Math.round(expCount / barTotal * 100);
 
   els.home.innerHTML = `
     <div class="section-grid">
-      <div class="card card-span-12 hero-card">
-        <div class="hero-topline">HADES MINI APP</div>
-        <div class="hero-grid">
-          <div>
-            <h2 class="hero-title">${escapeHtml(me.plan_name || 'FREE')} · ${escapeHtml(me.subscription_status_label || me.subscription_status || 'free')}</h2>
-            <p class="hero-subtitle">Controla tus señales, revisa tu histórico y ejecuta pagos sin salir de Telegram.</p>
-            <div class="pill-row">
-              <span class="pill">Días restantes: ${escapeHtml(me.days_left || 0)}</span>
-              <span class="pill">Watchlist: ${escapeHtml(dashboard.watchlist_count || 0)}</span>
-              <span class="pill">Sesgo mercado: ${escapeHtml(market.bias || '—')}</span>
+
+      <!-- ① COMMAND HEADER -->
+      <div class="card card-span-12 cmd-header ${heroGradientClass}">
+        <div class="cmd-topbar">
+          <div class="cmd-market-pulse">
+            <span class="bias-dot ${biasDotClass}"></span>
+            <span class="cmd-bias-label">${escapeHtml(market.bias || 'Sin bias')}</span>
+            ${market.regime ? `<span class="cmd-regime-badge">${escapeHtml(market.regime)}</span>` : ''}
+          </div>
+          <div class="cmd-plan-chip">
+            <span class="cmd-plan-name">${escapeHtml(me.plan_name || 'FREE')}</span>
+            <span class="cmd-days">${escapeHtml(String(me.days_left || 0))}d</span>
+          </div>
+        </div>
+
+        <div class="cmd-center">
+          <div class="cmd-signals-count ${activeCount > 0 ? 'cmd-signals-live' : 'cmd-signals-idle'}">
+            ${activeCount > 0 ? '<span class="cmd-live-dot"></span>' : ''}
+            <span class="cmd-signals-number">${escapeHtml(String(activeCount))}</span>
+            <span class="cmd-signals-label">señales activas</span>
+          </div>
+        </div>
+
+        <div class="cmd-metrics-strip">
+          <div class="cmd-metric">
+            <span class="cmd-metric-value ${winRateClass}">${escapeHtml(formatNumber(winRate))}%</span>
+            <span class="cmd-metric-label">Win Rate ${escapeHtml(summaryLabel)}</span>
+          </div>
+          <div class="cmd-metric-sep"></div>
+          <div class="cmd-metric">
+            <span class="cmd-metric-value ${pfClass}">${escapeHtml(formatNumber(pf))}</span>
+            <span class="cmd-metric-label">Profit Factor</span>
+          </div>
+          <div class="cmd-metric-sep"></div>
+          <div class="cmd-metric">
+            <span class="cmd-metric-value ${expClass}">${exp >= 0 ? '+' : ''}${escapeHtml(formatNumber(exp))}</span>
+            <span class="cmd-metric-label">Expectancy R</span>
+          </div>
+          <div class="cmd-metric-sep"></div>
+          <div class="cmd-metric">
+            <span class="cmd-metric-value ${ddClass}">${escapeHtml(formatNumber(dd))}</span>
+            <span class="cmd-metric-label">Max DD (R)</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ② LIVE SIGNAL ALERT BANNER -->
+      ${activeCount > 0 ? `
+        <div class="card card-span-12 live-alert-banner" data-goto="signals">
+          <span class="live-alert-dot"></span>
+          <span class="live-alert-text">${escapeHtml(String(activeCount))} señal${activeCount !== 1 ? 'es' : ''} activa${activeCount !== 1 ? 's' : ''} en este momento</span>
+          <span class="live-alert-cta">Ver ahora →</span>
+        </div>
+      ` : ''}
+
+      <!-- ③ DIAGNÓSTICO DEL SISTEMA -->
+      <div class="card card-span-12 diagnosis-card ${escapeHtml(diagnosis.tone)}">
+        <div class="diagnosis-icon">${diagnosis.tone === 'diagnostic-positive' ? '▲' : diagnosis.tone === 'diagnostic-negative' ? '▼' : '◆'}</div>
+        <div class="diagnosis-body">
+          <div class="diagnosis-title">${escapeHtml(diagnosis.title)}</div>
+          <div class="diagnosis-text">${escapeHtml(diagnosis.text)}</div>
+        </div>
+      </div>
+
+      <!-- ④ ESTADO DE MERCADO -->
+      <div class="card card-span-12 regime-card">
+        <div class="regime-inner">
+          <div class="regime-dot-block">
+            <span class="bias-dot ${biasDotClass} bias-dot-lg"></span>
+            <div>
+              <div class="regime-eyebrow">ESTADO DE MERCADO</div>
+              <div class="regime-value">${escapeHtml(market.regime || market.bias || 'Sin lectura')}</div>
             </div>
           </div>
-          <div class="hero-side ${metricToneClass('winrate', summary.winrate || 0)}">
-            <div class="hero-side-value">${escapeHtml(formatNumber(summary.winrate || 0))}%</div>
-            <div class="hero-side-label">Win rate ${escapeHtml(summaryLabel)} resuelto</div>
-            <div class="hero-side-meta">Actualizado: ${escapeHtml(formatDate(generatedAt))}</div>
+          <div class="regime-chips">
+            ${market.volatility ? `<span class="regime-chip">${escapeHtml(market.volatility)}</span>` : ''}
+            ${market.environment ? `<span class="regime-chip">${escapeHtml(market.environment)}</span>` : ''}
+            ${market.bias ? `<span class="regime-chip regime-chip-bias ${biasIsBull ? 'regime-chip-bull' : biasIsBear ? 'regime-chip-bear' : 'regime-chip-neutral'}">${escapeHtml(market.bias)}</span>` : ''}
           </div>
         </div>
+        ${market.recommendation ? `<p class="regime-recommendation">${escapeHtml(market.recommendation)}</p>` : ''}
       </div>
 
-      ${metricCard('Señales activas', dashboard.active_signals_count || 0, 'Visibles ahora mismo')}
-      ${metricCard('PF señales (R)', formatNumber(summary.profit_factor || 0), 'Solo resueltas: TP1 / TP2 / SL', '', metricToneClass('pf', summary.profit_factor || 0))}
-      ${metricCard('Expectancy R', formatNumber(summary.expectancy_r || 0), 'Promedio por señal resuelta', '', metricToneClass('expectancy', summary.expectancy_r || 0))}
-      ${metricCard('Max DD (R)', formatNumber(summary.max_drawdown_r || 0), 'Peor racha reciente en R', '', metricToneClass('drawdown', summary.max_drawdown_r || 0))}
-
-      <div class="card card-span-12 ${escapeHtml(diagnosis.tone)}">
-        <div class="diagnostic-title">${escapeHtml(diagnosis.title)}</div>
-        <div class="diagnostic-text">${escapeHtml(diagnosis.text)}</div>
-      </div>
-
-      <div class="card card-span-12">
-        <h2>Lectura rápida del modelo R</h2>
-        <div class="resolution-grid">
-          ${resolutionCard('TP1', summary.tp1 ?? 0, '+1R por señal resuelta', 'metric-positive')}
-          ${resolutionCard('TP2', summary.tp2 ?? 0, '+2R por señal resuelta', 'metric-positive')}
-          ${resolutionCard('SL', summary.sl ?? 0, '-1R por señal resuelta', 'metric-negative')}
-          ${resolutionCard('Exp limpias', summary.expired ?? 0, 'Fuera del PF y la expectancy', 'metric-neutral')}
-        </div>
-        <div class="pill-row compact-pill-row" style="margin-top: 12px;">
-          <span class="pill">Evaluadas: ${escapeHtml(summary.total ?? 0)}</span>
-          <span class="pill">Resueltas: ${escapeHtml(summary.resolved ?? 0)}</span>
-          <span class="pill">Win rate resuelto: ${escapeHtml(formatNumber(summary.winrate || 0))}%</span>
-        </div>
-      </div>
-
-      <div class="card card-span-12">
-        <h2>Acciones rápidas</h2>
-        <div class="action-row">
-          <button class="button button-primary" data-goto="signals">Ver señales</button>
-          <button class="button button-secondary" data-goto="market">Mercado</button>
-          <button class="button button-secondary" data-goto="history">Ver historial</button>
-          <button class="button button-secondary" data-open-performance-center="true">Rendimiento</button>
-          <button class="button button-secondary" data-goto="account">Mi cuenta</button>
-        </div>
-      </div>
-
-      <div class="card card-span-6">
-        <h2>Estado operativo</h2>
-        <div class="pill-row">
-          <span class="pill">Bias: ${escapeHtml(market.bias || '—')}</span>
-          <span class="pill">Régimen: ${escapeHtml(market.regime || '—')}</span>
-          <span class="pill">Volatilidad: ${escapeHtml(market.volatility || '—')}</span>
-          <span class="pill">Entorno: ${escapeHtml(market.environment || '—')}</span>
-          <span class="pill">Exp. limpias 7D: ${escapeHtml(summary.expired ?? 0)}</span>
-        </div>
-        <p style="margin-top:12px;">${escapeHtml(market.recommendation || 'Sin lectura operativa disponible por ahora.')}</p>
-      </div>
-
-      <div class="card card-span-6">
-        <h2>Distribución reciente</h2>
-        ${mixPills('Últimas señales entregadas', dashboard.signal_mix || {})}
-        ${mixPills('Activas ahora mismo', dashboard.active_mix || {})}
-      </div>
-
-      <div class="card card-span-12">
-        <div class="item-header">
+      <!-- ⑤ SCOREBOARD TP1 / TP2 / SL -->
+      <div class="card card-span-12 scoreboard-card">
+        <div class="scoreboard-header">
           <div>
-            <h2 style="margin:0;">Rendimiento serio</h2>
-            <div class="item-subtitle">Abre el módulo dedicado para revisar PF por R, expectancy, score buckets, breakdown por plan y rendimiento por estrategia.</div>
+            <div class="scoreboard-eyebrow">RESOLUCIÓN ${escapeHtml(summaryLabel)}</div>
+            <div class="scoreboard-resolved">${escapeHtml(String(summary.resolved ?? 0))} resueltas · ${escapeHtml(String(summary.total ?? 0))} evaluadas</div>
           </div>
-          <span class="plan-tag">30D</span>
+          <div class="scoreboard-wr-badge ${winRateClass}">${escapeHtml(formatNumber(winRate))}%</div>
         </div>
-        <div class="account-metric-grid">
-          ${accountMetricCard('PF 30D', formatRatioValue(dashboard.summary_30d?.profit_factor, dashboard.summary_30d?.profit_factor === null && false), '', metricToneClass('pf', dashboard.summary_30d?.profit_factor || 0))}
-          ${accountMetricCard('Expectancy 30D', formatNumber(dashboard.summary_30d?.expectancy_r || 0, 4), 'R por resuelta', metricToneClass('expectancy', dashboard.summary_30d?.expectancy_r || 0))}
-          ${accountMetricCard('Win rate 30D', `${formatNumber(dashboard.summary_30d?.winrate || 0)}%`, '', metricToneClass('winrate', dashboard.summary_30d?.winrate || 0))}
-          ${accountMetricCard('Resueltas 30D', dashboard.summary_30d?.resolved || 0)}
-        </div>
-        <div class="action-row compact" style="margin-top:12px;">
-          <button class="button button-secondary" data-open-performance-center="true">Abrir rendimiento</button>
+
+        <div class="scoreboard-grid">
+          <div class="scoreboard-row">
+            <span class="scoreboard-row-label sb-label-tp">TP1</span>
+            <div class="scoreboard-bar-track">
+              <div class="scoreboard-bar sb-bar-tp1" style="width:${tp1Pct}%"></div>
+            </div>
+            <span class="scoreboard-row-count">${escapeHtml(String(tp1Count))}</span>
+          </div>
+          <div class="scoreboard-row">
+            <span class="scoreboard-row-label sb-label-tp">TP2</span>
+            <div class="scoreboard-bar-track">
+              <div class="scoreboard-bar sb-bar-tp2" style="width:${tp2Pct}%"></div>
+            </div>
+            <span class="scoreboard-row-count">${escapeHtml(String(tp2Count))}</span>
+          </div>
+          <div class="scoreboard-row">
+            <span class="scoreboard-row-label sb-label-sl">SL</span>
+            <div class="scoreboard-bar-track">
+              <div class="scoreboard-bar sb-bar-sl" style="width:${slPct}%"></div>
+            </div>
+            <span class="scoreboard-row-count">${escapeHtml(String(slCount))}</span>
+          </div>
+          ${expCount > 0 ? `
+          <div class="scoreboard-row">
+            <span class="scoreboard-row-label sb-label-exp">EXP</span>
+            <div class="scoreboard-bar-track">
+              <div class="scoreboard-bar sb-bar-exp" style="width:${expPct}%"></div>
+            </div>
+            <span class="scoreboard-row-count">${escapeHtml(String(expCount))}</span>
+          </div>` : ''}
         </div>
       </div>
 
+      <!-- ⑥ SEÑALES RECIENTES -->
       <div class="card card-span-12">
-        <h2>Señales recientes</h2>
-        <div class="list">
-          ${recentSignals.length ? recentSignals.slice(0, 3).map(signalCard).join('') : '<div class="empty-state">Todavía no hay señales recientes para mostrar.</div>'}
+        <div class="feed-header">
+          <h2>Señales recientes</h2>
+          <button class="button button-secondary feed-see-all" data-goto="signals">Ver todas →</button>
+        </div>
+        <div class="feed-list">
+          ${recentSignals.length
+            ? recentSignals.slice(0, 3).map(item => signalFeedCard(item)).join('')
+            : '<div class="empty-state">No hay señales recientes todavía.</div>'}
         </div>
       </div>
 
+      <!-- ⑦ HISTORIAL RECIENTE -->
       <div class="card card-span-12">
-        <h2>Historial reciente</h2>
-        <div class="list">
-          ${recentHistory.length ? recentHistory.slice(0, 3).map(historyCard).join('') : '<div class="empty-state">No hay histórico reciente todavía.</div>'}
+        <div class="feed-header">
+          <h2>Historial reciente</h2>
+          <button class="button button-secondary feed-see-all" data-goto="history">Ver todo →</button>
+        </div>
+        <div class="feed-list">
+          ${recentHistory.length
+            ? recentHistory.slice(0, 3).map(item => historyFeedCard(item)).join('')
+            : '<div class="empty-state">No hay histórico reciente todavía.</div>'}
+        </div>
+      </div>
+
+      <!-- ⑧ RENDIMIENTO 30D TEASER -->
+      <div class="card card-span-12 perf-teaser-card">
+        <div class="perf-teaser-header">
+          <div>
+            <div class="perf-teaser-eyebrow">MÓDULO DE RENDIMIENTO</div>
+            <h2 style="margin:0">Rendimiento 30D</h2>
+          </div>
+          <button class="button button-primary" data-open-performance-center="true">Abrir</button>
+        </div>
+        <div class="perf-teaser-grid">
+          <div class="perf-teaser-stat ${metricToneClass('pf', dashboard.summary_30d?.profit_factor || 0)}">
+            <div class="perf-teaser-val">${escapeHtml(formatNumber(dashboard.summary_30d?.profit_factor || 0))}</div>
+            <div class="perf-teaser-label">Profit Factor</div>
+          </div>
+          <div class="perf-teaser-stat ${metricToneClass('expectancy', dashboard.summary_30d?.expectancy_r || 0)}">
+            <div class="perf-teaser-val">${Number(dashboard.summary_30d?.expectancy_r || 0) >= 0 ? '+' : ''}${escapeHtml(formatNumber(dashboard.summary_30d?.expectancy_r || 0, 4))}</div>
+            <div class="perf-teaser-label">Expectancy R</div>
+          </div>
+          <div class="perf-teaser-stat ${metricToneClass('winrate', dashboard.summary_30d?.winrate || 0)}">
+            <div class="perf-teaser-val">${escapeHtml(formatNumber(dashboard.summary_30d?.winrate || 0))}%</div>
+            <div class="perf-teaser-label">Win Rate</div>
+          </div>
+          <div class="perf-teaser-stat">
+            <div class="perf-teaser-val">${escapeHtml(String(dashboard.summary_30d?.resolved || 0))}</div>
+            <div class="perf-teaser-label">Resueltas</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ⑨ ACCIONES RÁPIDAS -->
+      <div class="card card-span-12 quick-actions-card">
+        <div class="quick-actions-eyebrow">ACCIONES RÁPIDAS</div>
+        <div class="quick-actions-grid">
+          <button class="qa-btn qa-btn-primary" data-goto="signals">
+            <span class="qa-icon">⚡</span>
+            <span class="qa-label">Señales</span>
+          </button>
+          <button class="qa-btn" data-goto="market">
+            <span class="qa-icon">📊</span>
+            <span class="qa-label">Mercado</span>
+          </button>
+          <button class="qa-btn" data-goto="history">
+            <span class="qa-icon">📋</span>
+            <span class="qa-label">Historial</span>
+          </button>
+          <button class="qa-btn" data-open-performance-center="true">
+            <span class="qa-icon">🏆</span>
+            <span class="qa-label">Rendimiento</span>
+          </button>
+          <button class="qa-btn" data-goto="account">
+            <span class="qa-icon">👤</span>
+            <span class="qa-label">Cuenta</span>
+          </button>
         </div>
       </div>
 
       ${activeOrder ? paymentInstructions(activeOrder) : ''}
+    </div>
+  `;
+}
+
+function signalFeedCard(item) {
+  const dirRaw = String(item.direction || '').toLowerCase();
+  const isLong = dirRaw.includes('long') || dirRaw === 'buy';
+  const borderClass = isLong ? 'feed-item-long' : 'feed-item-short';
+  const statusBadge = item.result
+    ? `<span class="${badgeClassByResult(item)}">${escapeHtml(resultLabel(item))}</span>`
+    : `<span class="plan-tag">${escapeHtml(formatStatusLabel(item.status || 'active'))}</span>`;
+  return `
+    <div class="feed-item ${borderClass}">
+      <div class="feed-item-top">
+        <div class="feed-item-left">
+          <span class="feed-symbol">${escapeHtml(item.symbol)}</span>
+          <span class="${dirClass(item.direction)} feed-dir-badge">${escapeHtml(item.direction)}</span>
+        </div>
+        ${statusBadge}
+      </div>
+      <div class="feed-levels">
+        ${item.entry_price ? `<span class="feed-level"><span class="feed-level-lbl">ENTRY</span><span class="feed-level-val">${escapeHtml(formatPrice(item.entry_price, 4))}</span></span>` : ''}
+        <span class="feed-level"><span class="feed-level-lbl">SCORE</span><span class="feed-level-val">${escapeHtml(formatNumber(item.score || 0, 1))}</span></span>
+        <span class="feed-level"><span class="feed-level-lbl">TIER</span><span class="feed-level-val">${escapeHtml(String(item.visibility || '').toUpperCase())}</span></span>
+      </div>
+      <div class="feed-item-footer">
+        <span class="feed-date">${escapeHtml(formatDate(item.created_at))}</span>
+        <div class="feed-actions">
+          <button class="button button-secondary feed-btn" data-signal-detail="${escapeHtml(item.signal_id)}" data-signal-source="signals">Inteligencia</button>
+          <button class="button button-secondary feed-btn" data-open-risk-signal="${escapeHtml(item.signal_id)}">Riesgo</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function historyFeedCard(item) {
+  const dirRaw = String(item.direction || '').toLowerCase();
+  const isLong = dirRaw.includes('long') || dirRaw === 'buy';
+  const borderClass = isLong ? 'feed-item-long' : 'feed-item-short';
+  const rVal = item.r_multiple !== null && item.r_multiple !== undefined ? Number(item.r_multiple) : null;
+  return `
+    <div class="feed-item ${borderClass}">
+      <div class="feed-item-top">
+        <div class="feed-item-left">
+          <span class="feed-symbol">${escapeHtml(item.symbol)}</span>
+          <span class="${dirClass(item.direction)} feed-dir-badge">${escapeHtml(item.direction)}</span>
+        </div>
+        <span class="${badgeClassByResult(item)}">${escapeHtml(resultLabel(item))}</span>
+      </div>
+      <div class="feed-levels">
+        ${rVal !== null ? `<span class="feed-level"><span class="feed-level-lbl">R</span><span class="feed-level-val ${rVal >= 0 ? 'stat-positive' : 'stat-negative'}">${rVal >= 0 ? '+' : ''}${escapeHtml(String(item.r_multiple))}</span></span>` : ''}
+        ${item.resolution_minutes ? `<span class="feed-level"><span class="feed-level-lbl">TIEMPO</span><span class="feed-level-val">${escapeHtml(String(item.resolution_minutes))}m</span></span>` : ''}
+        <span class="feed-level"><span class="feed-level-lbl">SCORE</span><span class="feed-level-val">${escapeHtml(formatNumber(item.score || 0, 1))}</span></span>
+      </div>
+      <div class="feed-item-footer">
+        <span class="feed-date">${escapeHtml(formatDate(item.signal_created_at))}</span>
+        <div class="feed-actions">
+          <button class="button button-secondary feed-btn" data-signal-detail="${escapeHtml(item.signal_id)}" data-signal-source="history">Inteligencia</button>
+        </div>
+      </div>
     </div>
   `;
 }
