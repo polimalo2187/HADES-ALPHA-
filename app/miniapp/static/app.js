@@ -2134,93 +2134,196 @@ function performanceScoreBucketItem(item) {
 
 function renderPerformance() {
   if (!els.performance) return;
-  const payload = state.performanceCenter.payload || {};
+  const payload  = state.performanceCenter.payload || {};
   const overview = payload.overview || {};
-  const focus = payload.focus || {};
-  const summary = focus.summary || {};
-  const activity = focus.activity || {};
-  const windows = Array.isArray(payload.windows) ? payload.windows : [];
+  const focus    = payload.focus   || {};
+  const summary  = focus.summary   || {};
+  const activity = focus.activity  || {};
+  const windows  = Array.isArray(payload.windows) ? payload.windows : [];
 
-  const loadingBanner = state.performanceCenter.loading
-    ? '<div class="card card-span-12"><div class="empty-state">Actualizando rendimiento...</div></div>'
-    : '';
-
+  // ── Empty / notice-only state ─────────────────────────────────────────────
   if (!state.performanceCenter.payload && !state.performanceCenter.loading) {
     els.performance.innerHTML = `
       <div class="section-grid">
         ${performanceNoticeCard(state.performanceCenter.notice)}
-        <div class="card card-span-12">
-          <h2>Rendimiento serio</h2>
-          <p>Módulo dedicado para revisar PF por R, expectancy, TP1/TP2/SL, actividad del scanner, breakdown por plan y rendimiento real por estrategia.</p>
-          <div class="action-row"><button class="button button-primary" data-open-performance-center="true">Abrir rendimiento</button></div>
+        <div class="card card-span-12 perf-empty-card">
+          <div class="perf-empty-icon">📊</div>
+          <h2 class="perf-empty-title">Rendimiento serio</h2>
+          <p class="perf-empty-sub">PF por R, expectancy, TP1/TP2/SL, fill rate y actividad del scanner — sin exponer la inteligencia interna del motor.</p>
+          <div class="action-row" style="margin-top:18px;justify-content:center;">
+            <button class="button button-primary perf-cta-btn" data-open-performance-center="true">Abrir rendimiento</button>
+          </div>
         </div>
-      </div>
-    `;
+      </div>`;
     return;
   }
+
+  const loading = state.performanceCenter.loading;
+
+  // ── Diagnosis ──────────────────────────────────────────────────────────────
+  const diag     = summaryDiagnosis(summary);
+  const diagIcon = diag.tone === 'diagnostic-positive' ? '✦' : diag.tone === 'diagnostic-warning' ? '◈' : '◆';
+  const diagColor = diag.tone === 'diagnostic-positive' ? '#22c55e' : diag.tone === 'diagnostic-warning' ? '#f59e0b' : '#ef4444';
+
+  // ── Resolution bar builder ─────────────────────────────────────────────────
+  const tp1 = Number(summary.tp1 ?? 0);
+  const tp2 = Number(summary.tp2 ?? 0);
+  const sl  = Number(summary.sl  ?? 0);
+  const exp = Number(summary.expired ?? 0);
+  const maxCount = Math.max(tp1 + tp2, sl, exp, 1);
+  const barPct = v => `${Math.round((Number(v) / maxCount) * 100)}%`;
+
+  function resBar(label, count, rVal, color, bgColor) {
+    const pct = Math.round((Number(count) / maxCount) * 100);
+    return `
+      <div class="perf-res-row">
+        <div class="perf-res-meta">
+          <span class="perf-res-label">${escapeHtml(label)}</span>
+          <span class="perf-res-r" style="color:${color}">${escapeHtml(rVal)}</span>
+        </div>
+        <div class="perf-res-track">
+          <div class="perf-res-fill" style="width:${pct}%;background:${bgColor};"></div>
+          <span class="perf-res-count">${escapeHtml(String(count))}</span>
+        </div>
+      </div>`;
+  }
+
+  // ── KPI card builder ───────────────────────────────────────────────────────
+  function kpiCard(label, value, sub, tone = '') {
+    const colorMap = {
+      'metric-positive': '#22c55e',
+      'metric-warning':  '#f59e0b',
+      'metric-negative': '#ef4444',
+      '': 'var(--text)',
+    };
+    const glowMap = {
+      'metric-positive': 'rgba(34,197,94,0.15)',
+      'metric-warning':  'rgba(245,158,11,0.15)',
+      'metric-negative': 'rgba(239,68,68,0.15)',
+      '': 'transparent',
+    };
+    const col  = colorMap[tone]  || colorMap[''];
+    const glow = glowMap[tone]   || glowMap[''];
+    return `
+      <div class="perf-kpi-card ${tone}">
+        <div class="perf-kpi-label">${escapeHtml(label)}</div>
+        <div class="perf-kpi-value" style="color:${col};text-shadow:0 0 24px ${glow};">${escapeHtml(String(value))}</div>
+        <div class="perf-kpi-sub">${escapeHtml(sub)}</div>
+      </div>`;
+  }
+
+  // ── Secondary stat builder ─────────────────────────────────────────────────
+  function statBox(label, value, tone = '') {
+    return `
+      <div class="perf-stat-box ${tone}">
+        <div class="perf-stat-label">${escapeHtml(label)}</div>
+        <div class="perf-stat-value">${escapeHtml(String(value))}</div>
+      </div>`;
+  }
+
+  // ── Gross R breakdown ──────────────────────────────────────────────────────
+  const grossPos = Number(summary.gross_profit_r || 0);
+  const grossNeg = Number(summary.gross_loss_r   || 0);
+  const netR     = Number(summary.net_r          || 0);
+  const netRSign = netR >= 0 ? '+' : '';
 
   els.performance.innerHTML = `
     <div class="section-grid">
       ${performanceNoticeCard(state.performanceCenter.notice)}
-      ${loadingBanner}
 
-      <div class="card card-span-12">
-        <div class="item-header">
+      <!-- ── HERO CARD ──────────────────────────────────────────────── -->
+      <div class="card card-span-12 perf-hero-card ${diag.tone}" style="--diag-color:${diagColor};">
+        <div class="perf-hero-inner">
+          <div class="perf-hero-left">
+            <div class="perf-hero-eyebrow">
+              <span class="live-dot" style="background:${diagColor};box-shadow:0 0 6px ${diagColor};"></span>
+              RENDIMIENTO SERIO
+            </div>
+            <div class="perf-hero-title">${escapeHtml(diag.title)}</div>
+            <p class="perf-hero-sub">${escapeHtml(diag.text)}</p>
+            <div class="perf-window-tabs">
+              ${windows.map(item => `
+                <button class="perf-window-tab ${normalizePerformanceDays(item.days) === normalizePerformanceDays(overview.focus_days) ? 'active' : ''}"
+                        data-performance-window="${escapeHtml(item.days)}">${escapeHtml(item.label)}</button>
+              `).join('')}
+              <button class="perf-window-tab perf-refresh-tab" data-performance-refresh="true">${loading ? '…' : '↻'}</button>
+            </div>
+          </div>
+          <div class="perf-hero-right">
+            <div class="perf-hero-icon" style="color:${diagColor};">${diagIcon}</div>
+            <div class="perf-hero-window">${escapeHtml(overview.focus_label || performanceWindowLabel(overview.focus_days || 30))}</div>
+            <div class="perf-hero-total">${escapeHtml(String(summary.total ?? '—'))}<span class="perf-hero-total-label"> evaluadas</span></div>
+            <div class="perf-hero-gen">Act. ${escapeHtml(formatDate(overview.generated_at))}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── KPI GRID: 4 métricas clave ──────────────────────────── -->
+      <div class="card card-span-12 perf-kpi-section">
+        <div class="eyebrow" style="margin-bottom:14px;">MÉTRICAS CLAVE</div>
+        <div class="perf-kpi-grid">
+          ${kpiCard('Win rate', loading ? '…' : `${formatNumber(summary.winrate || 0)}%`,  'de señales resueltas',  metricToneClass('winrate', summary.winrate || 0))}
+          ${kpiCard('Profit factor', loading ? '…' : formatRatioValue(summary.profit_factor, summary.profit_factor_infinite), 'TP vs SL en R', metricToneClass('pf', summary.profit_factor_infinite ? 999 : summary.profit_factor || 0))}
+          ${kpiCard('Expectancy R', loading ? '…' : (summary.expectancy_r >= 0 ? '+' : '') + formatNumber(summary.expectancy_r || 0, 4), 'R promedio por resuelta', metricToneClass('expectancy', summary.expectancy_r || 0))}
+          ${kpiCard('Net R', loading ? '…' : `${netRSign}${formatNumber(netR, 2)}R`, 'resultado neto del periodo', metricToneClass('expectancy', netR))}
+        </div>
+      </div>
+
+      <!-- ── MODELO DE RESOLUCIÓN (barras) ─────────────────────── -->
+      <div class="card card-span-12 perf-resolution-card">
+        <div class="perf-resolution-header">
           <div>
-            <h2 style="margin:0;">Rendimiento serio</h2>
-            <div class="item-subtitle">Lectura consolidada del sistema en R, por ventanas de tiempo y sin exponer inteligencia interna del motor.</div>
+            <div class="eyebrow">MODELO R</div>
+            <h2 style="margin:4px 0 0;">Resoluciones</h2>
           </div>
-          <div class="action-row compact">
-            <button class="button button-secondary" data-goto="home">Volver al dashboard</button>
-            <button class="button button-secondary" data-performance-refresh="true">Refrescar</button>
+          <div class="perf-gross-summary">
+            <div class="perf-gross-item metric-positive">
+              <span class="perf-gross-label">BRUTO +</span>
+              <span class="perf-gross-val">+${escapeHtml(formatNumber(grossPos, 2))}R</span>
+            </div>
+            <div class="perf-gross-sep"></div>
+            <div class="perf-gross-item metric-negative">
+              <span class="perf-gross-label">BRUTO −</span>
+              <span class="perf-gross-val">−${escapeHtml(formatNumber(Math.abs(grossNeg), 2))}R</span>
+            </div>
           </div>
         </div>
-        <div class="action-row compact" style="margin-top:12px;">
-          ${windows.map(item => `<button class="button ${normalizePerformanceDays(item.days) === normalizePerformanceDays(overview.focus_days) ? 'button-primary' : 'button-secondary'}" data-performance-window="${escapeHtml(item.days)}">${escapeHtml(item.label)}</button>`).join('')}
+        <div class="perf-res-bars">
+          ${resBar('TP1', tp1, '+1R por señal', '#22c55e', 'rgba(34,197,94,0.70)')}
+          ${resBar('TP2', tp2, '+2R por señal', '#4ade80', 'rgba(74,222,128,0.55)')}
+          ${resBar('SL',  sl,  '−1R por señal', '#ef4444', 'rgba(239,68,68,0.70)')}
+          ${resBar('Exp', exp, 'expiradas',      '#6b7280', 'rgba(107,114,128,0.45)')}
         </div>
-        <div class="pill-row compact-pill-row" style="margin-top:12px;">
-          <span class="pill">Ventana activa: ${escapeHtml(overview.focus_label || performanceWindowLabel(overview.focus_days || 30))}</span>
-          <span class="pill">Actividad scanner: ${escapeHtml(activity.signals_total ?? 0)}</span>
-          <span class="pill">Score medio (norm.): ${escapeHtml(activity.avg_score === null ? '—' : formatNumber(activity.avg_score, 2))}</span>
-          <span class="pill">Generado: ${escapeHtml(formatDate(overview.generated_at))}</span>
+        <div class="perf-res-footer">
+          <span class="perf-res-footer-item">Resueltas <strong>${escapeHtml(String(summary.resolved ?? 0))}</strong></span>
+          <span class="perf-res-footer-sep">·</span>
+          <span class="perf-res-footer-item">Fill rate <strong class="${metricToneClass('winrate', summary.fill_rate || 0)}">${escapeHtml(formatNumber(summary.fill_rate || 0))}%</strong></span>
+          <span class="perf-res-footer-sep">·</span>
+          <span class="perf-res-footer-item">No fill <strong>${escapeHtml(String(summary.expired_no_fill ?? 0))}</strong></span>
+          <span class="perf-res-footer-sep">·</span>
+          <span class="perf-res-footer-item">Fallo post-entry <strong>${escapeHtml(String(summary.expired_after_entry ?? 0))}</strong></span>
         </div>
-        <div class="detail-note" style="margin-top:12px;">Los diagnósticos internos por estrategia, score, dirección y setup viven solo dentro del panel de administración.</div>
       </div>
 
-      ${performanceMetricCard('Evaluadas', summary.total ?? 0, 'Dentro de la ventana activa')}
-      ${performanceMetricCard('Win rate', `${formatNumber(summary.winrate || 0)}%`, 'Solo resueltas', metricToneClass('winrate', summary.winrate || 0))}
-      ${performanceMetricCard('PF señales (R)', formatRatioValue(summary.profit_factor, summary.profit_factor_infinite), 'TP1 / TP2 / SL', metricToneClass('pf', summary.profit_factor_infinite ? 999 : summary.profit_factor || 0))}
-      ${performanceMetricCard('Expectancy R', formatNumber(summary.expectancy_r || 0, 4), 'Promedio por resuelta', metricToneClass('expectancy', summary.expectancy_r || 0))}
-      ${performanceMetricCard('Net R', formatNumber(summary.net_r || 0, 4), 'Resultado neto del periodo', metricToneClass('expectancy', summary.net_r || 0))}
-      ${performanceMetricCard('Max DD (R)', formatNumber(summary.max_drawdown_r || 0, 4), 'Peor racha en R', metricToneClass('drawdown', summary.max_drawdown_r || 0))}
-      ${performanceMetricCard('Fill rate', `${formatNumber(summary.fill_rate || 0)}%`, 'Señales que tocaron entry', metricToneClass('winrate', summary.fill_rate || 0))}
-      ${performanceMetricCard('Exp no fill', summary.expired_no_fill ?? 0, `${formatNumber(summary.no_fill_rate || 0)}% del total`, metricToneClass('drawdown', -(summary.no_fill_rate || 0)))}
-      ${performanceMetricCard('Exp tras entry', summary.expired_after_entry ?? 0, `${formatNumber(summary.after_entry_failure_rate || 0)}% de fills`, metricToneClass('drawdown', -(summary.after_entry_failure_rate || 0)))}
-
-      <div class="card card-span-12">
-        <h2>Modelo R</h2>
-        <div class="resolution-grid">
-          ${resolutionCard('TP1', summary.tp1 ?? 0, '+1R por señal resuelta', 'metric-positive')}
-          ${resolutionCard('TP2', summary.tp2 ?? 0, '+2R por señal resuelta', 'metric-positive')}
-          ${resolutionCard('SL', summary.sl ?? 0, '-1R por señal resuelta', 'metric-negative')}
-          ${resolutionCard('Exp totales', summary.expired ?? 0, 'Todas las expiradas del periodo', 'metric-neutral')}
-          ${resolutionCard('Exp no fill', summary.expired_no_fill ?? 0, 'No llegó al entry', 'metric-warning')}
-          ${resolutionCard('Exp tras entry', summary.expired_after_entry ?? 0, 'Tocó entry y no desarrolló', 'metric-warning')}
-        </div>
-        <div class="pill-row compact-pill-row" style="margin-top:12px;">
-          <span class="pill">Resueltas ${escapeHtml(summary.resolved ?? 0)}</span>
-          <span class="pill">Fill ${escapeHtml(summary.filled_total ?? 0)}</span>
-          <span class="pill">Fill rate ${escapeHtml(formatNumber(summary.fill_rate || 0))}%</span>
-          <span class="pill">No fill rate ${escapeHtml(formatNumber(summary.no_fill_rate || 0))}%</span>
-          <span class="pill">Fallo tras fill ${escapeHtml(formatNumber(summary.after_entry_failure_rate || 0))}%</span>
-          <span class="pill">Gross +${escapeHtml(formatNumber(summary.gross_profit_r || 0, 4))}R</span>
-          <span class="pill">Gross -${escapeHtml(formatNumber(summary.gross_loss_r || 0, 4))}R</span>
-          <span class="pill">Eval media ${escapeHtml(summary.avg_resolution_minutes === null ? '—' : formatNumber(summary.avg_resolution_minutes, 2))} min</span>
+      <!-- ── MÉTRICAS SECUNDARIAS ───────────────────────────────── -->
+      <div class="card card-span-12 perf-secondary-card">
+        <div class="eyebrow" style="margin-bottom:12px;">RIESGO Y ACTIVIDAD</div>
+        <div class="perf-secondary-grid">
+          ${statBox('Max DD (R)',       loading ? '…' : formatNumber(summary.max_drawdown_r || 0, 2) + 'R',   metricToneClass('drawdown', summary.max_drawdown_r || 0))}
+          ${statBox('Fill rate',        loading ? '…' : `${formatNumber(summary.fill_rate || 0)}%`,           metricToneClass('winrate', summary.fill_rate || 0))}
+          ${statBox('Exp no fill',      loading ? '…' : `${escapeHtml(String(summary.expired_no_fill ?? 0))}  (${formatNumber(summary.no_fill_rate || 0)}%)`, metricToneClass('drawdown', -(summary.no_fill_rate || 0)))}
+          ${statBox('Exp tras entry',   loading ? '…' : `${escapeHtml(String(summary.expired_after_entry ?? 0))}  (${formatNumber(summary.after_entry_failure_rate || 0)}%)`, metricToneClass('drawdown', -(summary.after_entry_failure_rate || 0)))}
+          ${statBox('Señales scanner',  loading ? '…' : String(activity.signals_total ?? '—'), '')}
+          ${statBox('Score medio',      loading ? '…' : (activity.avg_score === null ? '—' : formatNumber(activity.avg_score, 2)), '')}
+          ${statBox('Eval media',       loading ? '…' : (summary.avg_resolution_minutes === null ? '—' : `${formatNumber(summary.avg_resolution_minutes, 1)} min`), '')}
+          ${statBox('Total evaluadas',  loading ? '…' : String(summary.total ?? '—'), '')}
         </div>
       </div>
+
     </div>
   `;
 }
+
 
 async function refreshAdminOverview(force = false) {
   if (!state.payload?.me?.is_admin) return null;
