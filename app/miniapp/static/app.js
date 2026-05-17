@@ -3386,55 +3386,125 @@ function renderMarket() {
   }).join('');
 
   els.market.innerHTML = `
-    <div class="section-grid">
+    <div class="section-grid intel-market-grid">
 
-      <!-- ── TICKER STRIP: BTC / ETH / Pulso ───────────────────────────── -->
-      <div class="card card-span-12 market-ticker-card">
-        <div class="market-ticker-strip">
-
-          <div class="ticker-asset live-ticker-item" data-live-symbol="BTCUSDT">
-            <img class="ticker-logo" src="https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons/svg/color/btc.svg" alt="BTC" />
-            <div class="ticker-asset-info">
-              <span class="ticker-sym">BTC</span>
-              <span class="ticker-price" data-live-price="BTCUSDT">${escapeHtml(formatPrice(btc.last_price || 0, 0))}</span>
-              <span class="ticker-change ${sideClassByValue(btc.change)}" data-live-change="BTCUSDT">${escapeHtml(formatPercentSigned(btc.change, 2))}</span>
-              <span class="ticker-meta">F:${escapeHtml(formatPercentSigned(btc.funding_rate_pct, 3))}</span>
-            </div>
+      <!-- ══ HERO: INTELLIGENCE COMMAND CENTER ══════════════════════════════ -->
+      <div class="card card-span-12 intel-hero-card" id="intelHeroCard">
+        <div class="intel-hero-topbar">
+          <div class="intel-hero-brand">
+            <span class="intel-live-dot"></span>
+            <span class="intel-brand-text">INTELLIGENCE · EN VIVO</span>
           </div>
-
-          <div class="ticker-sep"></div>
-
-          <div class="ticker-asset live-ticker-item" data-live-symbol="ETHUSDT">
-            <img class="ticker-logo" src="https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons/svg/color/eth.svg" alt="ETH" />
-            <div class="ticker-asset-info">
-              <span class="ticker-sym">ETH</span>
-              <span class="ticker-price" data-live-price="ETHUSDT">${escapeHtml(formatPrice(eth.last_price || 0, 0))}</span>
-              <span class="ticker-change ${sideClassByValue(eth.change)}" data-live-change="ETHUSDT">${escapeHtml(formatPercentSigned(eth.change, 2))}</span>
-              <span class="ticker-meta">F:${escapeHtml(formatPercentSigned(eth.funding_rate_pct, 3))}</span>
-            </div>
-          </div>
-
-          <div class="ticker-sep"></div>
-
-          <div class="ticker-pulse-block">
-            <span class="live-dot"></span>
-            <div class="ticker-pulse-info">
-              <span class="ticker-bias">${escapeHtml(market.bias || 'Neutral')} · ${escapeHtml(market.preferred_side || 'Selectivo')}</span>
-              <span class="ticker-adv">Adv ${escapeHtml(formatNumber(market.adv_ratio_pct || 0, 1))}%</span>
-            </div>
-          </div>
-
-          ${topVolume.length ? `<div class="ticker-sep"></div><div class="ticker-vol-block"><span class="ticker-vol-label">VOL</span>${topVolChips}</div>` : ''}
-
-          <button class="button button-secondary ticker-refresh-btn" data-market-refresh style="margin-left:auto;flex-shrink:0;">${marketLoading ? '…' : '↻'}</button>
+          <button class="intel-refresh-btn" data-market-refresh title="Actualizar datos">
+            <span class="intel-refresh-icon">${marketLoading ? '⟳' : '↻'}</span>
+            <span>${marketLoading ? 'Sync…' : 'Sync'}</span>
+          </button>
         </div>
+
+        <div class="intel-price-row">
+          <!-- BTC -->
+          <div class="intel-price-block live-ticker-item" data-live-symbol="BTCUSDT">
+            <div class="intel-price-header">
+              <img class="intel-coin-logo" src="https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons/svg/color/btc.svg" alt="BTC"/>
+              <span class="intel-coin-name">Bitcoin</span>
+              <span class="intel-coin-tag">BTC</span>
+            </div>
+            <div class="intel-price-value" data-live-price="BTCUSDT">${escapeHtml(formatPrice(btc.last_price || 0, 0))}</div>
+            <div class="intel-price-meta-row">
+              <span class="intel-price-change ${sideClassByValue(btc.change)}" data-live-change="BTCUSDT">${escapeHtml(formatPercentSigned(btc.change, 2))}</span>
+              <span class="intel-funding-badge">F ${escapeHtml(formatPercentSigned(btc.funding_rate_pct, 3))}</span>
+            </div>
+          </div>
+
+          <div class="intel-price-divider"></div>
+
+          <!-- ETH -->
+          <div class="intel-price-block live-ticker-item" data-live-symbol="ETHUSDT">
+            <div class="intel-price-header">
+              <img class="intel-coin-logo" src="https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons/svg/color/eth.svg" alt="ETH"/>
+              <span class="intel-coin-name">Ethereum</span>
+              <span class="intel-coin-tag">ETH</span>
+            </div>
+            <div class="intel-price-value" data-live-price="ETHUSDT">${escapeHtml(formatPrice(eth.last_price || 0, 0))}</div>
+            <div class="intel-price-meta-row">
+              <span class="intel-price-change ${sideClassByValue(eth.change)}" data-live-change="ETHUSDT">${escapeHtml(formatPercentSigned(eth.change, 2))}</span>
+              <span class="intel-funding-badge">F ${escapeHtml(formatPercentSigned(eth.funding_rate_pct, 3))}</span>
+            </div>
+          </div>
+
+          <div class="intel-price-divider intel-price-divider-hide-sm"></div>
+
+          <!-- Market Vitals -->
+          <div class="intel-vitals-block">
+            <div class="intel-vitals-grid">
+              <div class="intel-vital-item">
+                <span class="intel-vital-label">Régimen</span>
+                <span class="intel-vital-value">${escapeHtml(market.regime || '—')}</span>
+              </div>
+              <div class="intel-vital-item">
+                <span class="intel-vital-label">Sesgo</span>
+                <span class="intel-vital-value ${biasIsBull ? 'text-bull' : biasIsBear ? 'text-bear' : ''}">${escapeHtml(market.bias || 'Neutral')}</span>
+              </div>
+              <div class="intel-vital-item">
+                <span class="intel-vital-label">Entorno</span>
+                <span class="intel-vital-value">${escapeHtml(market.environment || '—')}</span>
+              </div>
+              <div class="intel-vital-item">
+                <span class="intel-vital-label">Volatilidad</span>
+                <span class="intel-vital-value">${escapeHtml(market.volatility || '—')}</span>
+              </div>
+              <div class="intel-vital-item">
+                <span class="intel-vital-label">ADV Ratio</span>
+                <span class="intel-vital-value">${escapeHtml(formatNumber(market.adv_ratio_pct || 0, 1))}%</span>
+              </div>
+              <div class="intel-vital-item">
+                <span class="intel-vital-label">Participación</span>
+                <span class="intel-vital-value">${escapeHtml(market.participation || '—')}</span>
+              </div>
+              <div class="intel-vital-item">
+                <span class="intel-vital-label">Lado preferido</span>
+                <span class="intel-vital-value">${escapeHtml(market.preferred_side || 'Selectivo')}</span>
+              </div>
+              <div class="intel-vital-item">
+                <span class="intel-vital-label">Señales activas</span>
+                <span class="intel-vital-value">${escapeHtml(radarSummary.active_signals ?? '—')}</span>
+              </div>
+              <div class="intel-vital-item">
+                <span class="intel-vital-label">Hot</span>
+                <span class="intel-vital-value intel-hot">${escapeHtml(radarSummary.hot ?? '—')}</span>
+              </div>
+              <div class="intel-vital-item">
+                <span class="intel-vital-label">Focus Now</span>
+                <span class="intel-vital-value intel-focus">${escapeHtml(radarSummary.focus_now ?? '—')}</span>
+              </div>
+              <div class="intel-vital-item">
+                <span class="intel-vital-label">Inmediatos</span>
+                <span class="intel-vital-value">${escapeHtml(radarSummary.immediate ?? '—')}</span>
+              </div>
+              <div class="intel-vital-item">
+                <span class="intel-vital-label">En radar</span>
+                <span class="intel-vital-value">${escapeHtml(radar.length)}</span>
+              </div>
+            </div>
+            ${market.recommendation ? `<div class="intel-recommendation">${escapeHtml(market.recommendation)}</div>` : ''}
+          </div>
+        </div>
+
+        ${topVolume.length ? `
+        <div class="intel-volume-strip">
+          <span class="intel-vol-label">VOL 24H</span>
+          ${topVolume.slice(0, 5).map(item => {
+            const base = item.symbol.replace(/USDT$/, '');
+            return `<span class="intel-vol-chip"><span class="intel-vol-sym">${escapeHtml(base)}</span><span class="intel-vol-val">${escapeHtml(formatCompactAmount(item.quote_volume))}</span></span>`;
+          }).join('')}
+        </div>` : ''}
       </div>
 
-      <!-- ── GRÁFICA TRADINGVIEW ─────────────────────────────────────────── -->
-      <div class="card card-span-12 chart-card" id="chartCard">
-        <div class="chart-header">
-          <div>
-            <div class="eyebrow">BINANCE · EN VIVO</div>
+      <!-- ══ CHART: HERO POSITION ════════════════════════════════════════════ -->
+      <div class="card card-span-12 chart-card intel-chart-card" id="chartCard">
+        <div class="chart-header intel-chart-header">
+          <div class="intel-chart-title-block">
+            <div class="eyebrow">BINANCE · TIEMPO REAL</div>
             <h2 class="chart-title">Gráfica de Mercado</h2>
           </div>
           <div class="chart-controls">
@@ -3459,26 +3529,35 @@ function renderMarket() {
             </div>
           </div>
         </div>
-        <div id="tradingview-chart" class="tradingview-chart-container">
+        <div id="tradingview-chart" class="tradingview-chart-container intel-chart-container">
           <div class="chart-loading"><div class="spinner"></div><span>Cargando gráfica...</span></div>
         </div>
       </div>
 
-      <!-- ── HEATMAP SUBIDAS ─────────────────────────────────────────────── -->
-      <div class="card card-span-6">
-        <div class="eyebrow">MERCADO</div>
-        <h2>Mayores subidas</h2>
+      <!-- ══ HEATMAP: SUBIDAS & CAÍDAS ══════════════════════════════════════ -->
+      <div class="card card-span-6 intel-heatmap-card">
+        <div class="intel-heatmap-header">
+          <span class="intel-heatmap-icon">📈</span>
+          <div>
+            <div class="eyebrow">MERCADO</div>
+            <h2 style="margin:0;font-size:14px;">Mayores subidas</h2>
+          </div>
+        </div>
         ${heatmapGrid(gainers, 'gain')}
       </div>
 
-      <!-- ── HEATMAP CAÍDAS ──────────────────────────────────────────────── -->
-      <div class="card card-span-6">
-        <div class="eyebrow">MERCADO</div>
-        <h2>Mayores caídas</h2>
+      <div class="card card-span-6 intel-heatmap-card">
+        <div class="intel-heatmap-header">
+          <span class="intel-heatmap-icon">📉</span>
+          <div>
+            <div class="eyebrow">MERCADO</div>
+            <h2 style="margin:0;font-size:14px;">Mayores caídas</h2>
+          </div>
+        </div>
         ${heatmapGrid(losers, 'loss')}
       </div>
 
-      <!-- ── RADAR V2 ────────────────────────────────────────────────────── -->
+      <!-- ══ RADAR V2 ══════════════════════════════════════════════════════== -->
       <div class="card card-span-12">
         <div class="item-header radar-section-header">
           <div>
@@ -3554,7 +3633,7 @@ function renderMarket() {
         </div>
       </div>
 
-      <!-- ── WATCHLIST ───────────────────────────────────────────────────── -->
+      <!-- ══ WATCHLIST ═══════════════════════════════════════════════════════ -->
       <div class="card card-span-12 watchlist-section-card">
         <div class="eyebrow">MI WATCHLIST</div>
         <div class="watchlist-section-header">
@@ -3904,9 +3983,20 @@ function _flushMarketTicks() {
     priceEls.forEach(el => {
       const formatted = formatPrice(data.price, data.price < 1 ? 6 : data.price < 100 ? 4 : 2);
       if (el.textContent !== formatted) {
+        const oldVal = parseFloat(el.textContent.replace(/,/g, '')) || 0;
+        const newVal = data.price || 0;
+        const dir = newVal > oldVal ? 'up' : newVal < oldVal ? 'down' : null;
         el.textContent = formatted;
+        el.classList.remove('live-flash', 'flash-up', 'flash-down');
         el.classList.add('live-flash');
-        setTimeout(() => el.classList.remove('live-flash'), 600);
+        if (dir) {
+          // force reflow
+          void el.offsetWidth;
+          el.classList.add('flash-' + dir);
+          setTimeout(() => el.classList.remove('flash-up', 'flash-down', 'live-flash'), 800);
+        } else {
+          setTimeout(() => el.classList.remove('live-flash'), 600);
+        }
       }
     });
 
