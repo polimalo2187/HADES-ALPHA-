@@ -25,6 +25,7 @@ const state = {
   signalDetail: null,
   radarDetail: null,
   radarView: { ...DEFAULT_RADAR_VIEW },
+  historyFilter: 'all',
   accountNotice: null,
   adminPanel: {
     overview: null,
@@ -2702,25 +2703,67 @@ function signalCard(item) {
   `;
 }
 
-function historyCard(item) {
+function historyCard(item, index) {
+  const idx = typeof index === 'number' ? index : 0;
+  const dirRaw = String(item.direction || '').toUpperCase();
+  const isLong = dirRaw.includes('LONG') || dirRaw === 'BUY';
+  const rVal = item.r_multiple !== null && item.r_multiple !== undefined ? Number(item.r_multiple) : null;
+  const rIsNum = rVal !== null && !isNaN(rVal);
+  const rPositive = rIsNum && rVal >= 0;
+  const rStr = rIsNum ? (rPositive ? `+${rVal.toFixed(2)}` : rVal.toFixed(2)) : '—';
+  const rBarPct = rIsNum ? Math.min(Math.abs(rVal) / 3 * 100, 100) : 0;
+  const resLabel = resultLabel(item);
+  const resNorm = String(item.resolution || item.result || '').toLowerCase();
+  const isWin = resNorm === 'tp1' || resNorm === 'tp2' || resNorm === 'won';
+  const isLoss = resNorm === 'sl' || resNorm === 'lost';
+  const scoreVal = item.score !== null && item.score !== undefined ? formatNumber(item.score, 1) : '—';
+  const setupStr = item.setup_group || 'setup';
+  const timeStr = item.resolution_minutes != null ? `${item.resolution_minutes}m` : '—';
+  const dirLabel = dirRaw === 'BUY' ? 'LONG' : dirRaw === 'SELL' ? 'SHORT' : dirRaw;
+  const dirArrow = isLong ? '↗' : '↘';
+
   return `
-    <div class="item">
-      <div class="item-header">
-        <div>
-          <div class="item-title">${escapeHtml(item.symbol)} <span class="${dirClass(item.direction)}">${escapeHtml(item.direction)}</span></div>
-          <div class="item-subtitle">${escapeHtml(item.setup_group || 'setup')} · Score ${escapeHtml(formatNumber(item.score || 0, 1))}</div>
+    <div class="hx-card ${isLong ? 'hx-long' : 'hx-short'} ${isWin ? 'hx-win' : isLoss ? 'hx-loss' : 'hx-exp'}" style="animation-delay:${idx * 55}ms">
+      <div class="hx-accent-bar"></div>
+      <div class="hx-inner">
+        <div class="hx-row-top">
+          <div class="hx-left">
+            <span class="hx-symbol">${escapeHtml(item.symbol)}</span>
+            <span class="hx-dir-pill ${isLong ? 'hx-dir-long' : 'hx-dir-short'}">${dirArrow} ${escapeHtml(dirLabel)}</span>
+          </div>
+          <div class="hx-right">
+            <span class="hx-result-badge ${isWin ? 'hx-badge-win' : isLoss ? 'hx-badge-loss' : 'hx-badge-exp'}">${escapeHtml(resLabel)}</span>
+          </div>
         </div>
-        <span class="${badgeClassByResult(item)}">${escapeHtml(resultLabel(item))}</span>
-      </div>
-      <div class="inline-meta">
-        <span>Fecha: ${escapeHtml(formatDate(item.signal_created_at))}</span>
-        <span>Resolución: ${escapeHtml(item.resolution_minutes ?? '—')} min</span>
-        <span>R múltiple: ${escapeHtml(item.r_multiple ?? '—')}</span>
-      </div>
-      ${item.expiry_label ? `<div class="inline-meta"><span>${escapeHtml(item.expiry_label)}</span>${item.tp1_progress_max_pct !== null && item.tp1_progress_max_pct !== undefined ? `<span>Avance TP1 máx: ${escapeHtml(formatNumber(item.tp1_progress_max_pct, 0))}%</span>` : ''}</div>` : ''}
-      <div class="action-row compact">
-        <button class="button button-secondary" data-signal-detail="${escapeHtml(item.signal_id)}" data-signal-source="history">Ver inteligencia</button>
-        <button class="button button-secondary" data-open-risk-signal="${escapeHtml(item.signal_id)}">Calcular riesgo</button>
+
+        <div class="hx-r-block">
+          <div class="hx-r-number ${rIsNum ? (rPositive ? 'hx-r-pos' : 'hx-r-neg') : ''}">${escapeHtml(rStr)}<span class="hx-r-suffix">R</span></div>
+          <div class="hx-r-track"><div class="hx-r-fill ${rPositive ? 'hx-r-fill-pos' : 'hx-r-fill-neg'}" style="width:${rBarPct}%"></div></div>
+        </div>
+
+        <div class="hx-chips">
+          <div class="hx-chip">
+            <span class="hx-chip-lbl">SETUP</span>
+            <span class="hx-chip-val">${escapeHtml(setupStr)}</span>
+          </div>
+          <div class="hx-chip">
+            <span class="hx-chip-lbl">SCORE</span>
+            <span class="hx-chip-val">${escapeHtml(scoreVal)}</span>
+          </div>
+          <div class="hx-chip">
+            <span class="hx-chip-lbl">TIEMPO</span>
+            <span class="hx-chip-val">${escapeHtml(timeStr)}</span>
+          </div>
+          <div class="hx-chip">
+            <span class="hx-chip-lbl">FECHA</span>
+            <span class="hx-chip-val hx-chip-date">${escapeHtml(formatDate(item.signal_created_at))}</span>
+          </div>
+        </div>
+
+        <div class="hx-actions">
+          <button class="hx-btn hx-btn-intel" data-signal-detail="${escapeHtml(item.signal_id)}" data-signal-source="history">⚡ Inteligencia</button>
+          <button class="hx-btn hx-btn-risk" data-open-risk-signal="${escapeHtml(item.signal_id)}">⚖ Riesgo</button>
+        </div>
       </div>
     </div>
   `;
@@ -3903,11 +3946,61 @@ async function mutateWatchlist(path, body, successMessage) {
 }
 
 function renderHistory() {
-  const items = state.payload.history || [];
+  const allItems = state.payload.history || [];
+  const f = state.historyFilter || 'all';
+
+  const items = f === 'all' ? allItems : allItems.filter(item => {
+    const norm = String(item.resolution || item.result || '').toLowerCase();
+    if (f === 'win') return norm === 'tp1' || norm === 'tp2' || norm === 'won';
+    if (f === 'loss') return norm === 'sl' || norm === 'lost';
+    if (f === 'exp') return norm !== 'tp1' && norm !== 'tp2' && norm !== 'won' && norm !== 'sl' && norm !== 'lost';
+    return true;
+  });
+
+  const total = allItems.length;
+  const wonCount = allItems.filter(i => { const n = String(i.resolution || i.result || '').toLowerCase(); return n === 'tp1' || n === 'tp2' || n === 'won'; }).length;
+  const lossCount = allItems.filter(i => { const n = String(i.resolution || i.result || '').toLowerCase(); return n === 'sl' || n === 'lost'; }).length;
+  const winRate = total ? Math.round(wonCount / total * 100) : 0;
+  const rVals = allItems.map(i => Number(i.r_multiple)).filter(v => !isNaN(v) && v !== null);
+  const avgR = rVals.length ? rVals.reduce((a, b) => a + b, 0) / rVals.length : null;
+  const avgRStr = avgR !== null ? (avgR >= 0 ? `+${avgR.toFixed(2)}` : avgR.toFixed(2)) : '—';
+  const avgRPos = avgR !== null && avgR >= 0;
+
+  const filterBtn = (val, label) =>
+    `<button class="hx-filter-btn${f === val ? ' hx-filter-active' : ''}" data-hx-filter="${val}">${label}</button>`;
+
   els.history.innerHTML = `
-    <div class="card"><h2>Historial verificable</h2><p>Señales cerradas y resultados persistidos desde HADES.</p></div>
-    <div class="list" style="margin-top:12px;">
-      ${items.length ? items.map(historyCard).join('') : '<div class="empty-state">No hay historial disponible por ahora.</div>'}
+    <div class="hx-header-block">
+      <div class="hx-header-eyebrow">HADES · VERIFIED RECORD</div>
+      <h2 class="hx-header-title">Historial</h2>
+      <p class="hx-header-sub">Señales cerradas y resultados verificados</p>
+      <div class="hx-stats-row">
+        <div class="hx-stat">
+          <span class="hx-stat-val">${total}</span>
+          <span class="hx-stat-lbl">SEÑALES</span>
+        </div>
+        <div class="hx-stat hx-stat-accent">
+          <span class="hx-stat-val">${winRate}%</span>
+          <span class="hx-stat-lbl">WIN RATE</span>
+        </div>
+        <div class="hx-stat ${avgRPos ? 'hx-stat-green' : 'hx-stat-red'}">
+          <span class="hx-stat-val">${avgRStr}</span>
+          <span class="hx-stat-lbl">AVG R</span>
+        </div>
+        <div class="hx-stat">
+          <span class="hx-stat-val">${wonCount}/${lossCount}</span>
+          <span class="hx-stat-lbl">W/L</span>
+        </div>
+      </div>
+      <div class="hx-filter-row">
+        ${filterBtn('all', 'Todas')}
+        ${filterBtn('win', '✓ WIN')}
+        ${filterBtn('loss', '✗ LOSS')}
+        ${filterBtn('exp', '○ EXP')}
+      </div>
+    </div>
+    <div class="hx-list">
+      ${items.length ? items.map((item, i) => historyCard(item, i)).join('') : '<div class="empty-state">No hay señales en este filtro.</div>'}
     </div>
   `;
 }
@@ -5256,6 +5349,13 @@ function bindViewButtons() {
           button.textContent = original;
         }
       }
+    };
+  });
+  document.querySelectorAll('[data-hx-filter]').forEach(btn => {
+    btn.onclick = () => {
+      state.historyFilter = btn.dataset.hxFilter || 'all';
+      renderHistory();
+      bindViewButtons();
     };
   });
   document.querySelectorAll('[data-goto]').forEach(button => {
