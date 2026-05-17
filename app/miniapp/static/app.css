@@ -3829,7 +3829,7 @@ html, body, .app-shell, .section-grid, .card {
 }
 @keyframes dotPulse {
   0%, 100% { opacity: 1; transform: scale(1); }
-  50%       { opacity: 0.35; transform: scale(0.65); }
+  50%       { opacity: 0.55; transform: scale(0.75); }
 }
 @keyframes glowBorderLong {
   0%, 100% { border-color: rgba(16,185,129,0.3); box-shadow: 0 0 0 1px rgba(16,185,129,0.1) inset; }
@@ -3920,9 +3920,25 @@ html, body, .app-shell, .section-grid, .card {
   height: 440px !important;
   border-radius: 0 0 12px 12px;
   overflow: hidden;
+  position: relative;
+  background: rgba(8,12,22,0.98);
 }
-.signal-detail-chart-container .tradingview-widget-container { height: 440px !important; }
-.signal-detail-chart-container .tradingview-widget-container__widget { height: 440px !important; }
+.signal-detail-chart-container .tradingview-widget-container {
+  width: 100% !important;
+  height: 440px !important;
+  position: relative;
+}
+.signal-detail-chart-container .tradingview-widget-container__widget {
+  width: 100% !important;
+  height: 440px !important;
+  display: block;
+}
+.signal-detail-chart-container iframe {
+  width: 100% !important;
+  height: 440px !important;
+  border: none;
+  display: block;
+}
 
 /* ══════════════════════════════
    LIVE PRICE HERO CARD
@@ -4319,5 +4335,6 @@ html, body, .app-shell, .section-grid, .card {
   .signal-detail-chart-container { height: 360px !important; }
   .signal-detail-chart-container .tradingview-widget-container { height: 360px !important; }
   .signal-detail-chart-container .tradingview-widget-container__widget { height: 360px !important; }
+  .signal-detail-chart-container iframe { height: 360px !important; }
   .chart-loading { height: 360px; }
 }

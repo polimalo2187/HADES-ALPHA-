@@ -4456,8 +4456,8 @@ function updateLivePriceDisplay(price, changePct) {
   priceEl.classList.remove('positive-text', 'negative-text', 'price-flash-up', 'price-flash-down');
   priceEl.classList.add(isUp ? 'positive-text' : 'negative-text');
 
-  // Flash: add class then remove after animation (no 'forwards' needed)
-  if (prev !== null) {
+  // Flash ONLY when price actually changes (avoids constant flicker on every tick)
+  if (prev !== null && price !== prev) {
     void priceEl.offsetWidth;
     priceEl.classList.add(isUp ? 'price-flash-up' : 'price-flash-down');
     setTimeout(() => priceEl.classList.remove('price-flash-up', 'price-flash-down'), 520);
@@ -4474,7 +4474,7 @@ function updateLivePriceDisplay(price, changePct) {
     dotEl.className = `live-dot ${isUp ? 'live-dot-up' : 'live-dot-down'}`;
   }
 
-  if (heroEl && prev !== null) {
+  if (heroEl && prev !== null && price !== prev) {
     heroEl.classList.remove('hero-flash-up', 'hero-flash-down');
     void heroEl.offsetWidth;
     heroEl.classList.add(isUp ? 'hero-flash-up' : 'hero-flash-down');
@@ -4671,9 +4671,14 @@ function renderSignalDetailModal(payload) {
     </div>
   `;
 
-  // Init TradingView chart for this signal's pair (delay so DOM is painted first)
+  // Init TradingView chart for this signal's pair
+  // Use 400ms + rAF to ensure modal is fully painted before TradingView measures the container
   const signalSymbol = signal.symbol ? `BINANCE:${signal.symbol}` : 'BINANCE:BTCUSDT';
-  setTimeout(() => initSignalChartWidget(signalSymbol, '30'), 120);
+  setTimeout(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => initSignalChartWidget(signalSymbol, '30'));
+    });
+  }, 400);
 
   // Start live price ticker via Binance WebSocket
   startSignalPriceTicker(signalSymbol);
@@ -4689,13 +4694,17 @@ function initSignalChartWidget(symbol, interval) {
   const container = document.getElementById('signalDetailChart');
   if (!container) return;
 
+  // Force layout recalc before measuring
+  const containerWidth = container.offsetWidth || 600;
+  const containerHeight = window.innerWidth <= 480 ? 360 : 440;
+
   // Set explicit height inline so TradingView can measure it
-  container.style.height = '440px';
+  container.style.height = `${containerHeight}px`;
   container.innerHTML = '';
 
   const wrapper = document.createElement('div');
   wrapper.className = 'tradingview-widget-container';
-  wrapper.style.height = '440px';
+  wrapper.style.cssText = `width:100%;height:${containerHeight}px;`;
 
   const widgetDiv = document.createElement('div');
   widgetDiv.className = 'tradingview-widget-container__widget';
@@ -4706,7 +4715,9 @@ function initSignalChartWidget(symbol, interval) {
   script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
   script.async = true;
   script.textContent = JSON.stringify({
-    autosize: true,
+    autosize: false,
+    width: containerWidth,
+    height: containerHeight,
     symbol: _signalChartState.symbol,
     interval: _signalChartState.interval,
     timezone: 'Etc/UTC',
@@ -4726,6 +4737,11 @@ function initSignalChartWidget(symbol, interval) {
   wrapper.appendChild(widgetDiv);
   wrapper.appendChild(script);
   container.appendChild(wrapper);
+
+  // Dispatch resize after script loads so TradingView re-measures the container
+  script.onload = () => {
+    setTimeout(() => window.dispatchEvent(new Event('resize')), 200);
+  };
 
   // Bind interval buttons
   const group = document.getElementById('signalChartIntervalGroup');
