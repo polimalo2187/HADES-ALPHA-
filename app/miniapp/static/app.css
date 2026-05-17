@@ -1575,19 +1575,19 @@ h1 {
   height: 420px !important;
 }
 /* ── Signal Detail TradingView Chart ─────────────────────────────────────────── */
-.signal-intel-chart-card {
+.signal-intel-chart-card-OLD {
   padding: 16px 16px 0 16px !important;
   overflow: hidden;
 }
 
-.signal-chart-header {
+.signal-chart-header-OLD {
   display: flex;
   flex-direction: column;
   gap: 10px;
   margin-bottom: 14px;
 }
 
-.signal-chart-header h3 {
+.signal-chart-header-OLD h3 {
   margin: 0;
   font-size: 15px;
   font-weight: 700;
@@ -1599,7 +1599,7 @@ h1 {
   flex-wrap: wrap;
 }
 
-.signal-detail-chart-container {
+.signal-detail-chart-container-OLD {
   width: calc(100% + 32px);
   margin: 0 -16px;
   height: 360px;
@@ -1607,11 +1607,11 @@ h1 {
   overflow: hidden;
 }
 
-.signal-detail-chart-container .tradingview-widget-container {
+.signal-detail-chart-container-OLD .tradingview-widget-container {
   height: 360px !important;
 }
 
-.signal-detail-chart-container .tradingview-widget-container__widget {
+.signal-detail-chart-container-OLD .tradingview-widget-container__widget {
   height: 360px !important;
 }
 
@@ -3802,360 +3802,274 @@ html, body, .app-shell, .section-grid, .card {
   color: var(--muted);
 }
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   INTELLIGENCE COMMAND CENTER — Redesign Visual
-   ══════════════════════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════════
+   SIGNAL INTELLIGENCE — ANIMATED REDESIGN
+   ═══════════════════════════════════════════════════════════════════ */
 
-/* ── Hero card ─────────────────────────────────────────────────────────────── */
-.intel-hero-card {
-  padding: 0;
+/* ── Entrance Animations ── */
+@keyframes intelSlideUp {
+  from { opacity: 0; transform: translateY(22px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes intelFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes priceFlashUp {
+  0%   { color: var(--positive, #10b981); text-shadow: 0 0 14px rgba(16,185,129,0.7); }
+  100% { text-shadow: none; }
+}
+@keyframes priceFlashDown {
+  0%   { color: var(--negative, #ef4444); text-shadow: 0 0 14px rgba(239,68,68,0.7); }
+  100% { text-shadow: none; }
+}
+@keyframes heroPulseUp {
+  0%   { box-shadow: 0 0 0 0 rgba(16,185,129,0.35), var(--shadow); }
+  100% { box-shadow: 0 0 0 12px rgba(16,185,129,0), var(--shadow); }
+}
+@keyframes heroPulseDown {
+  0%   { box-shadow: 0 0 0 0 rgba(239,68,68,0.35), var(--shadow); }
+  100% { box-shadow: 0 0 0 12px rgba(239,68,68,0), var(--shadow); }
+}
+@keyframes dotPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(0.7); }
+}
+@keyframes progressFill {
+  from { width: 0 !important; }
+}
+@keyframes glowBorderLong {
+  0%, 100% { border-color: rgba(16,185,129,0.35); }
+  50%       { border-color: rgba(16,185,129,0.7); }
+}
+@keyframes glowBorderShort {
+  0%, 100% { border-color: rgba(239,68,68,0.35); }
+  50%       { border-color: rgba(239,68,68,0.7); }
+}
+
+.intel-animate {
+  opacity: 0;
+  animation: intelSlideUp 0.42s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+.intel-animate-1  { animation-delay: 0.04s; }
+.intel-animate-2  { animation-delay: 0.12s; }
+.intel-animate-3  { animation-delay: 0.18s; }
+.intel-animate-4  { animation-delay: 0.24s; }
+.intel-animate-5  { animation-delay: 0.30s; }
+.intel-animate-6  { animation-delay: 0.35s; }
+.intel-animate-7  { animation-delay: 0.40s; }
+.intel-animate-8  { animation-delay: 0.45s; }
+.intel-animate-9  { animation-delay: 0.50s; }
+.intel-animate-10 { animation-delay: 0.55s; }
+.intel-animate-11 { animation-delay: 0.60s; }
+.intel-animate-12 { animation-delay: 0.65s; }
+
+/* ── Direction glow borders on chart card ── */
+.direction-glow-long {
+  border-color: rgba(16,185,129,0.4) !important;
+  animation: glowBorderLong 2.8s ease-in-out infinite;
+}
+.direction-glow-short {
+  border-color: rgba(239,68,68,0.4) !important;
+  animation: glowBorderShort 2.8s ease-in-out infinite;
+}
+
+/* ── Chart card redesign (hero at top) ── */
+.signal-intel-chart-card {
+  padding: 16px 16px 0 16px !important;
   overflow: hidden;
-  background: linear-gradient(135deg,
-    rgba(15, 15, 20, 0.98) 0%,
-    rgba(20, 18, 8, 0.98) 40%,
-    rgba(12, 18, 12, 0.98) 100%);
-  border: 1px solid rgba(240, 185, 11, 0.18);
-  position: relative;
 }
-
-.intel-hero-card::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(ellipse 80% 50% at 10% 0%, rgba(240,185,11,0.07) 0%, transparent 60%),
-    radial-gradient(ellipse 60% 40% at 90% 100%, rgba(34,197,94,0.04) 0%, transparent 60%);
-  pointer-events: none;
-}
-
-/* ── Topbar ────────────────────────────────────────────────────────────────── */
-.intel-hero-topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 16px 8px;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-}
-
-.intel-hero-brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  color: rgba(240,185,11,0.9);
-  text-transform: uppercase;
-}
-
-@keyframes intel-pulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(34,197,94,0.6); }
-  50%       { opacity: 0.7; box-shadow: 0 0 0 6px rgba(34,197,94,0); }
-}
-
-.intel-live-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #22c55e;
-  animation: intel-pulse 1.8s ease-in-out infinite;
-  flex-shrink: 0;
-}
-
-.intel-refresh-btn {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 12px;
-  background: rgba(240,185,11,0.1);
-  border: 1px solid rgba(240,185,11,0.25);
-  border-radius: 20px;
-  color: rgba(240,185,11,0.9);
-  font-size: 11px;
-  font-weight: 700;
-  cursor: pointer;
-  letter-spacing: 0.06em;
-  transition: all 0.18s ease;
-}
-
-.intel-refresh-btn:hover {
-  background: rgba(240,185,11,0.2);
-  border-color: rgba(240,185,11,0.5);
-}
-
-@keyframes spin-slow {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
-}
-.intel-refresh-icon {
-  display: inline-block;
-  font-size: 14px;
-}
-
-/* ── Price row ─────────────────────────────────────────────────────────────── */
-.intel-price-row {
-  display: flex;
-  align-items: stretch;
-  gap: 0;
-  padding: 16px;
-  flex-wrap: wrap;
-  gap: 16px;
-}
-
-.intel-price-block {
+.signal-chart-header {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  min-width: 140px;
-  flex: 0 0 auto;
+  gap: 10px;
+  margin-bottom: 12px;
 }
-
-.intel-price-header {
+.signal-chart-header-top {
   display: flex;
+  justify-content: space-between;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
+  flex-wrap: wrap;
 }
-
-.intel-coin-logo {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-}
-
-.intel-coin-name {
-  font-size: 11px;
-  color: var(--muted);
-  font-weight: 600;
-}
-
-.intel-coin-tag {
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  color: rgba(240,185,11,0.7);
-  background: rgba(240,185,11,0.1);
-  border: 1px solid rgba(240,185,11,0.2);
-  border-radius: 4px;
-  padding: 1px 5px;
-}
-
-@keyframes price-flash-up {
-  0%   { color: var(--text); }
-  20%  { color: #4ade80; text-shadow: 0 0 12px rgba(74,222,128,0.8); }
-  100% { color: var(--text); text-shadow: none; }
-}
-@keyframes price-flash-down {
-  0%   { color: var(--text); }
-  20%  { color: #f87171; text-shadow: 0 0 12px rgba(248,113,113,0.8); }
-  100% { color: var(--text); text-shadow: none; }
-}
-
-.intel-price-value {
-  font-size: 28px;
-  font-weight: 800;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.02em;
-  line-height: 1;
-  transition: color 0.3s;
-}
-
-.intel-price-value.flash-up   { animation: price-flash-up   0.7s ease-out; }
-.intel-price-value.flash-down { animation: price-flash-down 0.7s ease-out; }
-
-.intel-price-meta-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.intel-price-change {
-  font-size: 14px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
-.intel-funding-badge {
-  font-size: 10px;
-  color: var(--muted);
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 6px;
-  padding: 1px 6px;
-  font-variant-numeric: tabular-nums;
-}
-
-.intel-price-divider {
-  width: 1px;
-  background: linear-gradient(180deg, transparent, rgba(255,255,255,0.12), transparent);
-  align-self: stretch;
-  flex-shrink: 0;
-}
-
-/* ── Vitals grid ───────────────────────────────────────────────────────────── */
-.intel-vitals-block {
-  flex: 1;
-  min-width: 220px;
-}
-
-.intel-vitals-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px 12px;
-}
-
-.intel-vital-item {
+.signal-chart-title-block {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
-
-.intel-vital-label {
-  font-size: 9px;
-  font-weight: 700;
+.signal-chart-pair {
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.signal-chart-strategy {
+  font-size: 11px;
+  text-transform: uppercase;
   letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
+  color: var(--accent);
 }
-
-.intel-vital-value {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text);
-  white-space: nowrap;
+.signal-detail-chart-container {
+  width: calc(100% + 32px);
+  margin: 0 -16px;
+  height: 440px;
+  border-radius: 0 0 12px 12px;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
+.signal-detail-chart-container .tradingview-widget-container { height: 440px !important; }
+.signal-detail-chart-container .tradingview-widget-container__widget { height: 440px !important; }
 
-.intel-vital-value.intel-hot {
-  color: #fb923c;
+/* ── Live Price Hero Card ── */
+.signal-live-price-card {
+  background: linear-gradient(135deg, rgba(16,24,42,0.98) 0%, rgba(10,14,28,0.98) 100%);
+  border: 1px solid rgba(255,255,255,0.1);
+  position: relative;
+  overflow: hidden;
 }
-.intel-vital-value.intel-focus {
-  color: #f0b90b;
+.signal-live-price-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at top left, rgba(245,158,11,0.06) 0%, transparent 60%);
+  pointer-events: none;
 }
-
-/* ── Recommendation ────────────────────────────────────────────────────────── */
-.intel-recommendation {
-  margin-top: 12px;
-  padding: 10px 14px;
-  background: rgba(240,185,11,0.07);
-  border: 1px solid rgba(240,185,11,0.15);
-  border-radius: 10px;
-  font-size: 12px;
-  color: rgba(255,255,255,0.8);
-  line-height: 1.5;
-  font-style: italic;
+.live-price-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
 }
-
-/* ── Volume strip ──────────────────────────────────────────────────────────── */
-.intel-volume-strip {
+.live-price-label-block {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 16px 12px;
-  border-top: 1px solid rgba(255,255,255,0.05);
-  overflow-x: auto;
-  scrollbar-width: none;
+  gap: 7px;
 }
-.intel-volume-strip::-webkit-scrollbar { display: none; }
-
-.intel-vol-label {
-  font-size: 9px;
+.live-price-label {
+  font-size: 10px;
   font-weight: 800;
-  letter-spacing: 0.12em;
-  color: var(--muted);
-  flex-shrink: 0;
   text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: dotPulse 1.4s ease-in-out infinite;
+}
+.live-dot-up   { background: #10b981; box-shadow: 0 0 6px rgba(16,185,129,0.7); }
+.live-dot-down { background: #ef4444; box-shadow: 0 0 6px rgba(239,68,68,0.7); }
+
+.live-price-direction-badge {
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
+}
+.live-price-direction-badge.positive-text {
+  background: rgba(16,185,129,0.12);
+  border-color: rgba(16,185,129,0.35);
+}
+.live-price-direction-badge.negative-text {
+  background: rgba(239,68,68,0.12);
+  border-color: rgba(239,68,68,0.35);
 }
 
-.intel-vol-chip {
+.live-price-main {
   display: flex;
-  align-items: center;
-  gap: 5px;
-  background: rgba(255,255,255,0.05);
-  border: 1px solid rgba(255,255,255,0.09);
-  border-radius: 8px;
-  padding: 3px 9px;
-  flex-shrink: 0;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 16px;
 }
-.intel-vol-sym {
-  font-size: 11px;
+.live-price-value {
+  font-size: 36px;
+  font-weight: 900;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  transition: color 0.2s ease;
+  font-variant-numeric: tabular-nums;
+}
+.live-price-change {
+  font-size: 15px;
   font-weight: 700;
-  color: var(--text);
-}
-.intel-vol-val {
-  font-size: 11px;
-  color: var(--muted);
+  letter-spacing: 0.01em;
   font-variant-numeric: tabular-nums;
 }
 
-/* ── Chart: hero position ──────────────────────────────────────────────────── */
-.intel-chart-card {
-  border: 1px solid rgba(240,185,11,0.1) !important;
-  background: linear-gradient(180deg, rgba(15,15,20,0.98) 0%, rgba(10,10,14,1) 100%) !important;
-}
+.price-flash-up   { animation: priceFlashUp   0.5s ease-out forwards; }
+.price-flash-down { animation: priceFlashDown 0.5s ease-out forwards; }
+.hero-flash-up    { animation: heroPulseUp   0.6s ease-out; }
+.hero-flash-down  { animation: heroPulseDown 0.6s ease-out; }
 
-.intel-chart-header {
-  gap: 10px !important;
+/* ── Live Levels Row ── */
+.live-price-levels {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 14px;
 }
-
-.intel-chart-title-block .eyebrow {
-  font-size: 9px !important;
-  letter-spacing: 0.14em;
-  color: rgba(240,185,11,0.7);
-}
-
-.intel-chart-container {
-  height: 500px !important;
-}
-
-.tradingview-widget-container,
-.tradingview-widget-container__widget {
-  height: 500px !important;
-}
-
-/* ── Heatmap cards ─────────────────────────────────────────────────────────── */
-.intel-heatmap-card {
-  background: linear-gradient(135deg, rgba(15,15,20,0.98), rgba(12,12,16,0.98)) !important;
-}
-
-.intel-heatmap-header {
+.level-item {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 10px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.07);
+  background: rgba(255,255,255,0.03);
+}
+.level-entry { border-color: rgba(245,158,11,0.2); background: rgba(245,158,11,0.05); }
+.level-sl    { border-color: rgba(239,68,68,0.2);  background: rgba(239,68,68,0.05); }
+.level-tp1, .level-tp2 { border-color: rgba(16,185,129,0.2); background: rgba(16,185,129,0.05); }
+.level-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.level-value {
+  font-size: 12px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: break-word;
+  word-break: break-all;
 }
 
-.intel-heatmap-icon {
-  font-size: 20px;
+/* ── Progress Bar ── */
+.live-progress-bar-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.live-progress-bar-track {
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.08);
+  overflow: hidden;
+}
+.live-progress-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #10b981, #34d399);
+  animation: progressFill 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) 0.3s both;
+  transition: width 1s ease;
+}
+.live-progress-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
 }
 
-/* ── Live price flash for existing data-live-price elements ────────────────── */
-[data-live-price].intel-price-value.just-updated-up {
-  animation: price-flash-up 0.7s ease-out;
+/* Mobile level adjustments */
+@media (max-width: 480px) {
+  .live-price-levels {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .live-price-value {
+    font-size: 28px;
+  }
 }
-[data-live-price].intel-price-value.just-updated-down {
-  animation: price-flash-down 0.7s ease-out;
-}
-
-/* ── Text color helpers ────────────────────────────────────────────────────── */
-.intel-vital-value.text-bull { color: #4ade80; }
-.intel-vital-value.text-bear { color: #f87171; }
-
-/* ── Responsive: stack prices on very small screens ───────────────────────── */
-@media (max-width: 380px) {
-  .intel-price-divider-hide-sm { display: none; }
-  .intel-vitals-grid { grid-template-columns: repeat(2, 1fr); }
-  .intel-price-value { font-size: 22px; }
-}
-
-/* ── Animated border glow on hero ─────────────────────────────────────────── */
-@keyframes border-glow {
-  0%, 100% { border-color: rgba(240,185,11,0.18); }
-  50%       { border-color: rgba(240,185,11,0.38); }
-}
-.intel-hero-card {
-  animation: border-glow 4s ease-in-out infinite;
-}
-

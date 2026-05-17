@@ -3385,131 +3385,56 @@ function renderMarket() {
     return `<span class="ticker-vol-chip"><span class="ticker-vol-sym">${escapeHtml(base)}</span><span class="ticker-vol-num">${escapeHtml(formatCompactAmount(item.quote_volume))}</span></span>`;
   }).join('');
 
-  // Bias helpers (local to renderMarket)
-  const _biasRaw = String(market.bias || '').toLowerCase();
-  const biasIsBull = _biasRaw.includes('bull') || _biasRaw.includes('long') || _biasRaw.includes('buy') || _biasRaw === 'alcista';
-  const biasIsBear = _biasRaw.includes('bear') || _biasRaw.includes('short') || _biasRaw.includes('sell') || _biasRaw === 'bajista';
-
   els.market.innerHTML = `
-    <div class="section-grid intel-market-grid">
+    <div class="section-grid">
 
-      <!-- ══ HERO: INTELLIGENCE COMMAND CENTER ══════════════════════════════ -->
-      <div class="card card-span-12 intel-hero-card" id="intelHeroCard">
-        <div class="intel-hero-topbar">
-          <div class="intel-hero-brand">
-            <span class="intel-live-dot"></span>
-            <span class="intel-brand-text">INTELLIGENCE · EN VIVO</span>
+      <!-- ── TICKER STRIP: BTC / ETH / Pulso ───────────────────────────── -->
+      <div class="card card-span-12 market-ticker-card">
+        <div class="market-ticker-strip">
+
+          <div class="ticker-asset live-ticker-item" data-live-symbol="BTCUSDT">
+            <img class="ticker-logo" src="https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons/svg/color/btc.svg" alt="BTC" />
+            <div class="ticker-asset-info">
+              <span class="ticker-sym">BTC</span>
+              <span class="ticker-price" data-live-price="BTCUSDT">${escapeHtml(formatPrice(btc.last_price || 0, 0))}</span>
+              <span class="ticker-change ${sideClassByValue(btc.change)}" data-live-change="BTCUSDT">${escapeHtml(formatPercentSigned(btc.change, 2))}</span>
+              <span class="ticker-meta">F:${escapeHtml(formatPercentSigned(btc.funding_rate_pct, 3))}</span>
+            </div>
           </div>
-          <button class="intel-refresh-btn" data-market-refresh title="Actualizar datos">
-            <span class="intel-refresh-icon">${marketLoading ? '⟳' : '↻'}</span>
-            <span>${marketLoading ? 'Sync…' : 'Sync'}</span>
-          </button>
+
+          <div class="ticker-sep"></div>
+
+          <div class="ticker-asset live-ticker-item" data-live-symbol="ETHUSDT">
+            <img class="ticker-logo" src="https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons/svg/color/eth.svg" alt="ETH" />
+            <div class="ticker-asset-info">
+              <span class="ticker-sym">ETH</span>
+              <span class="ticker-price" data-live-price="ETHUSDT">${escapeHtml(formatPrice(eth.last_price || 0, 0))}</span>
+              <span class="ticker-change ${sideClassByValue(eth.change)}" data-live-change="ETHUSDT">${escapeHtml(formatPercentSigned(eth.change, 2))}</span>
+              <span class="ticker-meta">F:${escapeHtml(formatPercentSigned(eth.funding_rate_pct, 3))}</span>
+            </div>
+          </div>
+
+          <div class="ticker-sep"></div>
+
+          <div class="ticker-pulse-block">
+            <span class="live-dot"></span>
+            <div class="ticker-pulse-info">
+              <span class="ticker-bias">${escapeHtml(market.bias || 'Neutral')} · ${escapeHtml(market.preferred_side || 'Selectivo')}</span>
+              <span class="ticker-adv">Adv ${escapeHtml(formatNumber(market.adv_ratio_pct || 0, 1))}%</span>
+            </div>
+          </div>
+
+          ${topVolume.length ? `<div class="ticker-sep"></div><div class="ticker-vol-block"><span class="ticker-vol-label">VOL</span>${topVolChips}</div>` : ''}
+
+          <button class="button button-secondary ticker-refresh-btn" data-market-refresh style="margin-left:auto;flex-shrink:0;">${marketLoading ? '…' : '↻'}</button>
         </div>
-
-        <div class="intel-price-row">
-          <!-- BTC -->
-          <div class="intel-price-block live-ticker-item" data-live-symbol="BTCUSDT">
-            <div class="intel-price-header">
-              <img class="intel-coin-logo" src="https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons/svg/color/btc.svg" alt="BTC"/>
-              <span class="intel-coin-name">Bitcoin</span>
-              <span class="intel-coin-tag">BTC</span>
-            </div>
-            <div class="intel-price-value" data-live-price="BTCUSDT">${escapeHtml(formatPrice(btc.last_price || 0, 0))}</div>
-            <div class="intel-price-meta-row">
-              <span class="intel-price-change ${sideClassByValue(btc.change)}" data-live-change="BTCUSDT">${escapeHtml(formatPercentSigned(btc.change, 2))}</span>
-              <span class="intel-funding-badge">F ${escapeHtml(formatPercentSigned(btc.funding_rate_pct, 3))}</span>
-            </div>
-          </div>
-
-          <div class="intel-price-divider"></div>
-
-          <!-- ETH -->
-          <div class="intel-price-block live-ticker-item" data-live-symbol="ETHUSDT">
-            <div class="intel-price-header">
-              <img class="intel-coin-logo" src="https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons/svg/color/eth.svg" alt="ETH"/>
-              <span class="intel-coin-name">Ethereum</span>
-              <span class="intel-coin-tag">ETH</span>
-            </div>
-            <div class="intel-price-value" data-live-price="ETHUSDT">${escapeHtml(formatPrice(eth.last_price || 0, 0))}</div>
-            <div class="intel-price-meta-row">
-              <span class="intel-price-change ${sideClassByValue(eth.change)}" data-live-change="ETHUSDT">${escapeHtml(formatPercentSigned(eth.change, 2))}</span>
-              <span class="intel-funding-badge">F ${escapeHtml(formatPercentSigned(eth.funding_rate_pct, 3))}</span>
-            </div>
-          </div>
-
-          <div class="intel-price-divider intel-price-divider-hide-sm"></div>
-
-          <!-- Market Vitals -->
-          <div class="intel-vitals-block">
-            <div class="intel-vitals-grid">
-              <div class="intel-vital-item">
-                <span class="intel-vital-label">Régimen</span>
-                <span class="intel-vital-value">${escapeHtml(market.regime || '—')}</span>
-              </div>
-              <div class="intel-vital-item">
-                <span class="intel-vital-label">Sesgo</span>
-                <span class="intel-vital-value ${biasIsBull ? 'text-bull' : biasIsBear ? 'text-bear' : ''}">${escapeHtml(market.bias || 'Neutral')}</span>
-              </div>
-              <div class="intel-vital-item">
-                <span class="intel-vital-label">Entorno</span>
-                <span class="intel-vital-value">${escapeHtml(market.environment || '—')}</span>
-              </div>
-              <div class="intel-vital-item">
-                <span class="intel-vital-label">Volatilidad</span>
-                <span class="intel-vital-value">${escapeHtml(market.volatility || '—')}</span>
-              </div>
-              <div class="intel-vital-item">
-                <span class="intel-vital-label">ADV Ratio</span>
-                <span class="intel-vital-value">${escapeHtml(formatNumber(market.adv_ratio_pct || 0, 1))}%</span>
-              </div>
-              <div class="intel-vital-item">
-                <span class="intel-vital-label">Participación</span>
-                <span class="intel-vital-value">${escapeHtml(market.participation || '—')}</span>
-              </div>
-              <div class="intel-vital-item">
-                <span class="intel-vital-label">Lado preferido</span>
-                <span class="intel-vital-value">${escapeHtml(market.preferred_side || 'Selectivo')}</span>
-              </div>
-              <div class="intel-vital-item">
-                <span class="intel-vital-label">Señales activas</span>
-                <span class="intel-vital-value">${escapeHtml(radarSummary.active_signals ?? '—')}</span>
-              </div>
-              <div class="intel-vital-item">
-                <span class="intel-vital-label">Hot</span>
-                <span class="intel-vital-value intel-hot">${escapeHtml(radarSummary.hot ?? '—')}</span>
-              </div>
-              <div class="intel-vital-item">
-                <span class="intel-vital-label">Focus Now</span>
-                <span class="intel-vital-value intel-focus">${escapeHtml(radarSummary.focus_now ?? '—')}</span>
-              </div>
-              <div class="intel-vital-item">
-                <span class="intel-vital-label">Inmediatos</span>
-                <span class="intel-vital-value">${escapeHtml(radarSummary.immediate ?? '—')}</span>
-              </div>
-              <div class="intel-vital-item">
-                <span class="intel-vital-label">En radar</span>
-                <span class="intel-vital-value">${escapeHtml(radar.length)}</span>
-              </div>
-            </div>
-            ${market.recommendation ? `<div class="intel-recommendation">${escapeHtml(market.recommendation)}</div>` : ''}
-          </div>
-        </div>
-
-        ${topVolume.length ? `
-        <div class="intel-volume-strip">
-          <span class="intel-vol-label">VOL 24H</span>
-          ${topVolume.slice(0, 5).map(item => {
-            const base = item.symbol.replace(/USDT$/, '');
-            return `<span class="intel-vol-chip"><span class="intel-vol-sym">${escapeHtml(base)}</span><span class="intel-vol-val">${escapeHtml(formatCompactAmount(item.quote_volume))}</span></span>`;
-          }).join('')}
-        </div>` : ''}
       </div>
 
-      <!-- ══ CHART: HERO POSITION ════════════════════════════════════════════ -->
-      <div class="card card-span-12 chart-card intel-chart-card" id="chartCard">
-        <div class="chart-header intel-chart-header">
-          <div class="intel-chart-title-block">
-            <div class="eyebrow">BINANCE · TIEMPO REAL</div>
+      <!-- ── GRÁFICA TRADINGVIEW ─────────────────────────────────────────── -->
+      <div class="card card-span-12 chart-card" id="chartCard">
+        <div class="chart-header">
+          <div>
+            <div class="eyebrow">BINANCE · EN VIVO</div>
             <h2 class="chart-title">Gráfica de Mercado</h2>
           </div>
           <div class="chart-controls">
@@ -3534,35 +3459,26 @@ function renderMarket() {
             </div>
           </div>
         </div>
-        <div id="tradingview-chart" class="tradingview-chart-container intel-chart-container">
+        <div id="tradingview-chart" class="tradingview-chart-container">
           <div class="chart-loading"><div class="spinner"></div><span>Cargando gráfica...</span></div>
         </div>
       </div>
 
-      <!-- ══ HEATMAP: SUBIDAS & CAÍDAS ══════════════════════════════════════ -->
-      <div class="card card-span-6 intel-heatmap-card">
-        <div class="intel-heatmap-header">
-          <span class="intel-heatmap-icon">📈</span>
-          <div>
-            <div class="eyebrow">MERCADO</div>
-            <h2 style="margin:0;font-size:14px;">Mayores subidas</h2>
-          </div>
-        </div>
+      <!-- ── HEATMAP SUBIDAS ─────────────────────────────────────────────── -->
+      <div class="card card-span-6">
+        <div class="eyebrow">MERCADO</div>
+        <h2>Mayores subidas</h2>
         ${heatmapGrid(gainers, 'gain')}
       </div>
 
-      <div class="card card-span-6 intel-heatmap-card">
-        <div class="intel-heatmap-header">
-          <span class="intel-heatmap-icon">📉</span>
-          <div>
-            <div class="eyebrow">MERCADO</div>
-            <h2 style="margin:0;font-size:14px;">Mayores caídas</h2>
-          </div>
-        </div>
+      <!-- ── HEATMAP CAÍDAS ──────────────────────────────────────────────── -->
+      <div class="card card-span-6">
+        <div class="eyebrow">MERCADO</div>
+        <h2>Mayores caídas</h2>
         ${heatmapGrid(losers, 'loss')}
       </div>
 
-      <!-- ══ RADAR V2 ══════════════════════════════════════════════════════== -->
+      <!-- ── RADAR V2 ────────────────────────────────────────────────────── -->
       <div class="card card-span-12">
         <div class="item-header radar-section-header">
           <div>
@@ -3638,7 +3554,7 @@ function renderMarket() {
         </div>
       </div>
 
-      <!-- ══ WATCHLIST ═══════════════════════════════════════════════════════ -->
+      <!-- ── WATCHLIST ───────────────────────────────────────────────────── -->
       <div class="card card-span-12 watchlist-section-card">
         <div class="eyebrow">MI WATCHLIST</div>
         <div class="watchlist-section-header">
@@ -3988,20 +3904,9 @@ function _flushMarketTicks() {
     priceEls.forEach(el => {
       const formatted = formatPrice(data.price, data.price < 1 ? 6 : data.price < 100 ? 4 : 2);
       if (el.textContent !== formatted) {
-        const oldVal = parseFloat(el.textContent.replace(/,/g, '')) || 0;
-        const newVal = data.price || 0;
-        const dir = newVal > oldVal ? 'up' : newVal < oldVal ? 'down' : null;
         el.textContent = formatted;
-        el.classList.remove('live-flash', 'flash-up', 'flash-down');
         el.classList.add('live-flash');
-        if (dir) {
-          // force reflow
-          void el.offsetWidth;
-          el.classList.add('flash-' + dir);
-          setTimeout(() => el.classList.remove('flash-up', 'flash-down', 'live-flash'), 800);
-        } else {
-          setTimeout(() => el.classList.remove('live-flash'), 600);
-        }
+        setTimeout(() => el.classList.remove('live-flash'), 600);
       }
     });
 
@@ -4476,6 +4381,97 @@ function closeSignalDetailModal() {
   if (!els.signalDetailModal) return;
   els.signalDetailModal.classList.add('hidden');
   els.signalDetailModal.setAttribute('aria-hidden', 'true');
+  stopSignalPriceTicker();
+}
+
+// ── Live Price Ticker via Binance WebSocket ───────────────────────────────────
+const _priceTicker = { ws: null, symbol: null, lastPrice: null, prevPrice: null };
+
+function startSignalPriceTicker(symbol) {
+  stopSignalPriceTicker();
+  if (!symbol) return;
+  const pair = symbol.replace('BINANCE:', '').replace('/', '').toLowerCase();
+  _priceTicker.symbol = pair;
+
+  function connect() {
+    try {
+      const ws = new WebSocket(`wss://stream.binance.com:9443/ws/${pair}@ticker`);
+      _priceTicker.ws = ws;
+
+      ws.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data);
+          const price = parseFloat(data.c);
+          const pct = parseFloat(data.P);
+          if (!isNaN(price)) {
+            _priceTicker.prevPrice = _priceTicker.lastPrice;
+            _priceTicker.lastPrice = price;
+            updateLivePriceDisplay(price, pct);
+          }
+        } catch {}
+      };
+
+      ws.onerror = () => {};
+      ws.onclose = () => {
+        // Reconnect after 3s if modal still open
+        if (!els.signalDetailModal?.classList.contains('hidden')) {
+          setTimeout(connect, 3000);
+        }
+      };
+    } catch {}
+  }
+
+  connect();
+}
+
+function stopSignalPriceTicker() {
+  if (_priceTicker.ws) {
+    try { _priceTicker.ws.close(); } catch {}
+    _priceTicker.ws = null;
+  }
+  _priceTicker.lastPrice = null;
+  _priceTicker.prevPrice = null;
+}
+
+function updateLivePriceDisplay(price, changePct) {
+  const priceEl = document.getElementById('signalLivePrice');
+  const changeEl = document.getElementById('signalLiveChange');
+  const dotEl = document.getElementById('signalLiveDot');
+  const heroEl = document.getElementById('signalPriceHero');
+
+  if (!priceEl) return;
+
+  const prev = _priceTicker.prevPrice;
+  const isUp = prev === null || price >= prev;
+  const formatted = price < 0.001 ? price.toFixed(8)
+    : price < 1 ? price.toFixed(6)
+    : price < 100 ? price.toFixed(4)
+    : price < 10000 ? price.toFixed(2)
+    : price.toFixed(2);
+
+  priceEl.textContent = formatted;
+  priceEl.className = `live-price-value ${isUp ? 'positive-text' : 'negative-text'}`;
+
+  // Flash animation
+  priceEl.classList.remove('price-flash-up', 'price-flash-down');
+  void priceEl.offsetWidth;
+  priceEl.classList.add(isUp ? 'price-flash-up' : 'price-flash-down');
+
+  if (changeEl) {
+    const sign = changePct >= 0 ? '+' : '';
+    changeEl.textContent = `${sign}${changePct.toFixed(2)}%`;
+    changeEl.className = `live-price-change ${changePct >= 0 ? 'positive-text' : 'negative-text'}`;
+  }
+
+  if (dotEl) {
+    dotEl.className = `live-dot ${isUp ? 'live-dot-up' : 'live-dot-down'}`;
+  }
+
+  if (heroEl) {
+    heroEl.classList.remove('hero-flash-up', 'hero-flash-down');
+    void heroEl.offsetWidth;
+    heroEl.classList.add(isUp ? 'hero-flash-up' : 'hero-flash-down');
+  }
 }
 
 function renderSignalDetailModal(payload) {
@@ -4500,9 +4496,80 @@ function renderSignalDetailModal(payload) {
   const actionLabel = tracking.action_label || 'Seguimiento';
 
   els.signalDetailTitle.textContent = `${signal.symbol || 'Señal'} · ${signal.direction || ''}`.trim();
+
+  const currentPriceFormatted = formatPrice(tracking.current_price, 4);
+  const directionIsLong = String(signal.direction || '').toLowerCase().includes('long');
+  const directionIsShort = String(signal.direction || '').toLowerCase().includes('short');
+  const directionClass = directionIsLong ? 'positive-text' : directionIsShort ? 'negative-text' : '';
+  const directionGlowClass = directionIsLong ? 'direction-glow-long' : directionIsShort ? 'direction-glow-short' : '';
+
   els.signalDetailBody.innerHTML = `
     <div class="signal-intel-layout">
-      <div class="card detail-status-card">
+
+      <!-- ═══ HERO: Live Chart FIRST ═══ -->
+      <div class="card signal-intel-section signal-intel-section-full signal-intel-chart-card intel-animate intel-animate-1 ${directionGlowClass}">
+        <div class="signal-chart-header">
+          <div class="signal-chart-header-top">
+            <div class="signal-chart-title-block">
+              <span class="signal-chart-pair">${escapeHtml(signal.symbol || '')}</span>
+              <span class="signal-chart-strategy">${escapeHtml(strategyLabel)}</span>
+            </div>
+            <div class="signal-chart-interval-group" id="signalChartIntervalGroup">
+              <button class="chart-interval-btn" data-signal-interval="5">5m</button>
+              <button class="chart-interval-btn" data-signal-interval="15">15m</button>
+              <button class="chart-interval-btn active" data-signal-interval="30">30m</button>
+              <button class="chart-interval-btn" data-signal-interval="60">1h</button>
+              <button class="chart-interval-btn" data-signal-interval="240">4h</button>
+              <button class="chart-interval-btn" data-signal-interval="D">1D</button>
+            </div>
+          </div>
+        </div>
+        <div id="signalDetailChart" class="signal-detail-chart-container">
+          <div class="chart-loading"><div class="spinner"></div><span>Cargando gráfica...</span></div>
+        </div>
+      </div>
+
+      <!-- ═══ LIVE PRICE HERO ═══ -->
+      <div class="card signal-intel-section signal-intel-section-full signal-live-price-card intel-animate intel-animate-2" id="signalPriceHero">
+        <div class="live-price-header">
+          <div class="live-price-label-block">
+            <span id="signalLiveDot" class="live-dot live-dot-up"></span>
+            <span class="live-price-label">PRECIO EN VIVO</span>
+          </div>
+          <div class="live-price-direction-badge ${directionClass}">${escapeHtml(String(signal.direction || '').toUpperCase())}</div>
+        </div>
+        <div class="live-price-main">
+          <span id="signalLivePrice" class="live-price-value">${currentPriceFormatted}</span>
+          <span id="signalLiveChange" class="live-price-change ${sideClassByValue(tracking.current_move_pct || 0)}">${tracking.current_move_pct !== undefined && tracking.current_move_pct !== null ? (tracking.current_move_pct >= 0 ? '+' : '') + tracking.current_move_pct.toFixed(2) + '%' : '—'}</span>
+        </div>
+        <div class="live-price-levels">
+          <div class="level-item level-entry">
+            <span class="level-label">Entrada</span>
+            <span class="level-value">${escapeHtml(formatPrice(tracking.entry_price, 4))}</span>
+          </div>
+          <div class="level-item level-sl">
+            <span class="level-label">SL</span>
+            <span class="level-value negative-text">${escapeHtml(formatPrice(tracking.stop_loss, 4))}</span>
+          </div>
+          <div class="level-item level-tp1">
+            <span class="level-label">TP1</span>
+            <span class="level-value positive-text">${escapeHtml(formatPrice((tracking.take_profits || [])[0], 4))}</span>
+          </div>
+          <div class="level-item level-tp2">
+            <span class="level-label">TP2</span>
+            <span class="level-value positive-text">${escapeHtml(formatPrice((tracking.take_profits || [])[1], 4))}</span>
+          </div>
+        </div>
+        <div class="live-progress-bar-wrap">
+          <div class="live-progress-bar-track">
+            <div class="live-progress-bar-fill" style="width: ${Math.min(100, Math.max(0, tracking.progress_to_tp1_pct ?? 0))}%"></div>
+          </div>
+          <span class="live-progress-label">Progreso TP1: ${tracking.progress_to_tp1_pct !== null && tracking.progress_to_tp1_pct !== undefined ? formatPercentSigned(tracking.progress_to_tp1_pct, 1) : '—'}</span>
+        </div>
+      </div>
+
+      <!-- ═══ STATUS CARD ═══ -->
+      <div class="card detail-status-card intel-animate intel-animate-3">
         <div class="detail-status-top">
           <div class="detail-status-copy-block">
             <span class="detail-kicker">Estrategia en vivo</span>
@@ -4514,7 +4581,8 @@ function renderSignalDetailModal(payload) {
         <p class="detail-status-copy">${escapeHtml(liveSummary)}</p>
       </div>
 
-      <div class="detail-info-grid">
+      <!-- ═══ INFO CHIPS ═══ -->
+      <div class="detail-info-grid intel-animate intel-animate-4">
         ${detailInfoChip('Plan', String(payload.viewer_plan || 'free').toUpperCase())}
         ${detailInfoChip('Tier', String(signal.visibility || 'free').toUpperCase())}
         ${detailInfoChip('Estrategia', strategyLabel)}
@@ -4523,7 +4591,7 @@ function renderSignalDetailModal(payload) {
         ${detailInfoChip('Score', formatNumber(analysis.normalized_score ?? analysis.score ?? signal.score, 1))}
       </div>
 
-      <div class="card signal-intel-section signal-intel-section-full">
+      <div class="card signal-intel-section signal-intel-section-full intel-animate intel-animate-5">
         <h3>Marco estratégico de la señal</h3>
         <div class="pill-row compact-pill-row">
           <span class="pill">Familia: ${escapeHtml(strategyFamily)}</span>
@@ -4534,24 +4602,18 @@ function renderSignalDetailModal(payload) {
         <p class="detail-status-copy">${escapeHtml(liveSummary)}</p>
       </div>
 
-      <div class="detail-profile-selector" role="tablist" aria-label="Perfil de lectura">
+      <div class="detail-profile-selector intel-animate intel-animate-6" role="tablist" aria-label="Perfil de lectura">
         ${profileOptions.map(option => `<button class="detail-profile-button ${option === selectedProfile ? 'is-active' : ''}" data-signal-profile="${escapeHtml(option)}" data-signal-id="${escapeHtml(signal.signal_id || '')}" aria-pressed="${option === selectedProfile ? 'true' : 'false'}">${escapeHtml(profileLabel(option))}</button>`).join('')}
       </div>
 
-      <div class="detail-stat-grid">
-        ${detailStatCard('Precio actual', formatPrice(tracking.current_price, 4), sideClassByValue(tracking.current_move_pct || 0))}
-        ${detailStatCard('Entrada', formatPrice(tracking.entry_price, 4))}
-        ${detailStatCard('SL', formatPrice(tracking.stop_loss, 4), 'negative-text')}
-        ${detailStatCard('TP1', formatPrice((tracking.take_profits || [])[0], 4), 'positive-text')}
-        ${detailStatCard('TP2', formatPrice((tracking.take_profits || [])[1], 4), 'positive-text')}
+      <div class="detail-stat-grid intel-animate intel-animate-7">
         ${detailStatCard('Dist. entrada', formatFractionPercent(tracking.distance_to_entry_pct))}
         ${detailStatCard('Dist. SL', formatFractionPercent(tracking.stop_distance_pct))}
         ${detailStatCard('Dist. TP1', formatFractionPercent(tracking.tp1_distance_pct))}
         ${detailStatCard('Dist. TP2', formatFractionPercent(tracking.tp2_distance_pct))}
-        ${detailStatCard('Progreso TP1', tracking.progress_to_tp1_pct === null || tracking.progress_to_tp1_pct === undefined ? '—' : formatPercentSigned(tracking.progress_to_tp1_pct, 1))}
       </div>
 
-      <div class="card signal-intel-section signal-intel-section-full">
+      <div class="card signal-intel-section signal-intel-section-full intel-animate intel-animate-8">
         <h3>Estado operativo en vivo</h3>
         <div class="pill-row compact-pill-row">
           <span class="pill">Entrada ya tocada: ${tracking.entry_touched ? 'Sí' : 'No'}</span>
@@ -4568,7 +4630,7 @@ function renderSignalDetailModal(payload) {
         </div>
       </div>
 
-      <div class="card signal-intel-section signal-intel-section-full">
+      <div class="card signal-intel-section signal-intel-section-full intel-animate intel-animate-9">
         <h3>Desglose de calidad</h3>
         <div class="pill-row compact-pill-row">
           <span class="pill">ATR: ${escapeHtml(formatFractionPercent(analysis.atr_pct))}</span>
@@ -4588,39 +4650,25 @@ function renderSignalDetailModal(payload) {
         ${analysis.raw_components?.length && analysis.normalized_components?.length && !showRaw && !showNormalized ? `<div class="detail-note">En esta señal, los valores raw y normalizados coinciden, por eso no se repiten abajo.</div>` : ''}
       </div>
 
-      ${warnings.length ? `<div class="card signal-intel-section signal-intel-section-full"><h3>Notas</h3><div class="feature-list">${warnings.map(item => `<div class="feature-item">• ${escapeHtml(item)}</div>`).join('')}</div></div>` : ''}
+      ${warnings.length ? `<div class="card signal-intel-section signal-intel-section-full intel-animate intel-animate-10"><h3>Notas</h3><div class="feature-list">${warnings.map(item => `<div class="feature-item">• ${escapeHtml(item)}</div>`).join('')}</div></div>` : ''}
 
-      <div class="card signal-intel-section signal-intel-section-full signal-intel-chart-card">
-        <div class="signal-chart-header">
-          <h3>Gráfica en vivo · ${escapeHtml(signal.symbol || '')}</h3>
-          <div class="signal-chart-interval-group" id="signalChartIntervalGroup">
-            <button class="chart-interval-btn" data-signal-interval="5">5m</button>
-            <button class="chart-interval-btn" data-signal-interval="15">15m</button>
-            <button class="chart-interval-btn active" data-signal-interval="30">30m</button>
-            <button class="chart-interval-btn" data-signal-interval="60">1h</button>
-            <button class="chart-interval-btn" data-signal-interval="240">4h</button>
-            <button class="chart-interval-btn" data-signal-interval="D">1D</button>
-          </div>
-        </div>
-        <div id="signalDetailChart" class="signal-detail-chart-container">
-          <div class="chart-loading"><div class="spinner"></div><span>Cargando gráfica...</span></div>
-        </div>
-      </div>
-
-      <div class="card signal-intel-section signal-intel-section-full">
+      <div class="card signal-intel-section signal-intel-section-full intel-animate intel-animate-11">
         <h3>Gestión de riesgo</h3>
         <p>Lleva esta señal directamente a la calculadora para revisar sizing, margen requerido, pérdida al stop y RR neto.</p>
         <div class="action-row compact">
           <button class="button button-secondary" data-open-risk-signal="${escapeHtml(signal.signal_id)}">Abrir calculadora</button>
         </div>
       </div>
-      ${payload.upgrade_hint ? `<div class="card signal-intel-section signal-intel-section-full upgrade-note-card"><h3>Lectura premium</h3><p>${escapeHtml(payload.upgrade_hint)}</p></div>` : ''}
+      ${payload.upgrade_hint ? `<div class="card signal-intel-section signal-intel-section-full upgrade-note-card intel-animate intel-animate-12"><h3>Lectura premium</h3><p>${escapeHtml(payload.upgrade_hint)}</p></div>` : ''}
     </div>
   `;
 
   // Init TradingView chart for this signal's pair
   const signalSymbol = signal.symbol ? `BINANCE:${signal.symbol}` : 'BINANCE:BTCUSDT';
   initSignalChartWidget(signalSymbol, '30');
+
+  // Start live price ticker via Binance WebSocket
+  startSignalPriceTicker(signalSymbol);
 }
 
 // ── TradingView chart inside Signal Detail Modal ───────────────────────────────
@@ -4637,7 +4685,7 @@ function initSignalChartWidget(symbol, interval) {
 
   const wrapper = document.createElement('div');
   wrapper.className = 'tradingview-widget-container';
-  wrapper.style.height = '360px';
+  wrapper.style.height = '440px';
 
   const widgetDiv = document.createElement('div');
   widgetDiv.className = 'tradingview-widget-container__widget';
