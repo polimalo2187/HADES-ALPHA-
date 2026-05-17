@@ -3922,13 +3922,12 @@ html, body, .app-shell, .section-grid, .card {
   overflow: hidden;
   background: rgba(8,12,22,0.98);
 }
-.signal-detail-chart-container .tradingview-widget-container {
+/* tv.js injects iframe directly into the container */
+.signal-detail-chart-container iframe {
   width: 100% !important;
-  height: 420px !important;
-}
-.signal-detail-chart-container .tradingview-widget-container__widget {
-  width: 100% !important;
-  height: 420px !important;
+  height: 100% !important;
+  border: none;
+  display: block;
 }
 
 /* ══════════════════════════════

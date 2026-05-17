@@ -4672,55 +4672,55 @@ function initSignalChartWidget(symbol, interval) {
   const container = document.getElementById('signalDetailChart');
   if (!container) return;
 
-  // Exact same approach as initChartWidget (market chart)
+  // Clear and prepare container — tv.js fills it by container_id
   container.innerHTML = '';
 
-  const wrapper = document.createElement('div');
-  wrapper.className = 'tradingview-widget-container';
-  wrapper.style.height = '420px';
-
-  const widgetDiv = document.createElement('div');
-  widgetDiv.className = 'tradingview-widget-container__widget';
-  widgetDiv.style.height = '100%';
-
-  const script = document.createElement('script');
-  script.type = 'text/javascript';
-  script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
-  script.async = true;
-  script.textContent = JSON.stringify({
-    autosize: true,
-    symbol: _signalChartState.symbol,
-    interval: _signalChartState.interval,
-    timezone: 'Etc/UTC',
-    theme: 'dark',
-    style: '1',
-    locale: 'es',
-    gridColor: 'rgba(255,255,255,0.04)',
-    hide_top_toolbar: false,
-    hide_legend: false,
-    allow_symbol_change: false,
-    save_image: false,
-    studies: ['STD;EMA', 'STD;RSI', 'STD;MACD'],
-    calendar: false,
-    support_host: 'https://www.tradingview.com'
-  });
-
-  wrapper.appendChild(widgetDiv);
-  wrapper.appendChild(script);
-  container.appendChild(wrapper);
-
-  // Bind interval buttons
-  const group = document.getElementById('signalChartIntervalGroup');
-  if (group) {
-    group.querySelectorAll('.chart-interval-btn').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.signalInterval === _signalChartState.interval);
-      btn.onclick = () => {
-        group.querySelectorAll('.chart-interval-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        initSignalChartWidget(_signalChartState.symbol, btn.dataset.signalInterval);
-      };
+  function _buildWidget() {
+    // new TradingView.widget() is the official API for dynamic charts.
+    // Unlike embed-widget-advanced-chart.js it doesn't guard against re-execution.
+    new TradingView.widget({                  // eslint-disable-line no-undef
+      autosize:           true,
+      container_id:       'signalDetailChart',
+      symbol:             _signalChartState.symbol,
+      interval:           _signalChartState.interval,
+      timezone:           'Etc/UTC',
+      theme:              'dark',
+      style:              '1',
+      locale:             'es',
+      gridColor:          'rgba(255,255,255,0.04)',
+      hide_top_toolbar:   false,
+      hide_legend:        false,
+      allow_symbol_change: false,
+      save_image:         false,
+      studies:            ['STD;EMA', 'STD;RSI', 'STD;MACD'],
+      calendar:           false,
+      support_host:       'https://www.tradingview.com'
     });
+    _bindSignalIntervalBtns();
   }
+
+  // Load tv.js once; reuse the global on subsequent calls
+  if (window.TradingView && window.TradingView.widget) {
+    _buildWidget();
+  } else {
+    const s = document.createElement('script');
+    s.src = 'https://s3.tradingview.com/tv.js';
+    s.onload = _buildWidget;
+    document.head.appendChild(s);
+  }
+}
+
+function _bindSignalIntervalBtns() {
+  const group = document.getElementById('signalChartIntervalGroup');
+  if (!group) return;
+  group.querySelectorAll('.chart-interval-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.signalInterval === _signalChartState.interval);
+    btn.onclick = () => {
+      group.querySelectorAll('.chart-interval-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      initSignalChartWidget(_signalChartState.symbol, btn.dataset.signalInterval);
+    };
+  });
 }
 
 async function openSignalDetail(signalId, profile = 'moderado') {
