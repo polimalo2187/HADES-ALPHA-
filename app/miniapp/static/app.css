@@ -19,6 +19,7 @@ html, body {
   background: var(--bg);
   color: var(--text);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  overflow-x: hidden;
 }
 body {
   min-height: 100vh;
@@ -28,6 +29,8 @@ body {
   margin: 0 auto;
   min-height: 100vh;
   padding: 20px 16px 90px;
+  overflow-x: hidden;
+  width: 100%;
 }
 .hidden { display: none !important; }
 .topbar {
@@ -86,6 +89,10 @@ h1 {
   display: grid;
   grid-template-columns: repeat(12, 1fr);
   gap: 12px;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 .card {
   background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
@@ -2673,4 +2680,421 @@ h1 {
     min-width: 56px;
   }
   .ticker-meta { display: none; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   OVERFLOW HARDENING — prevent any child from blowing page width
+   ════════════════════════════════════════════════════════════════════════════ */
+html, body, .app-shell, .section-grid, .card {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+/* Critical: chip row must shrink, not expand the page */
+.radar-chip-row {
+  flex: 1 1 0%;
+  min-width: 0;
+  width: 0;           /* forces flexbox to honour overflow-x:auto */
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.radar-chip-row::-webkit-scrollbar { display: none; }
+
+.radar-chip-filter-row {
+  overflow: hidden;
+  max-width: 100%;
+}
+.radar-chip-filter-section {
+  overflow: hidden;
+  max-width: 100%;
+}
+
+/* Pill-rows must also not overflow */
+.pill-row {
+  flex-wrap: wrap;
+  overflow: hidden;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   VISUAL UPGRADE — Market V2 · Context Cards
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* Context grid: 3 equal columns that collapse to 1 on mobile */
+.radar-context-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0,1fr));
+  gap: 8px;
+  margin-bottom: 16px;
+}
+@media (max-width: 600px) {
+  .radar-context-grid {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+}
+
+/* Each context card: pill shape with colored left accent */
+.radar-context-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  border-left-width: 3px;
+  min-width: 0;
+  overflow: hidden;
+}
+.radar-context-card:nth-child(1) { border-left-color: #38bdf8; }  /* Entorno — sky */
+.radar-context-card:nth-child(2) { border-left-color: var(--accent); }  /* Sesgo — amber */
+.radar-context-card:nth-child(3) { border-left-color: #a78bfa; }  /* Régimen — violet */
+
+.radar-context-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.10em;
+  color: var(--muted);
+}
+.radar-context-card strong {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.radar-context-card span:last-child {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   VISUAL UPGRADE — Ticker strip refinements
+   ════════════════════════════════════════════════════════════════════════════ */
+.market-ticker-card {
+  padding: 0;
+  overflow: hidden;
+  background: linear-gradient(135deg, rgba(245,158,11,0.06) 0%, rgba(255,255,255,0.02) 100%);
+  border-color: rgba(245,158,11,0.18);
+}
+.market-ticker-strip {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  min-height: 60px;
+  overflow: hidden;  /* contain children — horizontal scroll is per-asset */
+  gap: 0;
+  flex-wrap: nowrap;
+}
+.ticker-price {
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.ticker-asset-info {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+.ticker-change {
+  font-size: 12px;
+  font-weight: 700;
+  background: rgba(255,255,255,0.06);
+  border-radius: 6px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   VISUAL UPGRADE — Radar filter chip rows
+   ════════════════════════════════════════════════════════════════════════════ */
+.radar-chip-filter-section {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 10px 12px;
+  gap: 6px;
+  margin: 12px 0;
+}
+.radar-chip-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.radar-chip-label {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--muted);
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  min-width: 72px;
+  flex-shrink: 0;
+}
+.radar-filter-chip {
+  flex-shrink: 0;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s, border-color 0.12s, transform 0.08s;
+  font-family: inherit;
+  line-height: 1.4;
+}
+.radar-filter-chip:hover {
+  background: rgba(255,255,255,0.09);
+  color: var(--text);
+}
+.radar-filter-chip.active {
+  background: rgba(245,158,11,0.20);
+  border-color: rgba(245,158,11,0.55);
+  color: var(--accent-2);
+  font-weight: 700;
+  box-shadow: 0 0 0 1px rgba(245,158,11,0.12);
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   VISUAL UPGRADE — Radar card V2
+   ════════════════════════════════════════════════════════════════════════════ */
+.radar-card-v2 {
+  background: rgba(255,255,255,0.025);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 14px;
+  transition: border-color 0.15s, background 0.15s;
+  overflow: hidden;
+}
+.radar-card-v2[data-radar-expanded="true"] {
+  background: rgba(245,158,11,0.04);
+  border-color: rgba(245,158,11,0.30);
+}
+.radar-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.radar-card-title-block {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+.radar-card-symbol-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+.item-title {
+  font-size: 16px;
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.radar-dir-badge {
+  font-size: 10px !important;
+  padding: 2px 8px !important;
+  border-radius: 5px !important;
+  flex-shrink: 0;
+}
+.radar-card-note {
+  font-size: 12px;
+  color: #cbd5e1;
+  line-height: 1.45;
+  background: rgba(245,158,11,0.08);
+  border-left: 2px solid rgba(245,158,11,0.60);
+  padding: 5px 9px;
+  border-radius: 0 6px 6px 0;
+  margin-top: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.radar-card-score-block {
+  flex-shrink: 0;
+  text-align: center;
+  min-width: 52px;
+}
+.radar-score-big {
+  font-size: 30px;
+  font-weight: 900;
+  color: var(--accent-2);
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+.radar-score-label {
+  font-size: 9px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.10em;
+  margin-top: 2px;
+}
+.radar-card-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0,1fr));
+  gap: 5px;
+  margin-top: 10px;
+}
+.radar-metric-pill {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: rgba(255,255,255,0.035);
+  border-radius: 8px;
+  padding: 6px 7px;
+  border: 1px solid rgba(255,255,255,0.06);
+  overflow: hidden;
+  min-width: 0;
+}
+.rmp-label {
+  font-size: 9px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+.rmp-value {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.radar-card-expand-btn {
+  font-size: 11px !important;
+  padding: 4px 10px !important;
+  border-radius: 8px !important;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   VISUAL UPGRADE — Heatmap chips
+   ════════════════════════════════════════════════════════════════════════════ */
+.heat-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 10px;
+}
+.heat-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  border-radius: 9px;
+  padding: 8px 10px;
+  min-width: 56px;
+  flex: 1 1 56px;
+  max-width: 80px;
+  cursor: default;
+  transition: transform 0.10s;
+  border: 1px solid transparent;
+  overflow: hidden;
+}
+.heat-chip-sym {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+.heat-chip-pct {
+  font-size: 13px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   VISUAL UPGRADE — Radar section header
+   ════════════════════════════════════════════════════════════════════════════ */
+.radar-section-header {
+  align-items: flex-start;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+  gap: 8px;
+  overflow: hidden;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   MOBILE RESPONSIVE — 4-col metric grid → 2-col on tiny screens
+   ════════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 380px) {
+  .radar-card-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .radar-chip-label   { min-width: 58px; font-size: 9px; }
+  .ticker-vol-block   { display: none; }
+  .ticker-meta        { display: none; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   RADAR TÁCTICO DETAIL — overflow hardening
+   ════════════════════════════════════════════════════════════════════════════ */
+.signal-intel-layout {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.detail-info-grid,
+.detail-stat-grid {
+  max-width: 100%;
+  overflow: hidden;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.detail-status-top {
+  max-width: 100%;
+  overflow: hidden;
+}
+.detail-status-copy-block {
+  min-width: 0;
+  overflow: hidden;
+}
+.detail-info-chip-value,
+.detail-stat-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* Pill rows in modal must wrap, not overflow */
+.signal-intel-layout .pill-row {
+  flex-wrap: wrap;
+  overflow: hidden;
+  max-width: 100%;
+}
+.signal-intel-layout .pill,
+.signal-intel-layout .watchlist-priority-pill {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: calc(50% - 6px);
+}
+
+/* Modal body itself */
+#signalDetailBody,
+.modal-body {
+  overflow-x: hidden;
+  width: 100%;
+  box-sizing: border-box;
 }

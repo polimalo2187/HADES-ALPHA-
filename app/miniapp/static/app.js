@@ -3234,7 +3234,7 @@ function renderMarket() {
   }
 
   // Top volume chips for ticker strip
-  const topVolChips = topVolume.slice(0, 3).map(item => {
+  const topVolChips = topVolume.slice(0, 1).map(item => {
     const base = item.symbol.replace(/USDT$/, '');
     return `<span class="ticker-vol-chip"><span class="ticker-vol-sym">${escapeHtml(base)}</span><span class="ticker-vol-num">${escapeHtml(formatCompactAmount(item.quote_volume))}</span></span>`;
   }).join('');
