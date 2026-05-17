@@ -4449,28 +4449,36 @@ function updateLivePriceDisplay(price, changePct) {
     : price < 10000 ? price.toFixed(2)
     : price.toFixed(2);
 
+  // Update text
   priceEl.textContent = formatted;
-  priceEl.className = `live-price-value ${isUp ? 'positive-text' : 'negative-text'}`;
 
-  // Flash animation
-  priceEl.classList.remove('price-flash-up', 'price-flash-down');
-  void priceEl.offsetWidth;
-  priceEl.classList.add(isUp ? 'price-flash-up' : 'price-flash-down');
+  // Update color class (keep live-price-value always)
+  priceEl.classList.remove('positive-text', 'negative-text', 'price-flash-up', 'price-flash-down');
+  priceEl.classList.add(isUp ? 'positive-text' : 'negative-text');
+
+  // Flash: add class then remove after animation (no 'forwards' needed)
+  if (prev !== null) {
+    void priceEl.offsetWidth;
+    priceEl.classList.add(isUp ? 'price-flash-up' : 'price-flash-down');
+    setTimeout(() => priceEl.classList.remove('price-flash-up', 'price-flash-down'), 520);
+  }
 
   if (changeEl) {
     const sign = changePct >= 0 ? '+' : '';
     changeEl.textContent = `${sign}${changePct.toFixed(2)}%`;
-    changeEl.className = `live-price-change ${changePct >= 0 ? 'positive-text' : 'negative-text'}`;
+    changeEl.classList.remove('positive-text', 'negative-text');
+    changeEl.classList.add(changePct >= 0 ? 'positive-text' : 'negative-text');
   }
 
   if (dotEl) {
     dotEl.className = `live-dot ${isUp ? 'live-dot-up' : 'live-dot-down'}`;
   }
 
-  if (heroEl) {
+  if (heroEl && prev !== null) {
     heroEl.classList.remove('hero-flash-up', 'hero-flash-down');
     void heroEl.offsetWidth;
     heroEl.classList.add(isUp ? 'hero-flash-up' : 'hero-flash-down');
+    setTimeout(() => heroEl.classList.remove('hero-flash-up', 'hero-flash-down'), 650);
   }
 }
 
@@ -4663,9 +4671,9 @@ function renderSignalDetailModal(payload) {
     </div>
   `;
 
-  // Init TradingView chart for this signal's pair
+  // Init TradingView chart for this signal's pair (delay so DOM is painted first)
   const signalSymbol = signal.symbol ? `BINANCE:${signal.symbol}` : 'BINANCE:BTCUSDT';
-  initSignalChartWidget(signalSymbol, '30');
+  setTimeout(() => initSignalChartWidget(signalSymbol, '30'), 120);
 
   // Start live price ticker via Binance WebSocket
   startSignalPriceTicker(signalSymbol);
@@ -4681,6 +4689,8 @@ function initSignalChartWidget(symbol, interval) {
   const container = document.getElementById('signalDetailChart');
   if (!container) return;
 
+  // Set explicit height inline so TradingView can measure it
+  container.style.height = '440px';
   container.innerHTML = '';
 
   const wrapper = document.createElement('div');
