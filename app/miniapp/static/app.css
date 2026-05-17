@@ -4030,10 +4030,8 @@ html, body, .app-shell, .section-grid, .card {
   letter-spacing: 0.01em;
   font-variant-numeric: tabular-nums;
 }
-.price-flash-up   { animation: priceFlashUp   0.5s ease-out; }
-.price-flash-down { animation: priceFlashDown 0.5s ease-out; }
-.hero-flash-up    { animation: heroPulseUp   0.65s ease-out; }
-.hero-flash-down  { animation: heroPulseDown 0.65s ease-out; }
+/* price-flash and hero-flash animations removed — price updates silently */
+.price-flash-up, .price-flash-down, .hero-flash-up, .hero-flash-down { /* no-op */ }
 
 /* ── Level Row ── */
 .live-price-levels {

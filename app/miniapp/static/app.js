@@ -4437,7 +4437,6 @@ function updateLivePriceDisplay(price, changePct) {
   const priceEl = document.getElementById('signalLivePrice');
   const changeEl = document.getElementById('signalLiveChange');
   const dotEl = document.getElementById('signalLiveDot');
-  const heroEl = document.getElementById('signalPriceHero');
 
   if (!priceEl) return;
 
@@ -4449,19 +4448,10 @@ function updateLivePriceDisplay(price, changePct) {
     : price < 10000 ? price.toFixed(2)
     : price.toFixed(2);
 
-  // Update text
+  // Update price silently — just the number and color, zero animation
   priceEl.textContent = formatted;
-
-  // Update color class (keep live-price-value always)
-  priceEl.classList.remove('positive-text', 'negative-text', 'price-flash-up', 'price-flash-down');
+  priceEl.classList.remove('positive-text', 'negative-text');
   priceEl.classList.add(isUp ? 'positive-text' : 'negative-text');
-
-  // Flash ONLY when price actually changes (avoids constant flicker on every tick)
-  if (prev !== null && price !== prev) {
-    void priceEl.offsetWidth;
-    priceEl.classList.add(isUp ? 'price-flash-up' : 'price-flash-down');
-    setTimeout(() => priceEl.classList.remove('price-flash-up', 'price-flash-down'), 520);
-  }
 
   if (changeEl) {
     const sign = changePct >= 0 ? '+' : '';
@@ -4472,13 +4462,6 @@ function updateLivePriceDisplay(price, changePct) {
 
   if (dotEl) {
     dotEl.className = `live-dot ${isUp ? 'live-dot-up' : 'live-dot-down'}`;
-  }
-
-  if (heroEl && prev !== null && price !== prev) {
-    heroEl.classList.remove('hero-flash-up', 'hero-flash-down');
-    void heroEl.offsetWidth;
-    heroEl.classList.add(isUp ? 'hero-flash-up' : 'hero-flash-down');
-    setTimeout(() => heroEl.classList.remove('hero-flash-up', 'hero-flash-down'), 650);
   }
 }
 
@@ -4694,54 +4677,21 @@ function initSignalChartWidget(symbol, interval) {
   const container = document.getElementById('signalDetailChart');
   if (!container) return;
 
-  // Force layout recalc before measuring
-  const containerWidth = container.offsetWidth || 600;
-  const containerHeight = window.innerWidth <= 480 ? 360 : 440;
+  const h = window.innerWidth <= 480 ? 360 : 440;
+  const sym = encodeURIComponent(_signalChartState.symbol);
+  const ivl = encodeURIComponent(_signalChartState.interval);
+  const studies = encodeURIComponent('STD;EMA|STD;RSI|STD;MACD');
 
-  // Set explicit height inline so TradingView can measure it
-  container.style.height = `${containerHeight}px`;
-  container.innerHTML = '';
+  const src = `https://s.tradingview.com/widgetembed/?symbol=${sym}&interval=${ivl}&theme=dark&style=1&locale=es&timezone=Etc%2FUTC&hide_top_toolbar=0&save_image=0&studies=${studies}&hidesidetoolbar=0&allow_symbol_change=0`;
 
-  const wrapper = document.createElement('div');
-  wrapper.className = 'tradingview-widget-container';
-  wrapper.style.cssText = `width:100%;height:${containerHeight}px;`;
-
-  const widgetDiv = document.createElement('div');
-  widgetDiv.className = 'tradingview-widget-container__widget';
-  widgetDiv.style.height = '100%';
-
-  const script = document.createElement('script');
-  script.type = 'text/javascript';
-  script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
-  script.async = true;
-  script.textContent = JSON.stringify({
-    autosize: false,
-    width: containerWidth,
-    height: containerHeight,
-    symbol: _signalChartState.symbol,
-    interval: _signalChartState.interval,
-    timezone: 'Etc/UTC',
-    theme: 'dark',
-    style: '1',
-    locale: 'es',
-    gridColor: 'rgba(255,255,255,0.04)',
-    hide_top_toolbar: false,
-    hide_legend: false,
-    allow_symbol_change: false,
-    save_image: false,
-    studies: ['STD;EMA', 'STD;RSI', 'STD;MACD'],
-    calendar: false,
-    support_host: 'https://www.tradingview.com'
-  });
-
-  wrapper.appendChild(widgetDiv);
-  wrapper.appendChild(script);
-  container.appendChild(wrapper);
-
-  // Dispatch resize after script loads so TradingView re-measures the container
-  script.onload = () => {
-    setTimeout(() => window.dispatchEvent(new Event('resize')), 200);
-  };
+  container.style.height = h + 'px';
+  container.innerHTML = `<iframe
+    src="${src}"
+    style="width:100%;height:${h}px;border:none;display:block;"
+    allowtransparency="true"
+    scrolling="no"
+    allowfullscreen
+  ></iframe>`;
 
   // Bind interval buttons
   const group = document.getElementById('signalChartIntervalGroup');
