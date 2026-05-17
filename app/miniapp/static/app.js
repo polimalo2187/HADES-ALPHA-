@@ -4395,7 +4395,7 @@ function startSignalPriceTicker(symbol) {
 
   function connect() {
     try {
-      const ws = new WebSocket(`wss://stream.binance.com/ws/${pair}@ticker`);
+      const ws = new WebSocket(`wss://stream.binance.com:9443/ws/${pair}@ticker`);
       _priceTicker.ws = ws;
 
       ws.onmessage = (ev) => {
@@ -4496,13 +4496,13 @@ function _buildSignalMap(tracking, direction, signal) {
   const tp2    = tps[1] || 0;
   const cur    = parseFloat(tracking.current_price) || entry;
 
-  if (!entry || !sl) return '<div class="map-no-data">Sin niveles cargados</div>';
+  if (!entry || !sl) return '';
 
   const allLvls = [sl, entry, ...(tp1?[tp1]:[]), ...(tp2?[tp2]:[])];
   const minL = Math.min(...allLvls);
   const maxL = Math.max(...allLvls);
   const range = maxL - minL;
-  if (range <= 0) return '<div class="map-no-data">Sin rango de niveles</div>';
+  if (range <= 0) return '';
 
   // Store bounds for live updates
   _priceTicker.mapMin = minL;
@@ -4603,10 +4603,8 @@ function renderSignalDetailModal(payload) {
   els.signalDetailBody.innerHTML = `
     <div class="signal-intel-layout">
 
-      <!-- ═══ HERO: Signal Level Map ═══ -->
-      <div class="card signal-intel-section signal-intel-section-full sig-map-card intel-animate intel-animate-1 ${directionGlowClass}">
-        ${_buildSignalMap(tracking, signal.direction || '', signal)}
-      </div>
+      <!-- ═══ HERO: Signal Level Map (only shown when valid level data exists) ═══ -->
+      ${(() => { const _m = _buildSignalMap(tracking, signal.direction || '', signal); return _m ? `<div class="card signal-intel-section signal-intel-section-full sig-map-card intel-animate intel-animate-1 ${directionGlowClass}">${_m}</div>` : ''; })()}
 
       <!-- ═══ LIVE PRICE HERO ═══ -->
       <div class="card signal-intel-section signal-intel-section-full signal-live-price-card intel-animate intel-animate-2" id="signalPriceHero">
