@@ -4124,6 +4124,24 @@ function renderSignalDetailModal(payload) {
       </div>
 
       ${warnings.length ? `<div class="card signal-intel-section signal-intel-section-full"><h3>Notas</h3><div class="feature-list">${warnings.map(item => `<div class="feature-item">• ${escapeHtml(item)}</div>`).join('')}</div></div>` : ''}
+
+      <div class="card signal-intel-section signal-intel-section-full signal-intel-chart-card">
+        <div class="signal-chart-header">
+          <h3>Gráfica en vivo · ${escapeHtml(signal.symbol || '')}</h3>
+          <div class="signal-chart-interval-group" id="signalChartIntervalGroup">
+            <button class="chart-interval-btn" data-signal-interval="5">5m</button>
+            <button class="chart-interval-btn" data-signal-interval="15">15m</button>
+            <button class="chart-interval-btn active" data-signal-interval="30">30m</button>
+            <button class="chart-interval-btn" data-signal-interval="60">1h</button>
+            <button class="chart-interval-btn" data-signal-interval="240">4h</button>
+            <button class="chart-interval-btn" data-signal-interval="D">1D</button>
+          </div>
+        </div>
+        <div id="signalDetailChart" class="signal-detail-chart-container">
+          <div class="chart-loading"><div class="spinner"></div><span>Cargando gráfica...</span></div>
+        </div>
+      </div>
+
       <div class="card signal-intel-section signal-intel-section-full">
         <h3>Gestión de riesgo</h3>
         <p>Lleva esta señal directamente a la calculadora para revisar sizing, margen requerido, pérdida al stop y RR neto.</p>
@@ -4134,6 +4152,70 @@ function renderSignalDetailModal(payload) {
       ${payload.upgrade_hint ? `<div class="card signal-intel-section signal-intel-section-full upgrade-note-card"><h3>Lectura premium</h3><p>${escapeHtml(payload.upgrade_hint)}</p></div>` : ''}
     </div>
   `;
+
+  // Init TradingView chart for this signal's pair
+  const signalSymbol = signal.symbol ? `BINANCE:${signal.symbol}` : 'BINANCE:BTCUSDT';
+  initSignalChartWidget(signalSymbol, '30');
+}
+
+// ── TradingView chart inside Signal Detail Modal ───────────────────────────────
+const _signalChartState = { symbol: 'BINANCE:BTCUSDT', interval: '30' };
+
+function initSignalChartWidget(symbol, interval) {
+  if (symbol) _signalChartState.symbol = symbol;
+  if (interval) _signalChartState.interval = interval;
+
+  const container = document.getElementById('signalDetailChart');
+  if (!container) return;
+
+  container.innerHTML = '';
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'tradingview-widget-container';
+  wrapper.style.height = '360px';
+
+  const widgetDiv = document.createElement('div');
+  widgetDiv.className = 'tradingview-widget-container__widget';
+  widgetDiv.style.height = '100%';
+
+  const script = document.createElement('script');
+  script.type = 'text/javascript';
+  script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+  script.async = true;
+  script.textContent = JSON.stringify({
+    autosize: true,
+    symbol: _signalChartState.symbol,
+    interval: _signalChartState.interval,
+    timezone: 'Etc/UTC',
+    theme: 'dark',
+    style: '1',
+    locale: 'es',
+    gridColor: 'rgba(255,255,255,0.04)',
+    hide_top_toolbar: false,
+    hide_legend: false,
+    allow_symbol_change: false,
+    save_image: false,
+    studies: ['STD;EMA', 'STD;RSI', 'STD;MACD'],
+    calendar: false,
+    support_host: 'https://www.tradingview.com'
+  });
+
+  wrapper.appendChild(widgetDiv);
+  wrapper.appendChild(script);
+  container.appendChild(wrapper);
+
+  // Bind interval buttons
+  const group = document.getElementById('signalChartIntervalGroup');
+  if (group) {
+    group.querySelectorAll('.chart-interval-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.signalInterval === _signalChartState.interval);
+      btn.addEventListener('click', () => {
+        group.querySelectorAll('.chart-interval-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        initSignalChartWidget(_signalChartState.symbol, btn.dataset.signalInterval);
+      });
+    });
+  }
 }
 
 async function openSignalDetail(signalId, profile = 'moderado') {

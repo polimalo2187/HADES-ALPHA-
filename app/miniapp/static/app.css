@@ -1567,6 +1567,47 @@ h1 {
   width: 100% !important;
   height: 420px !important;
 }
+/* ── Signal Detail TradingView Chart ─────────────────────────────────────────── */
+.signal-intel-chart-card {
+  padding: 16px 16px 0 16px !important;
+  overflow: hidden;
+}
+
+.signal-chart-header {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.signal-chart-header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.signal-chart-interval-group {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.signal-detail-chart-container {
+  width: calc(100% + 32px);
+  margin: 0 -16px;
+  height: 360px;
+  border-radius: 0 0 12px 12px;
+  overflow: hidden;
+}
+
+.signal-detail-chart-container .tradingview-widget-container {
+  height: 360px !important;
+}
+
+.signal-detail-chart-container .tradingview-widget-container__widget {
+  height: 360px !important;
+}
+
 
 .chart-loading {
   display: flex;
