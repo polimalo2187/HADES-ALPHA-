@@ -3917,27 +3917,18 @@ html, body, .app-shell, .section-grid, .card {
 .signal-detail-chart-container {
   width: calc(100% + 28px);
   margin: 0 -14px;
-  height: 440px !important;
+  height: 420px;
   border-radius: 0 0 12px 12px;
   overflow: hidden;
-  position: relative;
   background: rgba(8,12,22,0.98);
 }
 .signal-detail-chart-container .tradingview-widget-container {
   width: 100% !important;
-  height: 440px !important;
-  position: relative;
+  height: 420px !important;
 }
 .signal-detail-chart-container .tradingview-widget-container__widget {
   width: 100% !important;
-  height: 440px !important;
-  display: block;
-}
-.signal-detail-chart-container iframe {
-  width: 100% !important;
-  height: 440px !important;
-  border: none;
-  display: block;
+  height: 420px !important;
 }
 
 /* ══════════════════════════════
@@ -4333,6 +4324,5 @@ html, body, .app-shell, .section-grid, .card {
   .signal-detail-chart-container { height: 360px !important; }
   .signal-detail-chart-container .tradingview-widget-container { height: 360px !important; }
   .signal-detail-chart-container .tradingview-widget-container__widget { height: 360px !important; }
-  .signal-detail-chart-container iframe { height: 360px !important; }
   .chart-loading { height: 360px; }
 }

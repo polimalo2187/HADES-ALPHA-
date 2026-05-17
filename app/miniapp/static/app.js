@@ -4654,14 +4654,9 @@ function renderSignalDetailModal(payload) {
     </div>
   `;
 
-  // Init TradingView chart for this signal's pair
-  // Use 400ms + rAF to ensure modal is fully painted before TradingView measures the container
+  // Init TradingView chart — same pattern as the market chart (requestAnimationFrame after innerHTML)
   const signalSymbol = signal.symbol ? `BINANCE:${signal.symbol}` : 'BINANCE:BTCUSDT';
-  setTimeout(() => {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => initSignalChartWidget(signalSymbol, '30'));
-    });
-  }, 400);
+  requestAnimationFrame(() => initSignalChartWidget(signalSymbol, '30'));
 
   // Start live price ticker via Binance WebSocket
   startSignalPriceTicker(signalSymbol);
@@ -4677,32 +4672,53 @@ function initSignalChartWidget(symbol, interval) {
   const container = document.getElementById('signalDetailChart');
   if (!container) return;
 
-  const h = window.innerWidth <= 480 ? 360 : 440;
-  const sym = encodeURIComponent(_signalChartState.symbol);
-  const ivl = encodeURIComponent(_signalChartState.interval);
-  const studies = encodeURIComponent('STD;EMA|STD;RSI|STD;MACD');
+  // Exact same approach as initChartWidget (market chart)
+  container.innerHTML = '';
 
-  const src = `https://s.tradingview.com/widgetembed/?symbol=${sym}&interval=${ivl}&theme=dark&style=1&locale=es&timezone=Etc%2FUTC&hide_top_toolbar=0&save_image=0&studies=${studies}&hidesidetoolbar=0&allow_symbol_change=0`;
+  const wrapper = document.createElement('div');
+  wrapper.className = 'tradingview-widget-container';
+  wrapper.style.height = '420px';
 
-  container.style.height = h + 'px';
-  container.innerHTML = `<iframe
-    src="${src}"
-    style="width:100%;height:${h}px;border:none;display:block;"
-    allowtransparency="true"
-    scrolling="no"
-    allowfullscreen
-  ></iframe>`;
+  const widgetDiv = document.createElement('div');
+  widgetDiv.className = 'tradingview-widget-container__widget';
+  widgetDiv.style.height = '100%';
+
+  const script = document.createElement('script');
+  script.type = 'text/javascript';
+  script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+  script.async = true;
+  script.textContent = JSON.stringify({
+    autosize: true,
+    symbol: _signalChartState.symbol,
+    interval: _signalChartState.interval,
+    timezone: 'Etc/UTC',
+    theme: 'dark',
+    style: '1',
+    locale: 'es',
+    gridColor: 'rgba(255,255,255,0.04)',
+    hide_top_toolbar: false,
+    hide_legend: false,
+    allow_symbol_change: false,
+    save_image: false,
+    studies: ['STD;EMA', 'STD;RSI', 'STD;MACD'],
+    calendar: false,
+    support_host: 'https://www.tradingview.com'
+  });
+
+  wrapper.appendChild(widgetDiv);
+  wrapper.appendChild(script);
+  container.appendChild(wrapper);
 
   // Bind interval buttons
   const group = document.getElementById('signalChartIntervalGroup');
   if (group) {
     group.querySelectorAll('.chart-interval-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.signalInterval === _signalChartState.interval);
-      btn.addEventListener('click', () => {
+      btn.onclick = () => {
         group.querySelectorAll('.chart-interval-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         initSignalChartWidget(_signalChartState.symbol, btn.dataset.signalInterval);
-      });
+      };
     });
   }
 }
