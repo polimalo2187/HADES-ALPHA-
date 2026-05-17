@@ -2312,3 +2312,365 @@ h1 {
   .perf-teaser-grid { grid-template-columns: repeat(2, 1fr); }
   .quick-actions-grid { grid-template-columns: repeat(3, 1fr); }
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   MARKET V2 — Ticker Strip
+   ════════════════════════════════════════════════════════════════════════════ */
+.market-ticker-card {
+  padding: 0;
+  overflow: hidden;
+}
+.market-ticker-strip {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 10px 16px;
+  min-height: 64px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.market-ticker-strip::-webkit-scrollbar { display: none; }
+
+.ticker-sep {
+  width: 1px;
+  height: 32px;
+  background: var(--border);
+  flex-shrink: 0;
+  margin: 0 14px;
+}
+.ticker-asset {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.ticker-logo {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.ticker-asset-info {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+.ticker-sym {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.ticker-price {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.ticker-change {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.ticker-meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+.ticker-pulse-block {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.ticker-pulse-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ticker-bias {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+.ticker-adv {
+  font-size: 11px;
+  color: var(--muted);
+}
+.ticker-vol-block {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.ticker-vol-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+}
+.ticker-vol-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+.ticker-vol-sym {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.ticker-vol-num {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+}
+.ticker-refresh-btn {
+  padding: 6px 10px !important;
+  font-size: 16px !important;
+  min-width: 36px;
+  border-radius: 8px !important;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   MARKET V2 — Heatmap (Gainers / Losers)
+   ════════════════════════════════════════════════════════════════════════════ */
+.heat-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+.heat-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  border-radius: 8px;
+  padding: 7px 10px;
+  min-width: 64px;
+  cursor: default;
+  transition: transform 0.12s;
+  border: 1px solid transparent;
+}
+.heat-chip:hover { transform: scale(1.04); }
+.heat-chip-sym {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.heat-chip-pct {
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Gain intensity levels — light → vivid green */
+.heat-chip-gain-1 { background: rgba(34,197,94,0.10); border-color: rgba(34,197,94,0.18); color: #86efac; }
+.heat-chip-gain-2 { background: rgba(34,197,94,0.18); border-color: rgba(34,197,94,0.28); color: #4ade80; }
+.heat-chip-gain-3 { background: rgba(34,197,94,0.28); border-color: rgba(34,197,94,0.40); color: #22c55e; }
+.heat-chip-gain-4 { background: rgba(34,197,94,0.40); border-color: rgba(34,197,94,0.55); color: #16a34a; }
+.heat-chip-gain-5 { background: rgba(34,197,94,0.60); border-color: rgba(34,197,94,0.80); color: #fff;    }
+
+/* Loss intensity levels — light → vivid red */
+.heat-chip-loss-1 { background: rgba(239,68,68,0.10); border-color: rgba(239,68,68,0.18); color: #fca5a5; }
+.heat-chip-loss-2 { background: rgba(239,68,68,0.18); border-color: rgba(239,68,68,0.28); color: #f87171; }
+.heat-chip-loss-3 { background: rgba(239,68,68,0.28); border-color: rgba(239,68,68,0.40); color: #ef4444; }
+.heat-chip-loss-4 { background: rgba(239,68,68,0.40); border-color: rgba(239,68,68,0.55); color: #dc2626; }
+.heat-chip-loss-5 { background: rgba(239,68,68,0.60); border-color: rgba(239,68,68,0.80); color: #fff;    }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   MARKET V2 — Radar chip filters
+   ════════════════════════════════════════════════════════════════════════════ */
+.radar-chip-filter-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
+.radar-chip-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.radar-chip-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  min-width: 68px;
+  flex-shrink: 0;
+}
+.radar-chip-row {
+  display: flex;
+  gap: 5px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+.radar-chip-row::-webkit-scrollbar { display: none; }
+.radar-filter-chip {
+  flex-shrink: 0;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.14s, color 0.14s, border-color 0.14s;
+  font-family: inherit;
+}
+.radar-filter-chip:hover {
+  background: rgba(255,255,255,0.08);
+  color: var(--text);
+}
+.radar-filter-chip.active {
+  background: rgba(245,158,11,0.18);
+  border-color: rgba(245,158,11,0.50);
+  color: var(--accent-2);
+  font-weight: 700;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   MARKET V2 — Compact radar card V2
+   ════════════════════════════════════════════════════════════════════════════ */
+.radar-card-v2 {
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  transition: border-color 0.15s;
+}
+.radar-card-v2[data-radar-expanded="true"] {
+  border-color: rgba(245,158,11,0.30);
+}
+.radar-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.radar-card-title-block {
+  flex: 1;
+  min-width: 0;
+}
+.radar-card-symbol-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.radar-dir-badge {
+  font-size: 11px !important;
+  padding: 2px 8px !important;
+  border-radius: 4px !important;
+}
+.radar-card-note {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+  /* Show as highlighted action text */
+  background: rgba(245,158,11,0.07);
+  border-left: 2px solid var(--accent);
+  padding: 4px 8px;
+  border-radius: 0 4px 4px 0;
+  margin-top: 4px;
+}
+.radar-card-score-block {
+  flex-shrink: 0;
+  text-align: center;
+  min-width: 48px;
+}
+.radar-score-big {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--accent-2);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.radar-score-label {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-top: 2px;
+}
+.radar-card-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin-top: 12px;
+}
+.radar-metric-pill {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+}
+.rmp-label {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.rmp-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.radar-card-expand-btn {
+  font-size: 12px !important;
+  padding: 4px 10px !important;
+}
+.radar-card-expanded-content {
+  border-top: 1px solid var(--border);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   MARKET V2 — Watchlist section
+   ════════════════════════════════════════════════════════════════════════════ */
+.watchlist-section-card {
+  border-top: 2px solid rgba(245,158,11,0.25);
+}
+.watchlist-section-header {
+  margin-bottom: 12px;
+}
+.watchlist-symbols-row {
+  margin-bottom: 14px;
+}
+
+/* ── Responsive: stack radar metrics on very small screens ───────────────── */
+@media (max-width: 400px) {
+  .radar-card-metrics {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .radar-chip-label {
+    min-width: 56px;
+  }
+  .ticker-meta { display: none; }
+}
