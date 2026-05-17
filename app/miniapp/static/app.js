@@ -4385,7 +4385,7 @@ function closeSignalDetailModal() {
 }
 
 // ── Live Price Ticker via Binance WebSocket ───────────────────────────────────
-const _priceTicker = { ws: null, symbol: null, lastPrice: null, prevPrice: null };
+const _priceTicker = { ws: null, symbol: null, lastPrice: null, prevPrice: null, mapMin: null, mapMax: null };
 
 function startSignalPriceTicker(symbol) {
   stopSignalPriceTicker();
@@ -4395,7 +4395,7 @@ function startSignalPriceTicker(symbol) {
 
   function connect() {
     try {
-      const ws = new WebSocket(`wss://stream.binance.com:9443/ws/${pair}@ticker`);
+      const ws = new WebSocket(`wss://stream.binance.com/ws/${pair}@ticker`);
       _priceTicker.ws = ws;
 
       ws.onmessage = (ev) => {
@@ -4431,6 +4431,8 @@ function stopSignalPriceTicker() {
   }
   _priceTicker.lastPrice = null;
   _priceTicker.prevPrice = null;
+  _priceTicker.mapMin = null;
+  _priceTicker.mapMax = null;
 }
 
 function updateLivePriceDisplay(price, changePct) {
@@ -4448,7 +4450,7 @@ function updateLivePriceDisplay(price, changePct) {
     : price < 10000 ? price.toFixed(2)
     : price.toFixed(2);
 
-  // Update price silently — just the number and color, zero animation
+  // Update price text and color silently
   priceEl.textContent = formatted;
   priceEl.classList.remove('positive-text', 'negative-text');
   priceEl.classList.add(isUp ? 'positive-text' : 'negative-text');
@@ -4460,9 +4462,113 @@ function updateLivePriceDisplay(price, changePct) {
     changeEl.classList.add(changePct >= 0 ? 'positive-text' : 'negative-text');
   }
 
-  if (dotEl) {
-    dotEl.className = `live-dot ${isUp ? 'live-dot-up' : 'live-dot-down'}`;
-  }
+  if (dotEl) dotEl.className = `live-dot ${isUp ? 'live-dot-up' : 'live-dot-down'}`;
+
+  // Move the signal level map indicator
+  _updateSignalMapIndicator(price, isUp);
+}
+
+function _updateSignalMapIndicator(price, isUp) {
+  const line  = document.getElementById('signalMapLiveLine');
+  const label = document.getElementById('signalMapLivePrice');
+  if (!line || !label) return;
+
+  const { mapMin, mapMax } = _priceTicker;
+  if (mapMin == null || mapMax == null || mapMax <= mapMin) return;
+
+  const pct = Math.max(0, Math.min(100, (price - mapMin) / (mapMax - mapMin) * 100));
+  line.style.bottom = pct + '%';
+  label.textContent = price < 0.001 ? price.toFixed(8)
+    : price < 1 ? price.toFixed(6)
+    : price < 100 ? price.toFixed(4)
+    : price.toFixed(2);
+  line.className = 'map-live-line ' + (isUp ? 'map-live-up' : 'map-live-down');
+}
+
+
+// ── Signal Level Map ──────────────────────────────────────────────────────────
+function _buildSignalMap(tracking, direction, signal) {
+  const isLong = !String(direction).toLowerCase().includes('short');
+  const entry  = parseFloat(tracking.entry_price) || 0;
+  const sl     = parseFloat(tracking.stop_loss)   || 0;
+  const tps    = (tracking.take_profits || []).map(v => parseFloat(v)).filter(v => v > 0);
+  const tp1    = tps[0] || 0;
+  const tp2    = tps[1] || 0;
+  const cur    = parseFloat(tracking.current_price) || entry;
+
+  if (!entry || !sl) return '<div class="map-no-data">Sin niveles cargados</div>';
+
+  const allLvls = [sl, entry, ...(tp1?[tp1]:[]), ...(tp2?[tp2]:[])];
+  const minL = Math.min(...allLvls);
+  const maxL = Math.max(...allLvls);
+  const range = maxL - minL;
+  if (range <= 0) return '<div class="map-no-data">Sin rango de niveles</div>';
+
+  // Store bounds for live updates
+  _priceTicker.mapMin = minL;
+  _priceTicker.mapMax = maxL;
+
+  const pct  = p => ((p - minL) / range * 100).toFixed(3);
+  const dist = (p, base) => {
+    if (!base || !p) return '—';
+    const d = (p - base) / base * 100;
+    return (d >= 0 ? '+' : '') + d.toFixed(2) + '%';
+  };
+
+  const rr = (tp1 && sl && entry && Math.abs(entry - sl) > 0)
+    ? (Math.abs(tp1 - entry) / Math.abs(entry - sl)).toFixed(1) : null;
+  const rrLabel = rr ? `R/R 1:${rr}` : '';
+
+  const fmtP = p => p < 0.001 ? p.toFixed(8) : p < 1 ? p.toFixed(6) : p < 100 ? p.toFixed(4) : p.toFixed(2);
+
+  const livePct = Math.max(0, Math.min(100, (cur - minL) / range * 100)).toFixed(3);
+  const liveIsUp = cur >= entry;
+
+  const entryPct  = pct(entry);
+  const rewardH   = (100 - parseFloat(entryPct)).toFixed(3);
+  const riskH     = entryPct;
+
+  return \`
+    <div class="sig-map-meta">
+      <span class="sig-map-pair">\${(signal.symbol||'')}</span>
+      \${rrLabel ? \`<span class="sig-map-rr">\${rrLabel}</span>\` : ''}
+    </div>
+    <div class="sig-map-body">
+      <!-- Coloured background zones -->
+      <div class="sig-map-zone sig-zone-reward" style="bottom:\${entryPct}%;height:\${rewardH}%"></div>
+      <div class="sig-map-zone sig-zone-risk"   style="bottom:0%;height:\${riskH}%"></div>
+
+      \${tp2 ? \`<div class="sig-map-level level-tp2" style="bottom:\${pct(tp2)}%">
+        <span class="sig-lvl-tag tag-tp">TP2</span>
+        <span class="sig-lvl-price">\${fmtP(tp2)}</span>
+        <span class="sig-lvl-dist">\${dist(tp2, entry)}</span>
+      </div>\` : ''}
+
+      \${tp1 ? \`<div class="sig-map-level level-tp1" style="bottom:\${pct(tp1)}%">
+        <span class="sig-lvl-tag tag-tp">TP1</span>
+        <span class="sig-lvl-price">\${fmtP(tp1)}</span>
+        <span class="sig-lvl-dist">\${dist(tp1, entry)}</span>
+      </div>\` : ''}
+
+      <div class="sig-map-level level-entry" style="bottom:\${entryPct}%">
+        <span class="sig-lvl-tag tag-entry">ENTRADA</span>
+        <span class="sig-lvl-price">\${fmtP(entry)}</span>
+        <span class="sig-lvl-dist">base</span>
+      </div>
+
+      <div class="sig-map-level level-sl" style="bottom:\${pct(sl)}%">
+        <span class="sig-lvl-tag tag-sl">SL</span>
+        <span class="sig-lvl-price">\${fmtP(sl)}</span>
+        <span class="sig-lvl-dist">\${dist(sl, entry)}</span>
+      </div>
+
+      <!-- Live price indicator — moves on every WS tick -->
+      <div class="map-live-line \${liveIsUp?'map-live-up':'map-live-down'}" id="signalMapLiveLine" style="bottom:\${livePct}%">
+        <span class="map-live-tag">▶ LIVE</span>
+        <span class="sig-lvl-price" id="signalMapLivePrice">\${fmtP(cur)}</span>
+      </div>
+    </div>
+  \`;
 }
 
 function renderSignalDetailModal(payload) {
@@ -4497,27 +4603,9 @@ function renderSignalDetailModal(payload) {
   els.signalDetailBody.innerHTML = `
     <div class="signal-intel-layout">
 
-      <!-- ═══ HERO: Live Chart FIRST ═══ -->
-      <div class="card signal-intel-section signal-intel-section-full signal-intel-chart-card intel-animate intel-animate-1 ${directionGlowClass}">
-        <div class="signal-chart-header">
-          <div class="signal-chart-header-top">
-            <div class="signal-chart-title-block">
-              <span class="signal-chart-pair">${escapeHtml(signal.symbol || '')}</span>
-              <span class="signal-chart-strategy">${escapeHtml(strategyLabel)}</span>
-            </div>
-            <div class="signal-chart-interval-group" id="signalChartIntervalGroup">
-              <button class="chart-interval-btn" data-signal-interval="5">5m</button>
-              <button class="chart-interval-btn" data-signal-interval="15">15m</button>
-              <button class="chart-interval-btn active" data-signal-interval="30">30m</button>
-              <button class="chart-interval-btn" data-signal-interval="60">1h</button>
-              <button class="chart-interval-btn" data-signal-interval="240">4h</button>
-              <button class="chart-interval-btn" data-signal-interval="D">1D</button>
-            </div>
-          </div>
-        </div>
-        <div id="signalDetailChart" class="signal-detail-chart-container">
-          <div class="chart-loading"><div class="spinner"></div><span>Cargando gráfica...</span></div>
-        </div>
+      <!-- ═══ HERO: Signal Level Map ═══ -->
+      <div class="card signal-intel-section signal-intel-section-full sig-map-card intel-animate intel-animate-1 ${directionGlowClass}">
+        ${_buildSignalMap(tracking, signal.direction || '', signal)}
       </div>
 
       <!-- ═══ LIVE PRICE HERO ═══ -->
@@ -4654,11 +4742,8 @@ function renderSignalDetailModal(payload) {
     </div>
   `;
 
-  // Init TradingView chart — same pattern as the market chart (requestAnimationFrame after innerHTML)
-  const signalSymbol = signal.symbol ? `BINANCE:${signal.symbol}` : 'BINANCE:BTCUSDT';
-  requestAnimationFrame(() => initSignalChartWidget(signalSymbol, '30'));
-
   // Start live price ticker via Binance WebSocket
+  const signalSymbol = signal.symbol ? `BINANCE:${signal.symbol}` : 'BINANCE:BTCUSDT';
   startSignalPriceTicker(signalSymbol);
 }
 
