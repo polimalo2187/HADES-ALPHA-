@@ -4528,47 +4528,47 @@ function _buildSignalMap(tracking, direction, signal) {
   const rewardH   = (100 - parseFloat(entryPct)).toFixed(3);
   const riskH     = entryPct;
 
-  return \`
+  return `
     <div class="sig-map-meta">
-      <span class="sig-map-pair">\${(signal.symbol||'')}</span>
-      \${rrLabel ? \`<span class="sig-map-rr">\${rrLabel}</span>\` : ''}
+      <span class="sig-map-pair">${(signal.symbol||'')}</span>
+      ${rrLabel ? `<span class="sig-map-rr">${rrLabel}</span>` : ''}
     </div>
     <div class="sig-map-body">
       <!-- Coloured background zones -->
-      <div class="sig-map-zone sig-zone-reward" style="bottom:\${entryPct}%;height:\${rewardH}%"></div>
-      <div class="sig-map-zone sig-zone-risk"   style="bottom:0%;height:\${riskH}%"></div>
+      <div class="sig-map-zone sig-zone-reward" style="bottom:${entryPct}%;height:${rewardH}%"></div>
+      <div class="sig-map-zone sig-zone-risk"   style="bottom:0%;height:${riskH}%"></div>
 
-      \${tp2 ? \`<div class="sig-map-level level-tp2" style="bottom:\${pct(tp2)}%">
+      ${tp2 ? `<div class="sig-map-level level-tp2" style="bottom:${pct(tp2)}%">
         <span class="sig-lvl-tag tag-tp">TP2</span>
-        <span class="sig-lvl-price">\${fmtP(tp2)}</span>
-        <span class="sig-lvl-dist">\${dist(tp2, entry)}</span>
-      </div>\` : ''}
+        <span class="sig-lvl-price">${fmtP(tp2)}</span>
+        <span class="sig-lvl-dist">${dist(tp2, entry)}</span>
+      </div>` : ''}
 
-      \${tp1 ? \`<div class="sig-map-level level-tp1" style="bottom:\${pct(tp1)}%">
+      ${tp1 ? `<div class="sig-map-level level-tp1" style="bottom:${pct(tp1)}%">
         <span class="sig-lvl-tag tag-tp">TP1</span>
-        <span class="sig-lvl-price">\${fmtP(tp1)}</span>
-        <span class="sig-lvl-dist">\${dist(tp1, entry)}</span>
-      </div>\` : ''}
+        <span class="sig-lvl-price">${fmtP(tp1)}</span>
+        <span class="sig-lvl-dist">${dist(tp1, entry)}</span>
+      </div>` : ''}
 
-      <div class="sig-map-level level-entry" style="bottom:\${entryPct}%">
+      <div class="sig-map-level level-entry" style="bottom:${entryPct}%">
         <span class="sig-lvl-tag tag-entry">ENTRADA</span>
-        <span class="sig-lvl-price">\${fmtP(entry)}</span>
+        <span class="sig-lvl-price">${fmtP(entry)}</span>
         <span class="sig-lvl-dist">base</span>
       </div>
 
-      <div class="sig-map-level level-sl" style="bottom:\${pct(sl)}%">
+      <div class="sig-map-level level-sl" style="bottom:${pct(sl)}%">
         <span class="sig-lvl-tag tag-sl">SL</span>
-        <span class="sig-lvl-price">\${fmtP(sl)}</span>
-        <span class="sig-lvl-dist">\${dist(sl, entry)}</span>
+        <span class="sig-lvl-price">${fmtP(sl)}</span>
+        <span class="sig-lvl-dist">${dist(sl, entry)}</span>
       </div>
 
       <!-- Live price indicator — moves on every WS tick -->
-      <div class="map-live-line \${liveIsUp?'map-live-up':'map-live-down'}" id="signalMapLiveLine" style="bottom:\${livePct}%">
+      <div class="map-live-line ${liveIsUp?'map-live-up':'map-live-down'}" id="signalMapLiveLine" style="bottom:${livePct}%">
         <span class="map-live-tag">▶ LIVE</span>
-        <span class="sig-lvl-price" id="signalMapLivePrice">\${fmtP(cur)}</span>
+        <span class="sig-lvl-price" id="signalMapLivePrice">${fmtP(cur)}</span>
       </div>
     </div>
-  \`;
+  `;
 }
 
 function renderSignalDetailModal(payload) {
