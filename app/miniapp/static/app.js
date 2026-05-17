@@ -3385,6 +3385,11 @@ function renderMarket() {
     return `<span class="ticker-vol-chip"><span class="ticker-vol-sym">${escapeHtml(base)}</span><span class="ticker-vol-num">${escapeHtml(formatCompactAmount(item.quote_volume))}</span></span>`;
   }).join('');
 
+  // Bias helpers (local to renderMarket)
+  const _biasRaw = String(market.bias || '').toLowerCase();
+  const biasIsBull = _biasRaw.includes('bull') || _biasRaw.includes('long') || _biasRaw.includes('buy') || _biasRaw === 'alcista';
+  const biasIsBear = _biasRaw.includes('bear') || _biasRaw.includes('short') || _biasRaw.includes('sell') || _biasRaw === 'bajista';
+
   els.market.innerHTML = `
     <div class="section-grid intel-market-grid">
 
