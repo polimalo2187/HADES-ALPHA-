@@ -4916,3 +4916,72 @@ html, body, .app-shell, .section-grid, .card {
   .sx-hero-stat-val   { font-size: 18px; }
   .sx-grid { grid-template-columns: 1fr; }
 }
+
+/* ================================================================
+   SIGNAL INTEL MODAL — TRADINGVIEW CHART
+   ================================================================ */
+
+.intel-signal-chart-card {
+  padding: 14px !important;
+  background: #0d1117 !important;
+  border-color: rgba(255,255,255,0.1) !important;
+}
+
+.intel-chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.intel-chart-pair-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.intel-chart-symbol {
+  font-size: 17px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.intel-chart-dir {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 3px 9px;
+  border-radius: 6px;
+  letter-spacing: 0.08em;
+  background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(255,255,255,0.1);
+}
+.intel-chart-dir.positive-text {
+  background: rgba(34,197,94,0.15);
+  border-color: rgba(34,197,94,0.3);
+}
+.intel-chart-dir.negative-text {
+  background: rgba(239,68,68,0.15);
+  border-color: rgba(239,68,68,0.3);
+}
+
+.intel-chart-body {
+  width: 100%;
+  height: 340px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #0d1117;
+}
+
+.intel-chart-body .tradingview-widget-container,
+.intel-chart-body .tradingview-widget-container__widget,
+.intel-chart-body > iframe {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+@media (max-width: 480px) {
+  .intel-chart-body { height: 280px; }
+}

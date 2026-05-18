@@ -4757,7 +4757,25 @@ function renderSignalDetailModal(payload) {
     <div class="signal-intel-layout">
 
       <!-- ═══ HERO: Signal Level Map (only shown when valid level data exists) ═══ -->
-      ${(() => { const _m = _buildSignalMap(tracking, signal.direction || '', signal); return _m ? `<div class="card signal-intel-section signal-intel-section-full sig-map-card intel-animate intel-animate-1 ${directionGlowClass}">${_m}</div>` : ''; })()}
+      <div class="card signal-intel-section signal-intel-section-full intel-signal-chart-card intel-animate intel-animate-1">
+        <div class="intel-chart-header">
+          <div class="intel-chart-pair-badge">
+            <span class="intel-chart-symbol">${escapeHtml(signal.symbol || '')}</span>
+            <span class="intel-chart-dir ${directionClass}">${escapeHtml(String(signal.direction || '').toUpperCase())}</span>
+          </div>
+          <div class="chart-interval-group" id="signalChartIntervalGroup">
+            <button class="chart-interval-btn" data-signal-interval="5">5m</button>
+            <button class="chart-interval-btn" data-signal-interval="15">15m</button>
+            <button class="chart-interval-btn active" data-signal-interval="30">30m</button>
+            <button class="chart-interval-btn" data-signal-interval="60">1h</button>
+            <button class="chart-interval-btn" data-signal-interval="240">4h</button>
+            <button class="chart-interval-btn" data-signal-interval="D">1D</button>
+          </div>
+        </div>
+        <div id="signalDetailChart" class="intel-chart-body">
+          <div class="chart-loading"><div class="spinner"></div><span>Cargando gráfica...</span></div>
+        </div>
+      </div>
 
       <!-- ═══ LIVE PRICE HERO ═══ -->
       <div class="card signal-intel-section signal-intel-section-full signal-live-price-card intel-animate intel-animate-2" id="signalPriceHero">
@@ -4896,6 +4914,9 @@ function renderSignalDetailModal(payload) {
   // Start live price ticker via Binance WebSocket
   const signalSymbol = signal.symbol ? `BINANCE:${signal.symbol}` : 'BINANCE:BTCUSDT';
   startSignalPriceTicker(signalSymbol);
+
+  // Init TradingView chart for this signal's pair
+  requestAnimationFrame(() => initSignalChartWidget(signalSymbol, '30'));
 }
 
 // ── TradingView chart inside Signal Detail Modal ───────────────────────────────
