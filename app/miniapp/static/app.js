@@ -3821,9 +3821,12 @@ const _marketStream = {
   reconnectTimer: null,
   tickBuffer: {},   // symbol → latest tick data
   rafPending: false,
+  onTick: null,     // optional callback(symbol, {price, change, vol}) for signal detail
 };
 
-const _WS_URL = 'wss://fstream.binance.com/ws/!miniTicker@arr';
+// ✅ Migrated to Binance new /market/ws/ path (legacy /ws/ deprecated April 2026)
+// Docs: https://developers.binance.com/docs/derivatives/usds-margined-futures/websocket-market-streams/Important-WebSocket-Change-Notice
+const _WS_URL = 'wss://fstream.binance.com/market/ws/!miniTicker@arr';
 
 function startMarketStream() {
   if (_marketStream.ws && _marketStream.ws.readyState <= 1) return;
@@ -3887,6 +3890,11 @@ function _flushMarketTicks() {
   _marketStream.tickBuffer = {};
 
   for (const [symbol, data] of Object.entries(buffer)) {
+    // Notify signal detail price ticker if it's listening for this symbol
+    if (_marketStream.onTick) {
+      try { _marketStream.onTick(symbol, data); } catch {}
+    }
+
     // Update all [data-live-change], [data-live-price], [data-live-vol] for this symbol
     const changeEls = document.querySelectorAll(`[data-live-change="${symbol}"]`);
     changeEls.forEach(el => {
@@ -4384,83 +4392,87 @@ function closeSignalDetailModal() {
   stopSignalPriceTicker();
 }
 
-// ── Live Price Ticker via Binance WebSocket ───────────────────────────────────
-const _priceTicker = { ws: null, symbol: null, lastPrice: null, prevPrice: null, mapMin: null, mapMax: null, _pollTimer: null };
+// ── Live Price Ticker — reuses existing _marketStream (no extra WebSocket) ────
+// Strategy:
+//   1. Hook _marketStream.onTick → called by _flushMarketTicks on every RAF flush
+//   2. Ensure market stream is running (starts it if user is not on market view)
+//   3. REST fallback via fapi.binance.com every 3 s if no WS tick in 5 s
+// Docs: https://developers.binance.com/docs/derivatives/usds-margined-futures/websocket-market-streams/Individual-Symbol-Ticker-Streams
+const _priceTicker = {
+  symbol:      null,
+  lastPrice:   null,
+  prevPrice:   null,
+  mapMin:      null,
+  mapMax:      null,
+  _pollTimer:  null,   // REST fallback interval id
+  _lastTickAt: 0,      // timestamp of last successful tick (WS or REST)
+};
 
 function startSignalPriceTicker(symbol) {
   stopSignalPriceTicker();
   if (!symbol) return;
-  const pair = symbol.replace('BINANCE:', '').replace('/', '').toLowerCase();
-  _priceTicker.symbol = pair;
 
-  // ── REST polling fallback (fires every 5 s if WS hasn't delivered a tick yet) ──
-  let _wsConnected = false;
+  // Binance tickBuffer uses UPPERCASE symbols (e.g. "PENGUUSDT")
+  const pair = symbol.replace('BINANCE:', '').replace('/', '').toUpperCase();
+  _priceTicker.symbol = pair;
+  _priceTicker._lastTickAt = 0;
+
+  // ── 1. Subscribe to the existing market stream ──────────────────────────────
+  _marketStream.onTick = (sym, data) => {
+    if (sym !== pair) return;
+    _priceTicker.prevPrice = _priceTicker.lastPrice;
+    _priceTicker.lastPrice = data.price;
+    _priceTicker._lastTickAt = Date.now();
+    updateLivePriceDisplay(data.price, data.change);
+  };
+
+  // Ensure stream is active (user may not be on the market view)
+  startMarketStream();
+
+  // ── 2. REST fallback — only fires when WS has been silent > 5 s ────────────
+  // Uses the same Binance Futures REST endpoint the backend already trusts
   _priceTicker._pollTimer = setInterval(async () => {
-    if (_wsConnected) return; // WS is live → polling not needed
+    if (Date.now() - _priceTicker._lastTickAt < 5000) return; // WS is healthy
     try {
-      const res = await fetch(`https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=${pair.toUpperCase()}`);
+      const res = await fetch(
+        `https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=${pair}`
+      );
       if (!res.ok) return;
       const d = await res.json();
       const price = parseFloat(d.lastPrice);
       const pct   = parseFloat(d.priceChangePercent);
-      if (!isNaN(price)) {
-        _priceTicker.prevPrice = _priceTicker.lastPrice;
-        _priceTicker.lastPrice = price;
+      if (!isNaN(price) && price > 0) {
+        _priceTicker.prevPrice   = _priceTicker.lastPrice;
+        _priceTicker.lastPrice   = price;
+        _priceTicker._lastTickAt = Date.now();
         updateLivePriceDisplay(price, pct);
       }
     } catch {}
-  }, 5000);
-
-  function connect() {
-    try {
-      // ✅ FUTURES stream — use fstream.binance.com (not stream.binance.com which is SPOT)
-      const ws = new WebSocket(`wss://fstream.binance.com/ws/${pair}@ticker`);
-      _priceTicker.ws = ws;
-
-      ws.onopen = () => { _wsConnected = true; };
-
-      ws.onmessage = (ev) => {
-        try {
-          const data = JSON.parse(ev.data);
-          const price = parseFloat(data.c);
-          const pct = parseFloat(data.P);
-          if (!isNaN(price)) {
-            _wsConnected = true;
-            _priceTicker.prevPrice = _priceTicker.lastPrice;
-            _priceTicker.lastPrice = price;
-            updateLivePriceDisplay(price, pct);
-          }
-        } catch {}
-      };
-
-      ws.onerror = () => { _wsConnected = false; };
-      ws.onclose = () => {
-        _wsConnected = false;
-        // Reconnect after 3s if modal still open
-        if (!els.signalDetailModal?.classList.contains('hidden')) {
-          setTimeout(connect, 3000);
-        }
-      };
-    } catch {}
-  }
-
-  connect();
+  }, 3000);
 }
 
 function stopSignalPriceTicker() {
-  if (_priceTicker.ws) {
-    try { _priceTicker.ws.close(); } catch {}
-    _priceTicker.ws = null;
-  }
-  // Clear REST-polling fallback timer
+  // Unsubscribe from market stream
+  _marketStream.onTick = null;
+
+  // Clear REST polling timer
   if (_priceTicker._pollTimer) {
     clearInterval(_priceTicker._pollTimer);
     _priceTicker._pollTimer = null;
   }
-  _priceTicker.lastPrice = null;
-  _priceTicker.prevPrice = null;
-  _priceTicker.mapMin = null;
-  _priceTicker.mapMax = null;
+
+  // Stop market stream only if we're not currently on the market view
+  // (avoids interrupting live market data while browsing)
+  if (typeof state !== 'undefined' && state.currentView !== 'market') {
+    stopMarketStream();
+  }
+
+  _priceTicker.symbol      = null;
+  _priceTicker.lastPrice   = null;
+  _priceTicker.prevPrice   = null;
+  _priceTicker.mapMin      = null;
+  _priceTicker.mapMax      = null;
+  _priceTicker._lastTickAt = 0;
 }
 
 function updateLivePriceDisplay(price, changePct) {
