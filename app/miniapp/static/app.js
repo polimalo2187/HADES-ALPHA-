@@ -4929,42 +4929,42 @@ function initSignalChartWidget(symbol, interval) {
   const container = document.getElementById('signalDetailChart');
   if (!container) return;
 
-  // Clear and prepare container — tv.js fills it by container_id
+  // Use a direct <iframe> to TradingView's widgetembed endpoint instead of
+  // the tv.js Widget API. In Telegram WebView bottom-sheet modals the Widget
+  // API fails silently because the dynamically-created iframe can't measure
+  // its container, and on the first signal load tv.js hasn't finished fetching
+  // yet. A direct iframe requires no external JS, has no timing dependency,
+  // and renders correctly inside any overflow:auto / scrollable container.
+  //
+  // Studies are joined with the SOH separator (\x01) that widgetembed expects.
+  const studies  = ['STD;EMA', 'STD;RSI', 'STD;MACD'].join('\x01');
+  const params   = new URLSearchParams({
+    symbol:              _signalChartState.symbol,
+    interval:            _signalChartState.interval,
+    timezone:            'Etc/UTC',
+    theme:               'dark',
+    style:               '1',
+    locale:              'es',
+    hide_top_toolbar:    '0',
+    hide_legend:         '0',
+    allow_symbol_change: '0',
+    save_image:          '0',
+    calendar:            '0',
+    studies,
+    support_host:        'https://www.tradingview.com',
+  });
+
+  const iframe = document.createElement('iframe');
+  iframe.src             = `https://s.tradingview.com/widgetembed/?${params}`;
+  iframe.style.cssText   = 'width:100%;height:100%;border:none;display:block;';
+  iframe.allowFullscreen = true;
+  iframe.setAttribute('scrolling', 'no');
+  iframe.setAttribute('frameborder', '0');
+
   container.innerHTML = '';
+  container.appendChild(iframe);
 
-  function _buildWidget() {
-    // new TradingView.widget() is the official API for dynamic charts.
-    // Unlike embed-widget-advanced-chart.js it doesn't guard against re-execution.
-    new TradingView.widget({                  // eslint-disable-line no-undef
-      autosize:           true,
-      container_id:       'signalDetailChart',
-      symbol:             _signalChartState.symbol,
-      interval:           _signalChartState.interval,
-      timezone:           'Etc/UTC',
-      theme:              'dark',
-      style:              '1',
-      locale:             'es',
-      gridColor:          'rgba(255,255,255,0.04)',
-      hide_top_toolbar:   false,
-      hide_legend:        false,
-      allow_symbol_change: false,
-      save_image:         false,
-      studies:            ['STD;EMA', 'STD;RSI', 'STD;MACD'],
-      calendar:           false,
-      support_host:       'https://www.tradingview.com'
-    });
-    _bindSignalIntervalBtns();
-  }
-
-  // Load tv.js once; reuse the global on subsequent calls
-  if (window.TradingView && window.TradingView.widget) {
-    _buildWidget();
-  } else {
-    const s = document.createElement('script');
-    s.src = 'https://s3.tradingview.com/tv.js';
-    s.onload = _buildWidget;
-    document.head.appendChild(s);
-  }
+  _bindSignalIntervalBtns();
 }
 
 function _bindSignalIntervalBtns() {
