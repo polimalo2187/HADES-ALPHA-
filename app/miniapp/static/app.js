@@ -2672,32 +2672,68 @@ function mixPills(title, mix) {
   `;
 }
 
-function signalCard(item) {
+function signalCard(item, index) {
+  const idx = typeof index === 'number' ? index : 0;
   const statusRaw = item.result || item.status || 'active';
+  const isActive = !item.result && String(item.status || '').toLowerCase() === 'active';
+  const dirRaw = String(item.direction || '').toUpperCase();
+  const isLong = dirRaw.includes('LONG') || dirRaw === 'BUY';
+  const tierRaw = String(item.visibility || '').toLowerCase();
+  const isPremium = tierRaw === 'premium';
+  const isPlus = tierRaw === 'plus';
+  const score = Number(item.score || 0);
+  const scorePct = Math.min(Math.max((score / 10) * 100, 0), 100);
+  const scoreColor = score >= 7 ? '#22c55e' : score >= 4 ? '#f59e0b' : '#ef4444';
+
   const statusBadge = item.result
-    ? `<span class="${badgeClassByResult(item)}">${escapeHtml(resultLabel(item))}</span>`
-    : `<span class="plan-tag">${escapeHtml(formatStatusLabel(statusRaw))}</span>`;
+    ? `<span class="sx-result-badge sx-result-${String(item.result || '').toLowerCase()}">${escapeHtml(resultLabel(item))}</span>`
+    : `<span class="sx-status-badge ${isActive ? 'sx-active' : ''}">${isActive ? '<span class="sx-pulse-dot"></span>' : ''}${escapeHtml(formatStatusLabel(statusRaw))}</span>`;
+
+  const tierBadge = isPremium
+    ? `<span class="sx-tier-badge sx-tier-premium">⬡ PREMIUM</span>`
+    : isPlus
+    ? `<span class="sx-tier-badge sx-tier-plus">◈ PLUS</span>`
+    : `<span class="sx-tier-badge sx-tier-free">◇ FREE</span>`;
 
   return `
-    <div class="item signal-card-item">
-      <div class="item-header">
-        <div>
-          <div class="item-title">${escapeHtml(item.symbol)} <span class="${dirClass(item.direction)}">${escapeHtml(item.direction)}</span></div>
-          <div class="item-subtitle">${escapeHtml(item.setup_group || 'setup')} · Score ${escapeHtml(formatNumber(item.score || 0, 1))}</div>
+    <div class="sx-card ${isLong ? 'sx-long' : 'sx-short'} ${isPremium ? 'sx-premium' : ''} ${isActive ? 'sx-is-active' : ''}" style="animation-delay:${idx * 80}ms">
+      <div class="sx-glow-bar"></div>
+      <div class="sx-inner">
+
+        <div class="sx-top-row">
+          <div class="sx-left-col">
+            <div class="sx-symbol-wrap">
+              <span class="sx-symbol">${escapeHtml(item.symbol)}</span>
+              <span class="sx-dir-badge ${isLong ? 'sx-dir-long' : 'sx-dir-short'}">
+                ${isLong ? '▲ LONG' : '▼ SHORT'}
+              </span>
+            </div>
+            <div class="sx-setup-label">${escapeHtml(item.setup_group || 'setup')}</div>
+          </div>
+          <div class="sx-right-col">
+            ${statusBadge}
+            ${tierBadge}
+          </div>
         </div>
-        ${statusBadge}
-      </div>
-      <div class="pill-row compact-pill-row">
-        <span class="pill">Tier ${escapeHtml(String(item.visibility || '').toUpperCase())}</span>
-        ${item.entry_price ? `<span class="pill">Entrada ${escapeHtml(formatPrice(item.entry_price, 4))}</span>` : ''}
-      </div>
-      <div class="inline-meta">
-        <span>Emitida: ${escapeHtml(formatDate(item.created_at))}</span>
-        ${item.telegram_valid_until ? `<span>Visible hasta: ${escapeHtml(formatDate(item.telegram_valid_until))}</span>` : ''}
-      </div>
-      <div class="action-row compact">
-        <button class="button button-secondary" data-signal-detail="${escapeHtml(item.signal_id)}" data-signal-source="signals">Ver inteligencia</button>
-        <button class="button button-secondary" data-open-risk-signal="${escapeHtml(item.signal_id)}">Calcular riesgo</button>
+
+        <div class="sx-score-row">
+          <div class="sx-score-label">SCORE</div>
+          <div class="sx-score-bar-wrap">
+            <div class="sx-score-bar" style="width:${scorePct}%;background:${scoreColor}"></div>
+          </div>
+          <div class="sx-score-val" style="color:${scoreColor}">${escapeHtml(formatNumber(score, 1))}</div>
+        </div>
+
+        <div class="sx-chips-row">
+          ${item.entry_price ? `<div class="sx-chip"><span class="sx-chip-lbl">ENTRADA</span><span class="sx-chip-val">${escapeHtml(formatPrice(item.entry_price, 4))}</span></div>` : ''}
+          <div class="sx-chip"><span class="sx-chip-lbl">EMITIDA</span><span class="sx-chip-val">${escapeHtml(formatDate(item.created_at))}</span></div>
+          ${item.telegram_valid_until ? `<div class="sx-chip"><span class="sx-chip-lbl">EXPIRA</span><span class="sx-chip-val">${escapeHtml(formatDate(item.telegram_valid_until))}</span></div>` : ''}
+        </div>
+
+        <div class="sx-actions">
+          <button class="sx-btn sx-btn-intel" data-signal-detail="${escapeHtml(item.signal_id)}" data-signal-source="signals">⚡ Ver inteligencia</button>
+          <button class="sx-btn sx-btn-risk" data-open-risk-signal="${escapeHtml(item.signal_id)}">⚖ Calcular riesgo</button>
+        </div>
       </div>
     </div>
   `;
@@ -3173,30 +3209,107 @@ function renderSignals() {
     return acc;
   }, { free: 0, plus: 0, premium: 0, active: 0, closed: 0 });
 
-  els.signals.innerHTML = `
-    <div class="section-grid">
-      ${metricCard('Total recientes', signals.length, 'Últimas señales visibles')}
-      ${metricCard('Activas', counts.active, 'Pendientes o en curso')}
-      ${metricCard('Premium', counts.premium, 'Tier premium')}
-      ${metricCard('Cerradas', counts.closed, 'Con resultado persistido')}
+  const hasActive = counts.active > 0;
 
-      <div class="card card-span-12">
-        <h2>Distribución por tier</h2>
-        <div class="pill-row">
-          <span class="pill">Free: ${escapeHtml(counts.free)}</span>
-          <span class="pill">Plus: ${escapeHtml(counts.plus)}</span>
-          <span class="pill">Premium: ${escapeHtml(counts.premium)}</span>
+  els.signals.innerHTML = `
+    <div class="sx-view">
+
+      <!-- HERO HEADER -->
+      <div class="sx-hero ${hasActive ? 'sx-hero-live' : ''}">
+        <canvas class="sx-hero-canvas" id="sxParticleCanvas"></canvas>
+        <div class="sx-hero-content">
+          <div class="sx-hero-eyebrow">
+            ${hasActive ? '<span class="sx-live-ring"></span> SEÑALES EN VIVO' : '◈ RADAR DE SEÑALES'}
+          </div>
+          <div class="sx-hero-big-number">${escapeHtml(String(counts.active))}</div>
+          <div class="sx-hero-subtitle">${hasActive ? `Señal${counts.active !== 1 ? 'es' : ''} activa${counts.active !== 1 ? 's' : ''} ahora mismo` : 'Sin señales activas en este momento'}</div>
+          <div class="sx-hero-stats-row">
+            <div class="sx-hero-stat">
+              <span class="sx-hero-stat-val">${escapeHtml(String(signals.length))}</span>
+              <span class="sx-hero-stat-lbl">Recientes</span>
+            </div>
+            <div class="sx-hero-stat-sep"></div>
+            <div class="sx-hero-stat">
+              <span class="sx-hero-stat-val sx-premium-color">${escapeHtml(String(counts.premium))}</span>
+              <span class="sx-hero-stat-lbl">Premium</span>
+            </div>
+            <div class="sx-hero-stat-sep"></div>
+            <div class="sx-hero-stat">
+              <span class="sx-hero-stat-val sx-muted-color">${escapeHtml(String(counts.closed))}</span>
+              <span class="sx-hero-stat-lbl">Cerradas</span>
+            </div>
+          </div>
+        </div>
+        <div class="sx-hero-tier-bar">
+          <div class="sx-tier-track sx-tier-free-track" style="flex:${counts.free || 1}" title="Free: ${counts.free}"></div>
+          <div class="sx-tier-track sx-tier-plus-track" style="flex:${counts.plus || 0}" title="Plus: ${counts.plus}"></div>
+          <div class="sx-tier-track sx-tier-premium-track" style="flex:${counts.premium || 0}" title="Premium: ${counts.premium}"></div>
         </div>
       </div>
 
-      <div class="card card-span-12">
-        <h2>Señales recientes</h2>
-        <div class="list">
-          ${signals.length ? signals.map(signalCard).join('') : '<div class="empty-state">No hay señales disponibles todavía.</div>'}
-        </div>
+      <!-- GRID DE SEÑALES -->
+      <div class="sx-grid">
+        ${signals.length
+          ? signals.map((s, i) => signalCard(s, i)).join('')
+          : `<div class="sx-empty">
+              <div class="sx-empty-icon">◈</div>
+              <div class="sx-empty-title">Sin señales disponibles</div>
+              <div class="sx-empty-sub">El sistema emitirá una alerta cuando se detecte una oportunidad.</div>
+            </div>`
+        }
       </div>
     </div>
   `;
+
+  // Init particle canvas
+  initSignalsParticles();
+}
+
+function initSignalsParticles() {
+  const canvas = document.getElementById('sxParticleCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  let W = canvas.offsetWidth;
+  let H = canvas.offsetHeight;
+  canvas.width = W;
+  canvas.height = H;
+
+  const PARTICLE_COUNT = 38;
+  const particles = Array.from({ length: PARTICLE_COUNT }, () => ({
+    x: Math.random() * W,
+    y: Math.random() * H,
+    r: Math.random() * 1.6 + 0.4,
+    dx: (Math.random() - 0.5) * 0.35,
+    dy: (Math.random() - 0.5) * 0.35,
+    alpha: Math.random() * 0.5 + 0.1,
+    color: Math.random() > 0.6 ? '#f59e0b' : Math.random() > 0.5 ? '#22c55e' : '#a78bfa',
+  }));
+
+  let rafId;
+  function tick() {
+    ctx.clearRect(0, 0, W, H);
+    for (const p of particles) {
+      p.x += p.dx;
+      p.y += p.dy;
+      if (p.x < 0) p.x = W;
+      if (p.x > W) p.x = 0;
+      if (p.y < 0) p.y = H;
+      if (p.y > H) p.y = 0;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = p.color;
+      ctx.globalAlpha = p.alpha;
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    rafId = requestAnimationFrame(tick);
+  }
+
+  // Stop old animation if any
+  if (window._sxParticleRaf) cancelAnimationFrame(window._sxParticleRaf);
+  window._sxParticleRaf = rafId;
+  tick();
+  window._sxParticleRaf = rafId;
 }
 
 function renderMarket() {
