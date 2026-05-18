@@ -4385,7 +4385,7 @@ function closeSignalDetailModal() {
 }
 
 // ── Live Price Ticker via Binance WebSocket ───────────────────────────────────
-const _priceTicker = { ws: null, symbol: null, lastPrice: null, prevPrice: null, mapMin: null, mapMax: null };
+const _priceTicker = { ws: null, symbol: null, lastPrice: null, prevPrice: null, mapMin: null, mapMax: null, _pollTimer: null };
 
 function startSignalPriceTicker(symbol) {
   stopSignalPriceTicker();
@@ -4393,10 +4393,31 @@ function startSignalPriceTicker(symbol) {
   const pair = symbol.replace('BINANCE:', '').replace('/', '').toLowerCase();
   _priceTicker.symbol = pair;
 
+  // ── REST polling fallback (fires every 5 s if WS hasn't delivered a tick yet) ──
+  let _wsConnected = false;
+  _priceTicker._pollTimer = setInterval(async () => {
+    if (_wsConnected) return; // WS is live → polling not needed
+    try {
+      const res = await fetch(`https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=${pair.toUpperCase()}`);
+      if (!res.ok) return;
+      const d = await res.json();
+      const price = parseFloat(d.lastPrice);
+      const pct   = parseFloat(d.priceChangePercent);
+      if (!isNaN(price)) {
+        _priceTicker.prevPrice = _priceTicker.lastPrice;
+        _priceTicker.lastPrice = price;
+        updateLivePriceDisplay(price, pct);
+      }
+    } catch {}
+  }, 5000);
+
   function connect() {
     try {
-      const ws = new WebSocket(`wss://stream.binance.com:9443/ws/${pair}@ticker`);
+      // ✅ FUTURES stream — use fstream.binance.com (not stream.binance.com which is SPOT)
+      const ws = new WebSocket(`wss://fstream.binance.com/ws/${pair}@ticker`);
       _priceTicker.ws = ws;
+
+      ws.onopen = () => { _wsConnected = true; };
 
       ws.onmessage = (ev) => {
         try {
@@ -4404,6 +4425,7 @@ function startSignalPriceTicker(symbol) {
           const price = parseFloat(data.c);
           const pct = parseFloat(data.P);
           if (!isNaN(price)) {
+            _wsConnected = true;
             _priceTicker.prevPrice = _priceTicker.lastPrice;
             _priceTicker.lastPrice = price;
             updateLivePriceDisplay(price, pct);
@@ -4411,8 +4433,9 @@ function startSignalPriceTicker(symbol) {
         } catch {}
       };
 
-      ws.onerror = () => {};
+      ws.onerror = () => { _wsConnected = false; };
       ws.onclose = () => {
+        _wsConnected = false;
         // Reconnect after 3s if modal still open
         if (!els.signalDetailModal?.classList.contains('hidden')) {
           setTimeout(connect, 3000);
@@ -4428,6 +4451,11 @@ function stopSignalPriceTicker() {
   if (_priceTicker.ws) {
     try { _priceTicker.ws.close(); } catch {}
     _priceTicker.ws = null;
+  }
+  // Clear REST-polling fallback timer
+  if (_priceTicker._pollTimer) {
+    clearInterval(_priceTicker._pollTimer);
+    _priceTicker._pollTimer = null;
   }
   _priceTicker.lastPrice = null;
   _priceTicker.prevPrice = null;
