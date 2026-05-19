@@ -19,7 +19,7 @@ PLAN_PLUS = "plus"
 PLAN_PREMIUM = "premium"
 
 PLAN_DURATION_DAYS = 30
-PLAN_DURATION_OPTIONS = (7, 15, 21, 30)
+PLAN_DURATION_OPTIONS = (15, 30)
 
 SUBSCRIPTION_STATUS_FREE = "free"
 SUBSCRIPTION_STATUS_TRIAL = "trial"
@@ -28,8 +28,8 @@ SUBSCRIPTION_STATUS_EXPIRED = "expired"
 SUBSCRIPTION_STATUS_BANNED = "banned"
 
 PLAN_BASE_PRICES = {
-    PLAN_PLUS: 15.0,
-    PLAN_PREMIUM: 20.0,
+    PLAN_PLUS: 6.0,
+    PLAN_PREMIUM: 10.0,
 }
 
 # =========================
@@ -71,23 +71,17 @@ def validate_entitlement_days(days: int) -> int:
 # Precios comerciales confirmados para los subplanes actuales.
 PLAN_PRICE_TABLE = {
     PLAN_PLUS: {
-        7: 3.5,
-        15: 7.5,
-        21: 10.5,
-        30: 15.0,
+        15: 3.0,
+        30: 6.0,
     },
     PLAN_PREMIUM: {
-        7: 5.0,
-        15: 10.0,
-        21: 15.0,
-        30: 20.0,
+        15: 5.0,
+        30: 10.0,
     },
 }
 
 REFERRAL_REWARD_BY_DURATION = {
-    7: 3,
     15: 7,
-    21: 10,
     30: 15,
 }
 
