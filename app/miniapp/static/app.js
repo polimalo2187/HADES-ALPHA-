@@ -6092,54 +6092,6 @@ window.addEventListener('focus', () => {
   queueLiveSignalsRefresh('window-focus');
 });
 
-document.querySelectorAll('.nav-item').forEach(button => {
-  button.addEventListener('click', () => setView(button.dataset.view));
-});
-
-(async () => {
-  const _needsSplash = true;
-  showSplash();
-
-  let restoredFromCache = false;
-  try {
-    primePayloadShell();
-    if (!_needsSplash) renderAll();
-
-    const auth = await authenticate();
-    window._hadesAuthMe = auth?.me || {};
-    primePayloadShell(auth?.me || {});
-    if (!_needsSplash) renderAll();
-    restoredFromCache = restoreCachedPayload();
-    window._hadesRestoredFromCache = restoredFromCache;
-
-    try {
-      await bootstrap();
-    } catch (error) {
-      console.warn('MiniApp bootstrap refresh failed', error);
-      if (!restoredFromCache && !_needsSplash) {
-        showError(error.message || 'No se pudo abrir la mini-app.');
-        return;
-      }
-    }
-
-    if (!_needsSplash) {
-      ensureViewData(state.currentView || 'home', { force: !restoredFromCache });
-      syncLiveSignalsPolling();
-      if (shouldPollLiveSignals()) {
-        setTimeout(() => {
-          queueLiveSignalsRefresh(restoredFromCache ? 'startup-cached-focus' : 'startup-focus');
-        }, LIVE_SIGNALS_FOCUS_DEBOUNCE_MS);
-      }
-    }
-  } catch (error) {
-    if (!_needsSplash) showError(error.message || 'No se pudo abrir la mini-app.');
-  }
-})();
-
-/* ============================================================
-   HADES SPLASH SCREEN
-   ============================================================ */
-
 const SPLASH_FEATURES = [
   {
     icon: '⚡',
@@ -6310,3 +6262,50 @@ function dismissSplash() {
     }
   }, 400);
 }
+document.querySelectorAll('.nav-item').forEach(button => {
+  button.addEventListener('click', () => setView(button.dataset.view));
+});
+
+(async () => {
+  const _needsSplash = true;
+  showSplash();
+
+  let restoredFromCache = false;
+  try {
+    primePayloadShell();
+    if (!_needsSplash) renderAll();
+
+    const auth = await authenticate();
+    window._hadesAuthMe = auth?.me || {};
+    primePayloadShell(auth?.me || {});
+    if (!_needsSplash) renderAll();
+    restoredFromCache = restoreCachedPayload();
+    window._hadesRestoredFromCache = restoredFromCache;
+
+    try {
+      await bootstrap();
+    } catch (error) {
+      console.warn('MiniApp bootstrap refresh failed', error);
+      if (!restoredFromCache && !_needsSplash) {
+        showError(error.message || 'No se pudo abrir la mini-app.');
+        return;
+      }
+    }
+
+    if (!_needsSplash) {
+      ensureViewData(state.currentView || 'home', { force: !restoredFromCache });
+      syncLiveSignalsPolling();
+      if (shouldPollLiveSignals()) {
+        setTimeout(() => {
+          queueLiveSignalsRefresh(restoredFromCache ? 'startup-cached-focus' : 'startup-focus');
+        }, LIVE_SIGNALS_FOCUS_DEBOUNCE_MS);
+      }
+    }
+  } catch (error) {
+    if (!_needsSplash) showError(error.message || 'No se pudo abrir la mini-app.');
+  }
+})();
+
+/* ============================================================
+   HADES SPLASH SCREEN
+   ============================================================ */
