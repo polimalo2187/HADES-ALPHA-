@@ -685,14 +685,22 @@ def build_user_signal_document(base_signal: Dict, user_id: int) -> Dict:
     entry = float(base_signal["entry_price"])
     profiles = base_signal.get("profiles") or _fallback_profiles(direction, entry)
 
+    # Pre-compute fallback profiles so that if a specific profile was skipped during
+    # signal generation (e.g. risk_distance <= 0 or exceeded max_stop_pct), we use
+    # sensible ATR-based defaults instead of entry_price for SL/TP values.
+    # Without this, missing profiles produce SL == TP1 == TP2 == entry_price.
+    _profile_fallback = _fallback_profiles(direction, entry)
+
     normalized_profiles = {}
     for profile_name in ["conservador", "moderado", "agresivo"]:
-        src = profiles.get(profile_name, {})
+        src = profiles.get(profile_name) or _profile_fallback.get(profile_name) or {}
+        _fb = _profile_fallback.get(profile_name, {})
+        _fb_tps = _fb.get("take_profits", [entry, entry])
         normalized_profiles[profile_name] = {
-            "stop_loss": _round_price_dynamic(float(src.get("stop_loss", entry))),
+            "stop_loss": _round_price_dynamic(float(src.get("stop_loss") or _fb.get("stop_loss") or entry)),
             "take_profits": [
-                _round_price_dynamic(float(src.get("take_profits", [entry, entry])[0])),
-                _round_price_dynamic(float(src.get("take_profits", [entry, entry])[1])),
+                _round_price_dynamic(float((src.get("take_profits") or _fb_tps)[0])),
+                _round_price_dynamic(float((src.get("take_profits") or _fb_tps)[1])),
             ],
             "leverage": LEVERAGE_PROFILES[profile_name],
         }
