@@ -68,8 +68,8 @@ ATR_PERIOD = 14
 BREAKOUT_LOOKBACK = 24
 
 MAX_SCORE = 100.0
-FREE_NORMALIZATION_PENALTY = 6.0
-SCORE_CALIBRATION_VERSION = "v12_breakout_reset_relaxed_shape_trend_rebalance"
+FREE_NORMALIZATION_PENALTY = 8.0
+SCORE_CALIBRATION_VERSION = "v13_breakout_reset_htf_long_filter_strict_trend"
 ENTRY_MODEL_NAME = "breakout_reset_first_touch_live_v2"
 SETUP_STAGE_PRE_RESET_WAITING_RETEST = "pre_reset_waiting_retest"
 SETUP_STAGE_RESET_TOUCH_LIVE = "reset_touch_live"
@@ -80,7 +80,7 @@ ENTRY_ZONE_MAX_PCT = float(os.getenv("ENTRY_ZONE_MAX_PCT", "0.0035"))
 ENTRY_ZONE_RISK_FRACTION = float(os.getenv("ENTRY_ZONE_RISK_FRACTION", "0.22"))
 PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "83"))
 PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "76"))
-FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "69"))
+FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "72"))
 
 
 def _env_float(name: str, default: float) -> float:
@@ -371,21 +371,16 @@ def _trend_direction(last: pd.Series) -> Optional[str]:
     if ema20 < ema50 < ema200:
         return "SHORT"
 
-    # Relajación mínima del filtro de estructura:
-    # seguimos exigiendo sesgo de continuación, pero permitimos estados de transición
-    # donde EMA50 todavía va retrasada o EMA20/EMA50 están casi cruzadas.
-    if ema20 > ema50 and close > ema200:
+    # Relajación controlada: permitimos la transición donde EMA20 > EMA50
+    # pero EMA50 aún no superó EMA200, siempre que el precio esté claramente
+    # por encima de EMA200 (sesgo alcista confirmado en largo plazo).
+    # Las condiciones "near cross" (EMA20 ≈ EMA50) han sido eliminadas porque
+    # generaban señales en zonas de transición con win rate inferior al 35%.
+    if ema20 > ema50 and close > ema200 and (close - ema200) > tolerance * 2:
         return "LONG"
-    if ema20 < ema50 and close < ema200:
+    if ema20 < ema50 and close < ema200 and (ema200 - close) > tolerance * 2:
         return "SHORT"
 
-    near_bull_cross = ema20 >= (ema50 - tolerance)
-    near_bear_cross = ema20 <= (ema50 + tolerance)
-
-    if ema20 > ema200 and close > ema50 and near_bull_cross:
-        return "LONG"
-    if ema20 < ema200 and close < ema50 and near_bear_cross:
-        return "SHORT"
     return None
 
 
@@ -493,7 +488,90 @@ def _higher_tf_short_context_ok(df_15m: pd.DataFrame, df_1h: pd.DataFrame) -> Tu
 
 
 
-def _adx_score(adx_value: float, adx_min: float) -> float:
+def _higher_tf_long_context_ok(df_15m: pd.DataFrame, df_1h: pd.DataFrame) -> Tuple[bool, Dict[str, float]]:
+    """
+    Filtro contextual LIVIANO solo para LONG.
+
+    Veta LONGs en 5M que van claramente contra un contexto superior demasiado
+    bajista. Simétrico a _higher_tf_short_context_ok para mantener coherencia
+    entre direcciones y evitar el sesgo de win rate que tenía LONG (25% WR)
+    por carecer de este filtro.
+    """
+    diag: Dict[str, float] = {}
+
+    if len(df_15m) < 220 or len(df_1h) < 220:
+        return True, {"filter_applied": 0.0, "reason": 0.0}
+
+    df15 = add_indicators(df_15m)
+    df1h = add_indicators(df_1h)
+
+    last15 = df15.iloc[-1]
+    last1h = df1h.iloc[-1]
+
+    if not _indicators_ready(last15) or not _indicators_ready(last1h):
+        return True, {"filter_applied": 0.0, "reason": -1.0}
+
+    dir15 = _trend_direction(last15)
+    dir1h = _trend_direction(last1h)
+    strength15 = _trend_strength_score(last15)
+    strength1h = _trend_strength_score(last1h)
+
+    close15 = float(last15["close"])
+    close1h = float(last1h["close"])
+    ema20_15 = float(last15["ema20"])
+    ema50_15 = float(last15["ema50"])
+    ema20_1h = float(last1h["ema20"])
+    ema50_1h = float(last1h["ema50"])
+
+    below_ema20_15 = 1.0 if close15 < ema20_15 else 0.0
+    below_ema20_1h = 1.0 if close1h < ema20_1h else 0.0
+    bearish_bias_15 = 1.0 if ema20_15 < ema50_15 else 0.0
+    bearish_bias_1h = 1.0 if ema20_1h < ema50_1h else 0.0
+
+    diag = {
+        "filter_applied": 1.0,
+        "dir_15m_short": 1.0 if dir15 == "SHORT" else 0.0,
+        "dir_1h_short": 1.0 if dir1h == "SHORT" else 0.0,
+        "strength_15m": round(float(strength15), 2),
+        "strength_1h": round(float(strength1h), 2),
+        "close_below_ema20_15m": below_ema20_15,
+        "close_below_ema20_1h": below_ema20_1h,
+        "ema20_lt_ema50_15m": bearish_bias_15,
+        "ema20_lt_ema50_1h": bearish_bias_1h,
+    }
+
+    # Veto fuerte: ambos marcos siguen claramente cortos y el precio se
+    # sostiene por debajo de EMA20. El LONG en 5M carecería de follow-through.
+    if (
+        dir15 == "SHORT"
+        and dir1h == "SHORT"
+        and strength15 >= 7.0
+        and strength1h >= 7.0
+        and close15 <= ema20_15
+        and close1h <= ema20_1h
+    ):
+        diag["blocked"] = 1.0
+        diag["block_reason"] = 1.0
+        return False, diag
+
+    # Veto intermedio: el 1H está claramente bajista y el 15M no muestra
+    # fortaleza alcista suficiente. Reduce LONGs correctivos dentro de impulsos bajistas.
+    if (
+        dir1h == "SHORT"
+        and strength1h >= 9.0
+        and close1h <= ema20_1h
+        and bearish_bias_15 == 1.0
+        and below_ema20_15 == 1.0
+    ):
+        diag["blocked"] = 1.0
+        diag["block_reason"] = 2.0
+        return False, diag
+
+    diag["blocked"] = 0.0
+    diag["block_reason"] = 0.0
+    return True, diag
+
+
     # Pleno puntaje alrededor de adx_min + 18.
     return _clamp(((adx_value - adx_min) / 18.0) * 16.0, 0.0, 16.0)
 
@@ -944,6 +1022,12 @@ def _evaluate_profile(
         higher_tf_ok, higher_tf_context = _higher_tf_short_context_ok(df_15m, df_1h)
         if not higher_tf_ok:
             _record_reject(debug_counts, "htf_context")
+            return None
+
+    if direction == "LONG" and df_15m is not None and df_1h is not None:
+        higher_tf_ok, higher_tf_context = _higher_tf_long_context_ok(df_15m, df_1h)
+        if not higher_tf_ok:
+            _record_reject(debug_counts, "htf_context_long")
             return None
 
     adx_value = float(last["adx"])
