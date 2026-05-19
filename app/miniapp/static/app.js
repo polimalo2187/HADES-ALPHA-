@@ -678,13 +678,42 @@ async function api(path, options = {}) {
   return data;
 }
 
+const SESSION_TOKEN_KEY = 'hades_session_token';
+const SESSION_ME_KEY = 'hades_session_me';
+
 async function authenticate() {
   const params = new URLSearchParams(window.location.search);
   const devUserId = params.get('dev_user_id');
   const initData = tg?.initData || '';
+
+  // Desde Telegram: autenticar y guardar token
+  if (initData) {
+    const auth = await api('/api/miniapp/auth', {
+      method: 'POST',
+      body: JSON.stringify({ init_data: initData, dev_user_id: devUserId ? Number(devUserId) : null }),
+    });
+    state.token = auth.session_token;
+    state.authMe = auth?.me && typeof auth.me === 'object' ? auth.me : null;
+    try {
+      window.localStorage.setItem(SESSION_TOKEN_KEY, auth.session_token);
+      if (state.authMe) window.localStorage.setItem(SESSION_ME_KEY, JSON.stringify(state.authMe));
+    } catch (_) {}
+    return auth;
+  }
+
+  // Desde PWA directa: reusar token guardado
+  const savedToken = (() => { try { return window.localStorage.getItem(SESSION_TOKEN_KEY); } catch(_) { return null; } })();
+  if (savedToken) {
+    state.token = savedToken;
+    const savedMe = (() => { try { return JSON.parse(window.localStorage.getItem(SESSION_ME_KEY) || 'null'); } catch(_) { return null; } })();
+    state.authMe = savedMe;
+    return { session_token: savedToken, me: savedMe };
+  }
+
+  // Sin token guardado: llamar igual (fallback a dev auth si está activo)
   const auth = await api('/api/miniapp/auth', {
     method: 'POST',
-    body: JSON.stringify({ init_data: initData, dev_user_id: devUserId ? Number(devUserId) : null }),
+    body: JSON.stringify({ init_data: '', dev_user_id: devUserId ? Number(devUserId) : null }),
   });
   state.token = auth.session_token;
   state.authMe = auth?.me && typeof auth.me === 'object' ? auth.me : null;
