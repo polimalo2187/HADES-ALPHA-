@@ -239,6 +239,10 @@ def create_mini_app() -> FastAPI:
         elif path in {"/miniapp/static/app.js", "/miniapp/static/app.css"}:
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
             response.headers["Pragma"] = "no-cache"
+        elif path == "/miniapp/static/sw.js":
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Service-Worker-Allowed"] = "/"
         elif path.startswith("/miniapp/static/") and not response.headers.get("Cache-Control"):
             response.headers["Cache-Control"] = "public, max-age=86400"
         return response
