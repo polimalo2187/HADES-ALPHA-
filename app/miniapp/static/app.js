@@ -704,20 +704,29 @@ async function authenticate() {
   // Desde PWA directa: reusar token guardado
   const savedToken = (() => { try { return window.localStorage.getItem(SESSION_TOKEN_KEY); } catch(_) { return null; } })();
   if (savedToken) {
+    // Verificar que el token no esté expirado (parsear el payload)
+    try {
+      const [bodyB64] = savedToken.split('.');
+      const pad = bodyB64.length % 4 ? 4 - (bodyB64.length % 4) : 0;
+      const body = JSON.parse(atob((bodyB64 + '='.repeat(pad)).replace(/-/g,'+').replace(/_/g,'/')));
+      if (body.exp && body.exp < Math.floor(Date.now() / 1000)) {
+        // Token expirado: limpiar y pedir al usuario que abra desde Telegram
+        window.localStorage.removeItem(SESSION_TOKEN_KEY);
+        window.localStorage.removeItem(SESSION_ME_KEY);
+        throw new Error('Sesión expirada. Abre la app desde Telegram para renovar tu sesión.');
+      }
+    } catch (parseErr) {
+      if (parseErr.message.includes('Sesión expirada')) throw parseErr;
+      // Si no se puede parsear, usar el token igual y dejar que el servidor decida
+    }
     state.token = savedToken;
     const savedMe = (() => { try { return JSON.parse(window.localStorage.getItem(SESSION_ME_KEY) || 'null'); } catch(_) { return null; } })();
     state.authMe = savedMe;
     return { session_token: savedToken, me: savedMe };
   }
 
-  // Sin token guardado: llamar igual (fallback a dev auth si está activo)
-  const auth = await api('/api/miniapp/auth', {
-    method: 'POST',
-    body: JSON.stringify({ init_data: '', dev_user_id: devUserId ? Number(devUserId) : null }),
-  });
-  state.token = auth.session_token;
-  state.authMe = auth?.me && typeof auth.me === 'object' ? auth.me : null;
-  return auth;
+  // Sin token guardado: pedir que abra desde Telegram
+  throw new Error('Abre la app desde Telegram la primera vez para iniciar sesión.');
 }
 
 async function bootstrap() {
