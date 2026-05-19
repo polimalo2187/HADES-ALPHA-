@@ -2165,6 +2165,19 @@ def build_signal_detail_payload(user: Dict[str, Any], signal_id: str, *, profile
     weakest_component = _component_extreme(score_components, pick="min")
     take_profits = tracking.get("take_profits") or []
 
+    # Defensive guard: if SL or TPs equal entry_price, it means the profile
+    # was not properly computed and the entry_price fallback was used incorrectly.
+    # Treat these as missing values to avoid showing misleading data in the UI.
+    _entry_price_check = tracking.get("entry_price")
+    _stop_loss_raw = tracking.get("stop_loss")
+    if _entry_price_check and _stop_loss_raw and float(_stop_loss_raw) == float(_entry_price_check):
+        tracking["stop_loss"] = None
+    if _entry_price_check and take_profits:
+        take_profits = [
+            tp for tp in take_profits
+            if tp is not None and float(tp) != float(_entry_price_check)
+        ]
+
     tracking_payload: Dict[str, Any] = {
         "selected_profile": selected_profile,
         "state_label": tracking.get("state_label"),
