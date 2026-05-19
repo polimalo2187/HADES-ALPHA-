@@ -321,9 +321,9 @@ def get_mini_app_session_secret() -> str:
 
 def get_mini_app_session_ttl_seconds() -> int:
     try:
-        return max(int(os.getenv("MINI_APP_SESSION_TTL_SECONDS", "43200")), 900)
+        return max(int(os.getenv("MINI_APP_SESSION_TTL_SECONDS", "2592000")), 900)
     except Exception:
-        return 43200
+        return 2592000
 
 
 
