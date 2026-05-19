@@ -123,7 +123,7 @@
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         navigator.serviceWorker
-          .register('/miniapp/static/sw.js', { scope: '/miniapp/static/' })
+          .register('/miniapp/static/sw.js', { scope: '/' })
           .then(reg => {
             console.log('[PWA] Service Worker registrado:', reg.scope);
 
