@@ -6097,34 +6097,216 @@ document.querySelectorAll('.nav-item').forEach(button => {
 });
 
 (async () => {
+  const _needsSplash = true;
+  showSplash();
+
   let restoredFromCache = false;
   try {
     primePayloadShell();
-    renderAll();
+    if (!_needsSplash) renderAll();
+
     const auth = await authenticate();
+    window._hadesAuthMe = auth?.me || {};
     primePayloadShell(auth?.me || {});
-    renderAll();
+    if (!_needsSplash) renderAll();
     restoredFromCache = restoreCachedPayload();
+    window._hadesRestoredFromCache = restoredFromCache;
 
     try {
       await bootstrap();
     } catch (error) {
       console.warn('MiniApp bootstrap refresh failed', error);
-      if (!restoredFromCache) {
+      if (!restoredFromCache && !_needsSplash) {
         showError(error.message || 'No se pudo abrir la mini-app.');
         return;
       }
     }
 
-    ensureViewData(state.currentView || 'home', { force: !restoredFromCache });
-    syncLiveSignalsPolling();
-
-    if (shouldPollLiveSignals()) {
-      setTimeout(() => {
-        queueLiveSignalsRefresh(restoredFromCache ? 'startup-cached-focus' : 'startup-focus');
-      }, LIVE_SIGNALS_FOCUS_DEBOUNCE_MS);
+    if (!_needsSplash) {
+      ensureViewData(state.currentView || 'home', { force: !restoredFromCache });
+      syncLiveSignalsPolling();
+      if (shouldPollLiveSignals()) {
+        setTimeout(() => {
+          queueLiveSignalsRefresh(restoredFromCache ? 'startup-cached-focus' : 'startup-focus');
+        }, LIVE_SIGNALS_FOCUS_DEBOUNCE_MS);
+      }
     }
   } catch (error) {
-    showError(error.message || 'No se pudo abrir la mini-app.');
+    if (!_needsSplash) showError(error.message || 'No se pudo abrir la mini-app.');
   }
 })();
+
+/* ============================================================
+   HADES SPLASH SCREEN
+   ============================================================ */
+
+const SPLASH_FEATURES = [
+  {
+    icon: '⚡',
+    name: 'Señales en Vivo',
+    desc: 'Alertas de alta precisión en tiempo real',
+    detail: 'El motor de HADES detecta setups de alta probabilidad en criptomonedas. Cada señal incluye precio de entrada, stop loss y dos take profits calculados por perfil: conservador, moderado y agresivo. Se envían por Telegram y se siguen en vivo con tracking intrabar desde la mini app.',
+  },
+  {
+    icon: '🎯',
+    name: 'Cazador de Liquidez',
+    desc: 'Estrategia de barridas institucionales',
+    detail: 'Identifica zonas donde se acumula liquidez institucional. Detecta barridas de stops (liquidity sweeps) y espera el pullback ideal para entrar en la dirección real del mercado. Incluye zona de entrada precisa, nivel de invalidación y objetivos calculados por ratio riesgo/recompensa.',
+  },
+  {
+    icon: '📡',
+    name: 'Radar de Mercado',
+    desc: 'Escaneo continuo del universo cripto',
+    detail: 'El radar escanea múltiples pares de criptomonedas en tiempo real y asigna puntuaciones de setup. Muestra qué activos están en zona de oportunidad, cuáles tienen momentum alcista o bajista, y el grado de alineación con la estrategia activa.',
+  },
+  {
+    icon: '📊',
+    name: 'Historial',
+    desc: 'Registro completo de resultados',
+    detail: 'Accede a todas las señales emitidas con sus resultados finales: TP1, TP2, SL o expirada. Incluye múltiplo R conseguido, tiempo de resolución y progreso máximo alcanzado. Filtra por estrategia, dirección y ventana temporal.',
+  },
+  {
+    icon: '📈',
+    name: 'Rendimiento',
+    desc: 'Métricas reales de la plataforma',
+    detail: 'Panel de métricas avanzadas: tasa de acierto por estrategia, R promedio, drawdown, rachas ganadoras y perdedoras, y comparativa en ventanas de 7, 14 y 30 días. Todo con datos reales de la plataforma, sin trampa.',
+  },
+  {
+    icon: '🛡️',
+    name: 'Gestión de Riesgo',
+    desc: 'Calculadora de sizing y capital',
+    detail: 'Configura tu capital total, riesgo máximo por operación en %, exchange, fees y slippage. HADES calcula automáticamente el tamaño de posición exacto para cada señal activa según tu perfil de riesgo, incluyendo el apalancamiento sugerido.',
+  },
+  {
+    icon: '👁️',
+    name: 'Watchlist',
+    desc: 'Vigilancia de tus activos favoritos',
+    detail: 'Crea tu lista de criptomonedas a vigilar. HADES los monitoriza de forma prioritaria y te alerta antes que al resto cuando se forma un setup válido en alguno de tus pares favoritos.',
+  },
+  {
+    icon: '⚙️',
+    name: 'Cuenta',
+    desc: 'Suscripción y preferencias',
+    detail: 'Gestiona tu plan (Free, Plus, Premium), consulta tu estado de cuenta, configura el idioma de la interfaz y ajusta las preferencias de notificación. Accede también al programa de referidos para desbloquear beneficios exclusivos.',
+  },
+];
+
+function _createSplashParticles() {
+  const container = document.createElement('div');
+  container.className = 'splash-particles';
+  const colors = ['#FFD700', '#FF8C00', '#FF4500', '#FFA500', '#FFEC00'];
+  const sizes  = [3, 4, 5, 3, 6, 4, 3, 5, 4, 6, 3, 5, 4, 3, 6, 5];
+  for (let i = 0; i < 18; i++) {
+    const s = document.createElement('div');
+    s.className = 'spark';
+    const size = sizes[i % sizes.length];
+    s.style.cssText = `
+      width:${size}px; height:${size}px;
+      background:${colors[i % colors.length]};
+      left:${Math.random() * 100}%;
+      bottom:${Math.random() * 20}%;
+      animation-duration:${4 + Math.random() * 6}s;
+      animation-delay:${Math.random() * 5}s;
+    `;
+    container.appendChild(s);
+  }
+  return container;
+}
+
+function _createSplashCards() {
+  const grid = document.createElement('div');
+  grid.className = 'splash-cards-grid';
+  SPLASH_FEATURES.forEach((f, i) => {
+    const card = document.createElement('div');
+    card.className = 'splash-card';
+    card.style.animationDelay = `${0.7 + i * 0.08}s`;
+    card.innerHTML = `
+      <div class="splash-card-icon">${f.icon}</div>
+      <div class="splash-card-name">${f.name}</div>
+      <div class="splash-card-desc">${f.desc}</div>
+    `;
+    card.addEventListener('click', () => openSplashModal(i));
+    grid.appendChild(card);
+  });
+  return grid;
+}
+
+function openSplashModal(index) {
+  const f = SPLASH_FEATURES[index];
+  const overlay = document.createElement('div');
+  overlay.className = 'splash-modal-overlay';
+  overlay.id = 'splash-feature-modal';
+  overlay.innerHTML = `
+    <div class="splash-modal-sheet">
+      <div class="splash-modal-header">
+        <div class="splash-modal-icon">${f.icon}</div>
+        <button class="splash-modal-close" aria-label="Cerrar">✕</button>
+      </div>
+      <div class="splash-modal-name">${f.name}</div>
+      <div class="splash-modal-short">${f.desc}</div>
+      <div class="splash-modal-body">${f.detail}</div>
+    </div>
+  `;
+  overlay.querySelector('.splash-modal-close').addEventListener('click', closeSplashModal);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeSplashModal(); });
+  document.body.appendChild(overlay);
+}
+
+function closeSplashModal() {
+  const modal = document.getElementById('splash-feature-modal');
+  if (modal) {
+    modal.style.transition = 'opacity 0.2s';
+    modal.style.opacity = '0';
+    setTimeout(() => modal.remove(), 200);
+  }
+}
+
+function showSplash() {
+  const splash = document.createElement('div');
+  splash.id = 'hades-splash';
+
+  // Ocultar la pantalla de loading original
+  const loadingEl = document.getElementById('loading');
+  if (loadingEl) loadingEl.classList.add('hidden');
+
+  splash.appendChild(_createSplashParticles());
+
+  const inner = document.createElement('div');
+  inner.className = 'splash-inner';
+  inner.innerHTML = `
+    <div class="splash-logo-wrap">
+      <img class="splash-logo" src="/miniapp/static/logo.png" alt="HADES ALPHA V2" draggable="false">
+      <div class="splash-title">HADES ALPHA V2</div>
+      <div class="splash-tagline">El sistema que opera en las sombras</div>
+    </div>
+    <button class="splash-enter-btn" id="splashEnterBtn">⚔️&nbsp;&nbsp;ENTRAR A HADES</button>
+    <div class="splash-arsenal-title">🔱 Arsenal de HADES</div>
+    <div class="splash-arsenal-line"></div>
+  `;
+  inner.appendChild(_createSplashCards());
+  splash.appendChild(inner);
+  document.body.appendChild(splash);
+
+  document.getElementById('splashEnterBtn').addEventListener('click', dismissSplash);
+}
+
+function dismissSplash() {
+  const splash = document.getElementById('hades-splash');
+  if (!splash) return;
+  splash.style.transition = 'opacity 0.4s ease';
+  splash.style.opacity = '0';
+  setTimeout(() => {
+    splash.remove();
+    // Si el bootstrap ya terminó, renderizar normalmente
+    primePayloadShell(window._hadesAuthMe || {});
+    renderAll();
+    const restored = Boolean(window._hadesRestoredFromCache);
+    ensureViewData(state.currentView || 'home', { force: !restored });
+    syncLiveSignalsPolling();
+    if (shouldPollLiveSignals()) {
+      setTimeout(() => {
+        queueLiveSignalsRefresh(restored ? 'startup-cached-focus' : 'startup-focus');
+      }, LIVE_SIGNALS_FOCUS_DEBOUNCE_MS);
+    }
+  }, 400);
+}
