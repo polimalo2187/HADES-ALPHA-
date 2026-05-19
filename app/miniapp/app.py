@@ -320,6 +320,17 @@ def create_mini_app() -> FastAPI:
             raise HTTPException(status_code=403, detail="admin_required")
         return user
 
+    @app.get("/sw.js")
+    async def service_worker() -> FileResponse:
+        response = FileResponse(str(STATIC_DIR / "sw.js"), media_type="application/javascript")
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Service-Worker-Allowed"] = "/"
+        return response
+
+    @app.get("/manifest.json")
+    async def pwa_manifest() -> FileResponse:
+        return FileResponse(str(STATIC_DIR / "manifest.json"), media_type="application/manifest+json")
+
     @app.get("/miniapp")
     async def miniapp_index() -> HTMLResponse:
         return HTMLResponse(_render_index_html())
