@@ -4,6 +4,50 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>HADES App</title>
+
+  <!-- ═══════════════════════════════════════════════
+       PWA — Manifest & Theme
+  ═══════════════════════════════════════════════ -->
+  <link rel="manifest" href="/miniapp/static/manifest.json">
+  <meta name="theme-color" content="#0a0a0f">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="application-name" content="HADES">
+
+  <!-- ═══════════════════════════════════════════════
+       PWA — iOS (Safari)
+  ═══════════════════════════════════════════════ -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="HADES">
+  <link rel="apple-touch-icon" href="/miniapp/static/apple-touch-icon.png">
+  <link rel="apple-touch-icon" sizes="152x152" href="/miniapp/static/icon-152x152.png">
+  <link rel="apple-touch-icon" sizes="192x192" href="/miniapp/static/icon-192x192.png">
+
+  <!-- ═══════════════════════════════════════════════
+       PWA — Splash screens iOS (opcionales)
+  ═══════════════════════════════════════════════ -->
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+  <!-- ═══════════════════════════════════════════════
+       PWA — Windows / Microsoft
+  ═══════════════════════════════════════════════ -->
+  <meta name="msapplication-TileColor" content="#0a0a0f">
+  <meta name="msapplication-TileImage" content="/miniapp/static/icon-144x144.png">
+
+  <!-- ═══════════════════════════════════════════════
+       SEO / Open Graph (para compartir)
+  ═══════════════════════════════════════════════ -->
+  <meta name="description" content="Trading signals y análisis de mercado cripto en tiempo real">
+  <meta property="og:title" content="HADES App">
+  <meta property="og:description" content="Trading signals y análisis de mercado cripto en tiempo real">
+  <meta property="og:image" content="/miniapp/static/icon-512x512.png">
+  <meta property="og:type" content="website">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" sizes="192x192" href="/miniapp/static/icon-192x192.png">
+  <link rel="shortcut icon" href="/miniapp/static/icon-192x192.png">
+
+  <!-- Estilos y Telegram SDK -->
   <link rel="stylesheet" href="/miniapp/static/app.css">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
@@ -54,23 +98,59 @@
     </div>
   </template>
 
-
-
-    <div id="signalDetailModal" class="modal-overlay hidden" aria-hidden="true">
-      <div class="modal-sheet">
-        <div class="modal-header">
-          <div>
-            <div class="eyebrow">SIGNAL INTEL</div>
-            <h2 id="signalDetailTitle">Detalle de señal</h2>
-          </div>
-          <button id="signalDetailClose" class="modal-close" aria-label="Cerrar">✕</button>
+  <div id="signalDetailModal" class="modal-overlay hidden" aria-hidden="true">
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <div>
+          <div class="eyebrow">SIGNAL INTEL</div>
+          <h2 id="signalDetailTitle">Detalle de señal</h2>
         </div>
-        <div id="signalDetailBody" class="modal-body">
-          <div class="empty-state">Selecciona una señal para ver su detalle.</div>
-        </div>
+        <button id="signalDetailClose" class="modal-close" aria-label="Cerrar">✕</button>
+      </div>
+      <div id="signalDetailBody" class="modal-body">
+        <div class="empty-state">Selecciona una señal para ver su detalle.</div>
       </div>
     </div>
+  </div>
 
+  <!-- App principal -->
   <script src="/miniapp/static/app.js"></script>
+
+  <!-- ═══════════════════════════════════════════════
+       PWA — Registro del Service Worker
+  ═══════════════════════════════════════════════ -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker
+          .register('/miniapp/static/sw.js', { scope: '/' })
+          .then(reg => {
+            console.log('[PWA] Service Worker registrado:', reg.scope);
+
+            // Verificar actualizaciones cada vez que el usuario vuelve a la app
+            reg.addEventListener('updatefound', () => {
+              const newWorker = reg.installing;
+              newWorker.addEventListener('statechange', () => {
+                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                  console.log('[PWA] Nueva versión disponible');
+                }
+              });
+            });
+          })
+          .catch(err => console.warn('[PWA] Service Worker no disponible:', err));
+      });
+    }
+
+    // Botón nativo de Telegram para añadir a pantalla de inicio (bonus)
+    window.addEventListener('load', () => {
+      if (window.Telegram?.WebApp) {
+        const tg = window.Telegram.WebApp;
+        // Exponer función para usar desde app.js si se desea
+        window.__hadesAddToHomeScreen = () => {
+          try { tg.addToHomeScreen(); } catch(e) { /* API puede no estar disponible en versiones viejas */ }
+        };
+      }
+    });
+  </script>
 </body>
 </html>
