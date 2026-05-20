@@ -239,7 +239,7 @@ def create_mini_app() -> FastAPI:
         elif path in {"/miniapp/static/app.js", "/miniapp/static/app.css"}:
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
             response.headers["Pragma"] = "no-cache"
-        elif path == "/miniapp/static/sw.js":
+        elif path in {"/sw.js", "/miniapp/static/sw.js"}:
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
             response.headers["Pragma"] = "no-cache"
             response.headers["Service-Worker-Allowed"] = "/"
@@ -321,11 +321,17 @@ def create_mini_app() -> FastAPI:
         return user
 
     @app.get("/sw.js")
-    async def service_worker() -> FileResponse:
-        response = FileResponse(str(STATIC_DIR / "sw.js"), media_type="application/javascript")
-        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-        response.headers["Service-Worker-Allowed"] = "/"
-        return response
+    async def service_worker() -> Response:
+        content = (STATIC_DIR / "sw.js").read_bytes()
+        return Response(
+            content=content,
+            media_type="application/javascript",
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Service-Worker-Allowed": "/",
+            },
+        )
 
     @app.get("/manifest.json")
     async def pwa_manifest() -> FileResponse:
