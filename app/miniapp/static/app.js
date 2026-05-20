@@ -5256,7 +5256,7 @@ function renderAccount() {
         </div>
       </div>
 
-      ${window.Telegram?.WebApp?.initData ? `
+      ${state.token ? `
       <div class="card card-span-12">
         <h2>App instalada</h2>
         <p style="font-size:0.85rem;color:var(--text-muted,#8899aa);margin-bottom:12px">
@@ -5270,14 +5270,13 @@ function renderAccount() {
   `;
 
   // Botón conectar PWA
-  const btnPWA = views.account?.querySelector('#btnConnectPWA');
+  const btnPWA = els.account.querySelector('#btnConnectPWA');
   if (btnPWA) {
     btnPWA.addEventListener('click', () => {
       const token = state.token;
       if (!token) { alert('Sesión no disponible.'); return; }
       const base = window.location.origin + '/miniapp/static/index.html';
       const pwaUrl = base + '#pwa_session=' + encodeURIComponent(token);
-      // Abrir en navegador externo (fuera de Telegram)
       if (window.Telegram?.WebApp?.openLink) {
         window.Telegram.WebApp.openLink(pwaUrl);
       } else {
