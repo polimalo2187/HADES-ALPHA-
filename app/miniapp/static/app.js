@@ -2956,8 +2956,9 @@ function renderHome() {
   // Metric classes
   const winRate = Number(summary.winrate || 0);
   const winRateClass = winRate >= 60 ? 'stat-positive' : winRate >= 45 ? 'stat-warning' : 'stat-negative';
-  const pf = Number(summary.profit_factor || 0);
-  const pfClass = pf >= 1.5 ? 'stat-positive' : pf >= 1.0 ? 'stat-warning' : 'stat-negative';
+  const pfInfinite = Boolean(summary.profit_factor_infinite);
+  const pf = pfInfinite ? Infinity : Number(summary.profit_factor || 0);
+  const pfClass = (pfInfinite || pf >= 1.5) ? 'stat-positive' : pf >= 1.0 ? 'stat-warning' : 'stat-negative';
   const exp = Number(summary.expectancy_r || 0);
   const expClass = exp > 0 ? 'stat-positive' : exp < 0 ? 'stat-negative' : 'stat-warning';
   const dd = Number(summary.max_drawdown_r || 0);
@@ -3006,7 +3007,7 @@ function renderHome() {
           </div>
           <div class="cmd-metric-sep"></div>
           <div class="cmd-metric">
-            <span class="cmd-metric-value ${pfClass}">${escapeHtml(formatNumber(pf))}</span>
+            <span class="cmd-metric-value ${pfClass}">${escapeHtml(formatRatioValue(summary.profit_factor, pfInfinite))}</span>
             <span class="cmd-metric-label">Profit Factor</span>
           </div>
           <div class="cmd-metric-sep"></div>
@@ -5158,8 +5159,8 @@ function renderAccount() {
         <h2>Rendimiento</h2>
         <p>Módulo dedicado para revisar 7D / 30D / total, PF por R, expectancy, score buckets y breakdown por plan.</p>
         <div class="pill-row compact-pill-row">
-          <span class="pill">7D PF: ${escapeHtml(formatRatioValue((state.payload.dashboard || {}).summary_7d?.profit_factor, false))}</span>
-          <span class="pill">30D PF: ${escapeHtml(formatRatioValue((state.payload.dashboard || {}).summary_30d?.profit_factor, false))}</span>
+          <span class="pill">7D PF: ${escapeHtml(formatRatioValue((state.payload.dashboard || {}).summary_7d?.profit_factor, Boolean((state.payload.dashboard || {}).summary_7d?.profit_factor_infinite)))}</span>
+          <span class="pill">30D PF: ${escapeHtml(formatRatioValue((state.payload.dashboard || {}).summary_30d?.profit_factor, Boolean((state.payload.dashboard || {}).summary_30d?.profit_factor_infinite)))}</span>
           <span class="pill">30D Exp: ${escapeHtml(formatNumber((state.payload.dashboard || {}).summary_30d?.expectancy_r || 0, 4))}R</span>
         </div>
         <div class="action-row compact" style="margin-top:12px;">
