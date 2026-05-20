@@ -21,8 +21,15 @@
       e.preventDefault(); // Bloquea el mini-infobar automático de Chrome
       window.__pwaInstallPrompt = e;
       console.log('[PWA] beforeinstallprompt capturado ✓');
-      // Mostrar banner cuando el DOM esté listo
-      document.addEventListener('DOMContentLoaded', _showInstallBanner);
+      // FIX: beforeinstallprompt casi siempre llega DESPUÉS de DOMContentLoaded,
+      // así que añadir un listener de DOMContentLoaded aquí no sirve de nada —
+      // el evento ya pasó y el callback nunca se ejecuta.
+      // Solución: comprobar readyState y llamar directo si el DOM ya está listo.
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', _showInstallBanner);
+      } else {
+        _showInstallBanner();
+      }
     });
 
     window.addEventListener('appinstalled', () => {

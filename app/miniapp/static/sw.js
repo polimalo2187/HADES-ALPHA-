@@ -2,7 +2,7 @@
 // Versión: 1.0.0
 // Estrategia: Cache-first para assets estáticos, Network-first para API
 
-const CACHE_NAME = 'hades-v1';
+const CACHE_NAME = 'hades-v2'; // FIX: bump para desalojar caché vieja que guardó manifest roto
 const STATIC_ASSETS = [
   '/miniapp/static/index.html',
   '/miniapp/static/app.css',
@@ -95,7 +95,9 @@ async function networkFirst(request) {
     if (cached) return cached;
     // Si es navegación, devolver el index para SPA
     if (request.mode === 'navigate') {
-      return caches.match('/miniapp/static/index.html');
+      // FIX: intentar primero /miniapp (la ruta real de la app),
+      // luego el fallback estático como último recurso
+      return caches.match('/miniapp') || caches.match('/miniapp/static/index.html');
     }
     return new Response(JSON.stringify({ error: 'Sin conexión' }), {
       status: 503,
