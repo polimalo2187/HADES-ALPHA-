@@ -6,6 +6,54 @@
   <title>HADES App</title>
 
   <!-- ═══════════════════════════════════════════════
+       PWA — beforeinstallprompt DEBE capturarse lo antes posible,
+       antes de cualquier otro script. Sin esto Chrome descarta el
+       evento y solo ofrece "Añadir a pantalla de inicio" (acceso
+       directo con badge). Con esto se activa el flujo de instalación
+       real (sin badge, icono propio en launcher).
+  ═══════════════════════════════════════════════ -->
+  <script>
+    // Captura inmediata — ANTES de que cargue nada más
+    window.__pwaInstallPrompt = null;
+    window.__pwaInstalled    = false;
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault(); // Bloquea el mini-infobar automático de Chrome
+      window.__pwaInstallPrompt = e;
+      console.log('[PWA] beforeinstallprompt capturado ✓');
+      // Mostrar banner cuando el DOM esté listo
+      document.addEventListener('DOMContentLoaded', _showInstallBanner);
+    });
+
+    window.addEventListener('appinstalled', () => {
+      window.__pwaInstalled    = true;
+      window.__pwaInstallPrompt = null;
+      _hideInstallBanner();
+      console.log('[PWA] App instalada como PWA real ✓');
+    });
+
+    function _showInstallBanner() {
+      const banner = document.getElementById('pwa-install-banner');
+      if (banner) banner.classList.remove('pwa-banner--hidden');
+    }
+    function _hideInstallBanner() {
+      const banner = document.getElementById('pwa-install-banner');
+      if (banner) banner.classList.add('pwa-banner--hidden');
+    }
+
+    // Función global para triggear instalación desde cualquier lugar de app.js
+    window.hadesInstallPWA = async function() {
+      if (!window.__pwaInstallPrompt) return false;
+      window.__pwaInstallPrompt.prompt();
+      const { outcome } = await window.__pwaInstallPrompt.userChoice;
+      console.log('[PWA] Respuesta usuario:', outcome);
+      window.__pwaInstallPrompt = null;
+      _hideInstallBanner();
+      return outcome === 'accepted';
+    };
+  </script>
+
+  <!-- ═══════════════════════════════════════════════
        PWA — Manifest & Theme
   ═══════════════════════════════════════════════ -->
   <link rel="manifest" href="/manifest.json">
@@ -24,18 +72,13 @@
   <link rel="apple-touch-icon" sizes="192x192" href="/miniapp/static/icon-192x192.png">
 
   <!-- ═══════════════════════════════════════════════
-       PWA — Splash screens iOS (opcionales)
-  ═══════════════════════════════════════════════ -->
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-
-  <!-- ═══════════════════════════════════════════════
        PWA — Windows / Microsoft
   ═══════════════════════════════════════════════ -->
   <meta name="msapplication-TileColor" content="#0a0a0f">
   <meta name="msapplication-TileImage" content="/miniapp/static/icon-144x144.png">
 
   <!-- ═══════════════════════════════════════════════
-       SEO / Open Graph (para compartir)
+       SEO / Open Graph
   ═══════════════════════════════════════════════ -->
   <meta name="description" content="Trading signals y análisis de mercado cripto en tiempo real">
   <meta property="og:title" content="HADES App">
@@ -50,8 +93,101 @@
   <!-- Estilos y Telegram SDK -->
   <link rel="stylesheet" href="/miniapp/static/app.css">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+  <!-- ═══════════════════════════════════════════════
+       PWA Install Banner — estilos inline para que
+       no dependan de que cargue app.css
+  ═══════════════════════════════════════════════ -->
+  <style>
+    #pwa-install-banner {
+      position: fixed;
+      bottom: 80px; /* encima del bottom-nav */
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 18px;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      border: 1px solid rgba(139, 92, 246, 0.4);
+      border-radius: 16px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(139,92,246,0.1);
+      max-width: calc(100vw - 32px);
+      width: max-content;
+      transition: opacity 0.3s ease, transform 0.3s ease;
+    }
+    #pwa-install-banner.pwa-banner--hidden {
+      opacity: 0;
+      pointer-events: none;
+      transform: translateX(-50%) translateY(20px);
+    }
+    #pwa-install-banner img {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      flex-shrink: 0;
+    }
+    #pwa-install-banner .pwa-banner-text {
+      display: flex;
+      flex-direction: column;
+      line-height: 1.3;
+    }
+    #pwa-install-banner .pwa-banner-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #e2e8f0;
+      letter-spacing: 0.02em;
+    }
+    #pwa-install-banner .pwa-banner-sub {
+      font-size: 11px;
+      color: rgba(148, 163, 184, 0.8);
+    }
+    #pwa-install-banner .pwa-banner-btn {
+      padding: 8px 16px;
+      background: linear-gradient(135deg, #8b5cf6, #6d28d9);
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+      letter-spacing: 0.03em;
+      flex-shrink: 0;
+    }
+    #pwa-install-banner .pwa-banner-btn:active {
+      opacity: 0.85;
+    }
+    #pwa-install-banner .pwa-banner-close {
+      background: none;
+      border: none;
+      color: rgba(148,163,184,0.6);
+      cursor: pointer;
+      font-size: 16px;
+      padding: 0 0 0 4px;
+      flex-shrink: 0;
+      line-height: 1;
+    }
+  </style>
 </head>
 <body>
+
+  <!-- ═══════════════════════════════════════════════
+       Banner de instalación PWA real
+       Solo aparece cuando Chrome dispara beforeinstallprompt
+       (es decir, cuando SÍ puede instalarse como app nativa)
+  ═══════════════════════════════════════════════ -->
+  <div id="pwa-install-banner" class="pwa-banner--hidden" role="banner" aria-label="Instalar HADES como app">
+    <img src="/miniapp/static/icon-192x192.png" alt="HADES">
+    <div class="pwa-banner-text">
+      <span class="pwa-banner-title">Instalar HADES</span>
+      <span class="pwa-banner-sub">Acceso directo sin Chrome</span>
+    </div>
+    <button class="pwa-banner-btn" onclick="window.hadesInstallPWA()">Instalar</button>
+    <button class="pwa-banner-close" onclick="document.getElementById('pwa-install-banner').classList.add('pwa-banner--hidden')" aria-label="Cerrar">✕</button>
+  </div>
+
   <div id="app" class="app-shell">
     <div id="loading" class="loading-screen">
       <div class="spinner"></div>
@@ -127,12 +263,11 @@
           .then(reg => {
             console.log('[PWA] Service Worker registrado:', reg.scope);
 
-            // Verificar actualizaciones cada vez que el usuario vuelve a la app
             reg.addEventListener('updatefound', () => {
               const newWorker = reg.installing;
               newWorker.addEventListener('statechange', () => {
                 if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                  console.log('[PWA] Nueva versión disponible');
+                  console.log('[PWA] Nueva versión disponible — recarga para actualizar');
                 }
               });
             });
@@ -141,13 +276,12 @@
       });
     }
 
-    // Botón nativo de Telegram para añadir a pantalla de inicio (bonus)
+    // Integración Telegram WebApp (bonus — para cuando se abre dentro de Telegram)
     window.addEventListener('load', () => {
       if (window.Telegram?.WebApp) {
         const tg = window.Telegram.WebApp;
-        // Exponer función para usar desde app.js si se desea
         window.__hadesAddToHomeScreen = () => {
-          try { tg.addToHomeScreen(); } catch(e) { /* API puede no estar disponible en versiones viejas */ }
+          try { tg.addToHomeScreen(); } catch(e) { /* API puede no estar disponible */ }
         };
       }
     });

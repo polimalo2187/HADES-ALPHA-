@@ -1,15 +1,18 @@
 {
+  "id": "/miniapp?pwa=1",
   "name": "HADES App",
   "short_name": "HADES",
   "description": "Trading signals y análisis de mercado cripto en tiempo real",
   "start_url": "/miniapp?pwa=1",
+  "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
   "orientation": "portrait",
   "background_color": "#0a0a0f",
   "theme_color": "#0a0a0f",
   "lang": "es",
-  "scope": "/",
   "categories": ["finance", "utilities"],
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/miniapp/static/icon-72x72.png",
@@ -73,5 +76,12 @@
     }
   ],
   "screenshots": [],
-  "prefer_related_applications": false
+  "shortcuts": [
+    {
+      "name": "Ver Señales",
+      "short_name": "Señales",
+      "url": "/miniapp?pwa=1&view=signals",
+      "icons": [{ "src": "/miniapp/static/icon-96x96.png", "sizes": "96x96" }]
+    }
+  ]
 }
