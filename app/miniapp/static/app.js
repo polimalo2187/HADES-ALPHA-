@@ -681,17 +681,17 @@ async function api(path, options = {}) {
 const SESSION_TOKEN_KEY = 'hades_session_token';
 const SESSION_ME_KEY = 'hades_session_me';
 
-// ── PWA Handoff: leer token del hash si viene desde Telegram ──────────────
+// Leer token del query param si viene desde Telegram via botón conectar
 (function() {
   try {
-    const hash = window.location.hash;
-    const match = hash.match(/[#&]pwa_session=([^&]+)/);
-    if (match) {
-      const token = decodeURIComponent(match[1]);
-      window.localStorage.setItem(SESSION_TOKEN_KEY, token);
-      // Limpiar el hash de la URL sin recargar
-      const cleanUrl = window.location.pathname + window.location.search;
-      window.history.replaceState(null, '', cleanUrl);
+    const params = new URLSearchParams(window.location.search);
+    const t = params.get('pwa_token');
+    if (t) {
+      window.localStorage.setItem(SESSION_TOKEN_KEY, t);
+      // Limpiar el param sin recargar
+      params.delete('pwa_token');
+      const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
+      window.history.replaceState(null, '', newUrl);
     }
   } catch(_) {}
 })();
@@ -5256,27 +5256,25 @@ function renderAccount() {
         </div>
       </div>
 
-      ${state.token ? `
       <div class="card card-span-12">
         <h2>App instalada</h2>
         <p style="font-size:0.85rem;color:var(--text-muted,#8899aa);margin-bottom:12px">
-          Si instalaste HADES como app en tu teléfono, usa este botón para conectar tu sesión al navegador.
+          Si instalaste HADES como app, toca este botón para conectar tu sesión.
         </p>
         <div class="action-row">
           <button class="button button-primary" id="btnConnectPWA">📲 Conectar sesión a la App</button>
         </div>
-      </div>` : ''}
+      </div>
     </div>
   `;
 
-  // Botón conectar PWA
   const btnPWA = els.account.querySelector('#btnConnectPWA');
   if (btnPWA) {
     btnPWA.addEventListener('click', () => {
       const token = state.token;
       if (!token) { alert('Sesión no disponible.'); return; }
       const base = window.location.origin + '/miniapp/static/index.html';
-      const pwaUrl = base + '#pwa_session=' + encodeURIComponent(token);
+      const pwaUrl = base + '?pwa_token=' + encodeURIComponent(token);
       if (window.Telegram?.WebApp?.openLink) {
         window.Telegram.WebApp.openLink(pwaUrl);
       } else {
