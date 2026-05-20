@@ -627,10 +627,11 @@ function metricToneClass(kind, value) {
 }
 
 function summaryDiagnosis(summary) {
-  const pf = Number(summary?.profit_factor || 0);
+  const pfInfinite = Boolean(summary?.profit_factor_infinite);
+  const pf = pfInfinite ? Infinity : Number(summary?.profit_factor || 0);
   const exp = Number(summary?.expectancy_r || 0);
   const dd = Number(summary?.max_drawdown_r || 0);
-  if (pf >= 1.5 && exp > 0 && dd <= 5) {
+  if ((pfInfinite || pf >= 1.5) && exp > 0 && dd <= 5) {
     return {
       tone: 'diagnostic-positive',
       title: 'Sistema con edge positivo',
