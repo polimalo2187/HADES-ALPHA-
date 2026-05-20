@@ -681,6 +681,21 @@ async function api(path, options = {}) {
 const SESSION_TOKEN_KEY = 'hades_session_token';
 const SESSION_ME_KEY = 'hades_session_me';
 
+// ── PWA Handoff: leer token del hash si viene desde Telegram ──────────────
+(function() {
+  try {
+    const hash = window.location.hash;
+    const match = hash.match(/[#&]pwa_session=([^&]+)/);
+    if (match) {
+      const token = decodeURIComponent(match[1]);
+      window.localStorage.setItem(SESSION_TOKEN_KEY, token);
+      // Limpiar el hash de la URL sin recargar
+      const cleanUrl = window.location.pathname + window.location.search;
+      window.history.replaceState(null, '', cleanUrl);
+    }
+  } catch(_) {}
+})();
+
 async function authenticate() {
   const params = new URLSearchParams(window.location.search);
   const devUserId = params.get('dev_user_id');
@@ -5240,8 +5255,36 @@ function renderAccount() {
           <a class="button button-secondary" target="_blank" rel="noopener" href="${escapeHtml(support.url || state.payload.support_url || '#')}">Abrir grupo de soporte</a>
         </div>
       </div>
+
+      ${window.Telegram?.WebApp?.initData ? `
+      <div class="card card-span-12">
+        <h2>App instalada</h2>
+        <p style="font-size:0.85rem;color:var(--text-muted,#8899aa);margin-bottom:12px">
+          Si instalaste HADES como app en tu teléfono, usa este botón para conectar tu sesión al navegador.
+        </p>
+        <div class="action-row">
+          <button class="button button-primary" id="btnConnectPWA">📲 Conectar sesión a la App</button>
+        </div>
+      </div>` : ''}
     </div>
   `;
+
+  // Botón conectar PWA
+  const btnPWA = views.account?.querySelector('#btnConnectPWA');
+  if (btnPWA) {
+    btnPWA.addEventListener('click', () => {
+      const token = state.token;
+      if (!token) { alert('Sesión no disponible.'); return; }
+      const base = window.location.origin + '/miniapp/static/index.html';
+      const pwaUrl = base + '#pwa_session=' + encodeURIComponent(token);
+      // Abrir en navegador externo (fuera de Telegram)
+      if (window.Telegram?.WebApp?.openLink) {
+        window.Telegram.WebApp.openLink(pwaUrl);
+      } else {
+        window.open(pwaUrl, '_blank');
+      }
+    });
+  }
 }
 
 function renderView(view) {
