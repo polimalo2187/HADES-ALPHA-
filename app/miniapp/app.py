@@ -60,7 +60,7 @@ from app.services.admin_runtime_service import (
 from app.services.admin_service import is_effectively_banned
 from app.payment_service import cancel_payment_order, confirm_payment_order, create_payment_order, get_active_payment_order_for_user
 from app.statistics import reset_statistics
-from app.plans import normalize_plan, plan_status
+from app.plans import has_access, normalize_plan, plan_status
 from app.watchlist import add_symbol, normalize_many, remove_symbol, set_symbols, clear_watchlist
 from app.risk import RiskConfigurationError, get_exchange_fee_preset, normalize_exchange_name, normalize_entry_mode, save_user_risk_profile
 from app.binance_api import get_futures_24h_tickers
@@ -488,6 +488,8 @@ def create_mini_app() -> FastAPI:
 
     @app.get("/api/miniapp/market")
     async def miniapp_market(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
+        if not has_access(user):
+            raise HTTPException(status_code=403, detail="plan_required")
         return build_market_payload(user)
 
     @app.get("/api/miniapp/symbols")
