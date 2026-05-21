@@ -1122,7 +1122,9 @@ function accountNoticeCard(notice) {
 
 function isPlanExpired() {
   const me = state.payload?.me || state.authMe || {};
-  return String(me.subscription_status || '').toLowerCase() === 'expired';
+  const status = String(me.subscription_status || '').toLowerCase();
+  // Bloquear tanto planes vencidos como usuarios sin suscripción activa (free)
+  return status === 'expired' || status === 'free';
 }
 
 function setTopSummary() {
@@ -3376,14 +3378,22 @@ function initSignalsParticles() {
 }
 
 function renderMarket() {
-  // Bloquear vista de Mercado si el plan está vencido
+  // Bloquear vista de Mercado si el plan está vencido o el usuario no tiene suscripción
   if (isPlanExpired()) {
+    const me = state.payload?.me || state.authMe || {};
+    const status = String(me.subscription_status || '').toLowerCase();
+    const isExpired = status === 'expired';
     els.market.innerHTML = `
       <div class="plan-expired-gate">
-        <div class="peg-icon">🔒</div>
-        <div class="peg-title">Acceso restringido</div>
-        <p class="peg-desc">Tu plan ha vencido. Renueva tu suscripción para volver a acceder al Mercado.</p>
-        <button class="button button-primary" data-billing-focus-action="open-plans">Renovar plan</button>
+        <div class="peg-icon">${isExpired ? '⏰' : '🔒'}</div>
+        <div class="peg-title">${isExpired ? 'Tu plan ha vencido' : 'Acceso restringido'}</div>
+        <p class="peg-desc">${isExpired
+          ? 'Tu suscripción ha expirado. Adquiere o renueva un plan para volver a acceder al Mercado y todas sus funcionalidades.'
+          : 'Necesitas un plan activo para acceder al Mercado. Elige el plan que mejor se adapte a ti.'
+        }</p>
+        <div class="peg-actions">
+          <button class="button button-primary peg-btn-plans" data-billing-focus-action="open-plans">💼 Ver planes</button>
+        </div>
       </div>
     `;
     bindViewButtons();
@@ -5355,12 +5365,6 @@ function renderAll() {
 }
 
 function setView(view) {
-  // Bloquear acceso al Mercado si el plan está vencido
-  if (view === 'market' && isPlanExpired()) {
-    tg?.showAlert('Tu plan ha vencido. Renueva tu suscripción para volver a acceder al Mercado.');
-    view = 'account';
-    setAccountNotice('Tu plan ha vencido. Renueva tu suscripción para volver a acceder al Mercado.', 'warning');
-  }
   // Stop live stream when leaving market view
   if (state.currentView === 'market' && view !== 'market') {
     stopMarketStream();

@@ -292,6 +292,20 @@ h1 {
   margin: 0;
   line-height: 1.5;
 }
+.peg-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  max-width: 240px;
+  margin-top: 4px;
+}
+.peg-btn-plans {
+  width: 100%;
+  font-size: 15px;
+  padding: 12px 20px;
+  border-radius: 12px;
+}
 .loading-screen {
   min-height: 60vh;
   display: flex;
