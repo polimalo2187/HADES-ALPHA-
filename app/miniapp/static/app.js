@@ -1120,10 +1120,18 @@ function accountNoticeCard(notice) {
   `;
 }
 
+function isPlanExpired() {
+  const me = state.payload?.me || state.authMe || {};
+  return String(me.subscription_status || '').toLowerCase() === 'expired';
+}
+
 function setTopSummary() {
   const me = state.payload?.me || {};
   els.planBadge.textContent = String(me.plan_name || 'FREE').toUpperCase();
   els.daysBadge.textContent = `${Number(me.days_left || 0)} días`;
+  // Mostrar candado visual en la pestaña Mercado si el plan está vencido
+  const marketNav = document.querySelector('.nav-item[data-view="market"]');
+  if (marketNav) marketNav.classList.toggle('nav-item-locked', isPlanExpired());
 }
 
 function setSettingsNotice(message, tone = 'warning') {
@@ -3368,6 +3376,19 @@ function initSignalsParticles() {
 }
 
 function renderMarket() {
+  // Bloquear vista de Mercado si el plan está vencido
+  if (isPlanExpired()) {
+    els.market.innerHTML = `
+      <div class="plan-expired-gate">
+        <div class="peg-icon">🔒</div>
+        <div class="peg-title">Acceso restringido</div>
+        <p class="peg-desc">Tu plan ha vencido. Renueva tu suscripción para volver a acceder al Mercado.</p>
+        <button class="button button-primary" data-billing-focus-action="open-plans">Renovar plan</button>
+      </div>
+    `;
+    bindViewButtons();
+    return;
+  }
   const market = state.payload.market || {};
   const marketLoading = Boolean(state.lazy.market?.loading);
   const marketError = state.lazy.market?.error || null;
@@ -5334,6 +5355,12 @@ function renderAll() {
 }
 
 function setView(view) {
+  // Bloquear acceso al Mercado si el plan está vencido
+  if (view === 'market' && isPlanExpired()) {
+    tg?.showAlert('Tu plan ha vencido. Renueva tu suscripción para volver a acceder al Mercado.');
+    view = 'account';
+    setAccountNotice('Tu plan ha vencido. Renueva tu suscripción para volver a acceder al Mercado.', 'warning');
+  }
   // Stop live stream when leaving market view
   if (state.currentView === 'market' && view !== 'market') {
     stopMarketStream();
