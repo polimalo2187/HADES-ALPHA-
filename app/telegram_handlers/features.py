@@ -13,7 +13,7 @@ from app.database import users_collection
 from app.market_ui import render_market_state
 from app.menus import back_to_menu, my_account_menu, main_menu
 from app.models import get_effective_trial_end, is_plan_active, is_trial_active, update_timestamp
-from app.plans import PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM, activate_plus, activate_premium, get_plan_catalog, get_plan_name, get_plan_price
+from app.plans import PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM, activate_plus, activate_premium, get_plan_catalog, get_plan_name, get_plan_price, has_access
 from app.payment_service import cancel_payment_order, confirm_payment_order, create_payment_order
 from app.risk import get_user_risk_profile
 from app.risk_ui import (
@@ -777,6 +777,30 @@ async def handle_reset_stats(query, user, confirmed: bool = False):
 async def handle_market(query, user):
     """Estado de mercado futures: sesgo, régimen, volatilidad y lectura operativa."""
     language = _get_user_language(user)
+    if not has_access(user):
+        await query.edit_message_text(
+            _tr(
+                language,
+                "⛔ *Tu suscripción ha vencido o no tienes un plan activo.*\n\n"
+                "Para acceder al Mercado necesitas suscribirte a uno de nuestros planes.\n\n"
+                "💼 Elige *Planes* para ver las opciones disponibles.",
+                "⛔ *Your subscription has expired or you don't have an active plan.*\n\n"
+                "To access the Market you need to subscribe to one of our plans.\n\n"
+                "💼 Choose *Plans* to see the available options.",
+            ),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    _tr(language, "💼 Ver planes", "💼 View plans"),
+                    callback_data="plans",
+                )],
+                [InlineKeyboardButton(
+                    _tr(language, "⬅️ Volver", "⬅️ Back"),
+                    callback_data="back_menu",
+                )],
+            ]),
+            parse_mode="Markdown",
+        )
+        return
     try:
         text, keyboard = render_market_state(plan=(user.get("plan") or PLAN_FREE), language=language)
         await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
@@ -792,6 +816,30 @@ async def handle_market(query, user):
 async def handle_movers(query, user):
     """Muestra Top Movers 24h de Binance USDT-M Futures."""
     language = _get_user_language(user)
+    if not has_access(user):
+        await query.edit_message_text(
+            _tr(
+                language,
+                "⛔ *Tu suscripción ha vencido o no tienes un plan activo.*\n\n"
+                "Para acceder a Top Movers necesitas suscribirte a uno de nuestros planes.\n\n"
+                "💼 Elige *Planes* para ver las opciones disponibles.",
+                "⛔ *Your subscription has expired or you don't have an active plan.*\n\n"
+                "To access Top Movers you need to subscribe to one of our plans.\n\n"
+                "💼 Choose *Plans* to see the available options.",
+            ),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    _tr(language, "💼 Ver planes", "💼 View plans"),
+                    callback_data="plans",
+                )],
+                [InlineKeyboardButton(
+                    _tr(language, "⬅️ Volver", "⬅️ Back"),
+                    callback_data="back_menu",
+                )],
+            ]),
+            parse_mode="Markdown",
+        )
+        return
     try:
         movers = get_top_movers_usdtm(limit=10)
     except Exception as e:
@@ -822,6 +870,30 @@ async def handle_movers(query, user):
 
 async def handle_radar(query, user, plan: str):
     language = _get_user_language(user)
+    if not has_access(user):
+        await query.edit_message_text(
+            _tr(
+                language,
+                "⛔ *Tu suscripción ha vencido o no tienes un plan activo.*\n\n"
+                "Para acceder al Radar necesitas suscribirte a uno de nuestros planes.\n\n"
+                "💼 Elige *Planes* para ver las opciones disponibles.",
+                "⛔ *Your subscription has expired or you don't have an active plan.*\n\n"
+                "To access the Radar you need to subscribe to one of our plans.\n\n"
+                "💼 Choose *Plans* to see the available options.",
+            ),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    _tr(language, "💼 Ver planes", "💼 View plans"),
+                    callback_data="plans",
+                )],
+                [InlineKeyboardButton(
+                    _tr(language, "⬅️ Volver", "⬅️ Back"),
+                    callback_data="back_menu",
+                )],
+            ]),
+            parse_mode="Markdown",
+        )
+        return
     try:
         opportunities = get_radar_opportunities(limit=8)
     except Exception as e:
