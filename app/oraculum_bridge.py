@@ -17,10 +17,31 @@ class OraculumBridgeError(ValueError):
     """Error controlado para el puente HADES → Oraculum."""
 
 
+DEFAULT_ORACULUM_URL = "https://oraculum-production-ede3.up.railway.app"
+
+
+def _first_env_value(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
 def _oraculum_url() -> str:
-    url = os.getenv("ORACULUM_URL", "").strip().rstrip("/")
-    if not url:
-        raise OraculumBridgeError("ORACULUM_URL no configurado")
+    # ORACULUM_URL sigue siendo la fuente principal.
+    # Los aliases permiten configuraciones ya existentes y el fallback evita dejar
+    # roto el botón si Railway no inyecta la variable en este servicio.
+    url = (
+        _first_env_value(
+            "ORACULUM_URL",
+            "ORACULUM_BASE_URL",
+            "PUBLIC_ORACULUM_URL",
+            "NEXT_PUBLIC_ORACULUM_URL",
+            "VITE_ORACULUM_URL",
+        )
+        or DEFAULT_ORACULUM_URL
+    ).rstrip("/")
     if not (url.startswith("https://") or url.startswith("http://")):
         raise OraculumBridgeError("ORACULUM_URL inválido")
     return url
