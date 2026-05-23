@@ -118,6 +118,11 @@ def oraculum_link_tokens_collection():
     return get_db()["oraculum_link_tokens"]
 
 
+def sentinel_link_tokens_collection():
+    """Tokens temporales de vinculación HADES → Sentinel."""
+    return get_db()["sentinel_link_tokens"]
+
+
 
 def payment_orders_collection():
     """Órdenes de pago automáticas BEP-20"""
@@ -155,6 +160,7 @@ UNIQUE_INDEX_DUPLICATE_QUERIES = {
     "payment_orders.order_id": ["order_id"],
     "payment_orders.matched_tx_hash": ["matched_tx_hash"],
     "oraculum_link_tokens.token_hash": ["token_hash"],
+    "sentinel_link_tokens.token_hash": ["token_hash"],
     "system_health.component": ["component"],
 }
 
@@ -252,6 +258,11 @@ COLLECTION_INDEX_MODELS = {
         IndexModel([("plan", ASCENDING), ("created_at", DESCENDING)], name="plan_created_idx"),
         IndexModel([("schema_version", ASCENDING)], name="schema_version_idx"),
     ],
+    "sentinel_link_tokens": [
+        IndexModel([("token_hash", ASCENDING)], unique=True, name="sentinel_link_tokens.token_hash"),
+        IndexModel([("expires_at", ASCENDING)], expireAfterSeconds=0, name="sentinel_link_tokens.expires_ttl"),
+        IndexModel([("user_id", ASCENDING), ("created_at", DESCENDING)], name="sentinel_link_tokens.user_created"),
+    ],
     "oraculum_link_tokens": [
         IndexModel([("token_hash", ASCENDING)], name="token_hash_unique", unique=True),
         IndexModel([("user_id", ASCENDING), ("created_at", DESCENDING)], name="user_created_idx"),
@@ -295,6 +306,7 @@ COLLECTION_GETTERS = {
     "signal_history": signal_history_collection,
     "subscription_events": subscription_events_collection,
     "oraculum_link_tokens": oraculum_link_tokens_collection,
+    "sentinel_link_tokens": sentinel_link_tokens_collection,
     "payment_orders": payment_orders_collection,
     "payment_verification_logs": payment_verification_logs_collection,
     "audit_logs": audit_logs_collection,
