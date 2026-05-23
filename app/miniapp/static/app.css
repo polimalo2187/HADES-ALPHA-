@@ -5330,3 +5330,29 @@ html, body, .app-shell, .section-grid, .card {
   border-top: 1px solid rgba(255,215,0,0.12);
   padding-top: 16px;
 }
+
+/* Oraculum premium handoff */
+.oraculum-bridge-card {
+  position: relative;
+  overflow: hidden;
+  border-color: rgba(34, 211, 238, 0.28);
+}
+.oraculum-bridge-card::before {
+  content: "";
+  position: absolute;
+  inset: -40% -20% auto auto;
+  width: 240px;
+  height: 240px;
+  background: radial-gradient(circle, rgba(34, 211, 238, 0.22), transparent 68%);
+  pointer-events: none;
+}
+.oraculum-bridge-card.is-active {
+  box-shadow: 0 0 32px rgba(34, 211, 238, 0.10);
+}
+.oraculum-bridge-card.is-locked {
+  opacity: 0.82;
+}
+.button[disabled] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}

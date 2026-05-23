@@ -679,6 +679,47 @@ async function api(path, options = {}) {
   return data;
 }
 
+function openExternalUrl(url) {
+  const normalized = String(url || '').trim();
+  if (!normalized) return;
+  try {
+    if (window.Telegram?.WebApp?.openLink) {
+      window.Telegram.WebApp.openLink(normalized, { try_instant_view: false });
+      return;
+    }
+  } catch (_) {}
+  window.open(normalized, '_blank', 'noopener,noreferrer');
+}
+
+async function createAndOpenOraculumLink(button = null) {
+  const original = button ? button.textContent : '';
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Vinculando...';
+  }
+  try {
+    const result = await api('/api/miniapp/oraculum/link', { method: 'POST' });
+    if (!result?.url) throw new Error('oraculum_link_unavailable');
+    const days = Number(result.days_left || 0);
+    setAccountNotice(`Oraculum vinculado. La sesión queda activa hasta el vencimiento premium${days ? ` (${days} días restantes)` : ''}.`, 'positive');
+    openExternalUrl(result.url);
+  } catch (error) {
+    const message = String(error.message || 'No se pudo vincular Oraculum.');
+    const display = message === 'premium_required'
+      ? 'Oraculum requiere PREMIUM activo. Renueva o activa tu plan para vincularlo.'
+      : `No se pudo vincular Oraculum: ${message}`;
+    setAccountNotice(display, 'warning');
+    renderAccount();
+    bindViewButtons();
+    tg?.showAlert(display);
+  } finally {
+    if (button && button.isConnected) {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+}
+
 const SESSION_TOKEN_KEY = 'hades_session_token';
 const SESSION_ME_KEY = 'hades_session_me';
 
@@ -5282,6 +5323,28 @@ function renderAccount() {
         </div>
       </div>
 
+      <div class="card card-span-12 oraculum-bridge-card ${isPremiumActive ? 'is-active' : 'is-locked'}">
+        <div class="item-header">
+          <div>
+            <h2 style="margin:0;">Oraculum AI Terminal</h2>
+            <div class="item-subtitle">Vincula tu acceso PREMIUM de HADES para abrir Oraculum con sesión activa hasta tu vencimiento actual.</div>
+          </div>
+          <span class="plan-tag">${isPremiumActive ? 'PREMIUM ACTIVO' : 'PREMIUM REQUERIDO'}</span>
+        </div>
+        <div class="pill-row compact-pill-row">
+          <span class="pill">Plan: ${escapeHtml(me.plan_name || subscription.plan_name || 'FREE')}</span>
+          <span class="pill">Vence: ${escapeHtml(expiresText)}</span>
+          <span class="pill">Días: ${escapeHtml(safeDaysLeft || 0)}</span>
+        </div>
+        <p>${isPremiumActive
+          ? 'Al tocar el botón se crea un acceso temporal de un solo uso y Oraculum guarda una sesión segura hasta tu plan_end premium.'
+          : 'Activa PREMIUM para poder vincular Oraculum. Sin premium no se entregan datos de mercado.'}</p>
+        <div class="action-row">
+          <button class="button button-primary" data-open-oraculum ${isPremiumActive ? '' : 'disabled'}>🔮 Vincular / Abrir Oraculum</button>
+          <button class="button button-secondary" data-billing-focus-action="refresh-account">Actualizar estado</button>
+        </div>
+      </div>
+
       <div class="card card-span-12">
         <h2>Soporte</h2>
         <div class="action-row">
@@ -5419,6 +5482,13 @@ async function copyValue(value, successMessage = 'Copiado correctamente.') {
 }
 
 function bindViewButtons() {
+  document.querySelectorAll('[data-open-oraculum]').forEach(button => {
+    button.onclick = () => {
+      if (button.disabled) return;
+      createAndOpenOraculumLink(button);
+    };
+  });
+
   document.querySelectorAll('[data-billing-focus-action]').forEach(button => {
     button.onclick = async () => {
       const action = String(button.dataset.billingFocusAction || '').trim();

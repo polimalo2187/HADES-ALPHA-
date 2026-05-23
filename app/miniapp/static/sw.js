@@ -1,8 +1,8 @@
 // HADES App — Service Worker
-// Versión: 1.0.0
+// Versión: 1.0.1
 // Estrategia: Cache-first para assets estáticos, Network-first para API
 
-const CACHE_NAME = 'hades-v2'; // FIX: bump para desalojar caché vieja que guardó manifest roto
+const CACHE_NAME = 'hades-v3'; // FIX: bump para desalojar caché vieja que guardó manifest roto
 const STATIC_ASSETS = [
   '/miniapp/static/index.html',
   '/miniapp/static/app.css',
@@ -48,7 +48,7 @@ self.addEventListener('fetch', event => {
   if (url.protocol === 'chrome-extension:') return;
 
   // API calls → Network-first (datos frescos), fallback a caché
-  if (url.pathname.startsWith('/miniapp/api/')) {
+  if (url.pathname.startsWith('/miniapp/api/') || url.pathname.startsWith('/api/miniapp/')) {
     event.respondWith(networkFirst(request));
     return;
   }
