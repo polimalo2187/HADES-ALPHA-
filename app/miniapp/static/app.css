@@ -5356,3 +5356,19 @@ html, body, .app-shell, .section-grid, .card {
   cursor: not-allowed;
   opacity: 0.55;
 }
+
+
+.sentinel-bridge-card {
+  position: relative;
+  overflow: hidden;
+  border-color: rgba(56, 232, 255, 0.24) !important;
+}
+.sentinel-bridge-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 80% 0%, rgba(56, 232, 255, 0.12), transparent 34%), radial-gradient(circle at 8% 90%, rgba(138, 92, 255, 0.12), transparent 32%);
+  pointer-events: none;
+}
+.sentinel-bridge-card.is-active { box-shadow: 0 0 30px rgba(56, 232, 255, 0.08); }
+.sentinel-bridge-card.is-locked { opacity: 0.82; }

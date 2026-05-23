@@ -691,6 +691,36 @@ function openExternalUrl(url) {
   window.open(normalized, '_blank', 'noopener,noreferrer');
 }
 
+
+async function createAndOpenSentinelLink(button = null) {
+  const original = button ? button.textContent : '';
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Vinculando...';
+  }
+  try {
+    const result = await api('/api/miniapp/sentinel/link', { method: 'POST' });
+    if (!result?.url) throw new Error('sentinel_link_unavailable');
+    const days = Number(result.days_left || 0);
+    setAccountNotice(`Sentinel vinculado. La sesión queda activa hasta el vencimiento premium${days ? ` (${days} días restantes)` : ''}.`, 'positive');
+    openExternalUrl(result.url);
+  } catch (error) {
+    const message = String(error.message || 'No se pudo vincular Sentinel.');
+    const display = message === 'premium_required'
+      ? 'Sentinel requiere PREMIUM activo. Renueva o activa tu plan para vincularlo.'
+      : `No se pudo vincular Sentinel: ${message}`;
+    setAccountNotice(display, 'warning');
+    renderAccount();
+    bindViewButtons();
+    tg?.showAlert(display);
+  } finally {
+    if (button && button.isConnected) {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+}
+
 async function createAndOpenOraculumLink(button = null) {
   const original = button ? button.textContent : '';
   if (button) {
@@ -5345,6 +5375,29 @@ function renderAccount() {
         </div>
       </div>
 
+
+      <div class="card card-span-12 sentinel-bridge-card ${isPremiumActive ? 'is-active' : 'is-locked'}">
+        <div class="item-header">
+          <div>
+            <h2 style="margin:0;">HADES Sentinel</h2>
+            <div class="item-subtitle">Inteligencia on-chain premium: ballenas, exchange flows, desbloqueos y alertas críticas sin duplicar señales ni watchlist.</div>
+          </div>
+          <span class="plan-tag">${isPremiumActive ? 'PREMIUM ACTIVO' : 'PREMIUM REQUERIDO'}</span>
+        </div>
+        <div class="pill-row compact-pill-row">
+          <span class="pill">Plan: ${escapeHtml(me.plan_name || subscription.plan_name || 'FREE')}</span>
+          <span class="pill">Vence: ${escapeHtml(expiresText)}</span>
+          <span class="pill">Días: ${escapeHtml(safeDaysLeft || 0)}</span>
+        </div>
+        <p>${isPremiumActive
+          ? 'Al tocar el botón se crea un acceso temporal de un solo uso y Sentinel guarda una sesión segura hasta tu plan_end premium.'
+          : 'Activa PREMIUM para poder vincular Sentinel. Sin premium no se entregan eventos de inteligencia on-chain.'}</p>
+        <div class="action-row">
+          <button class="button button-primary" data-open-sentinel ${isPremiumActive ? '' : 'disabled'}>🛰️ Vincular / Abrir Sentinel</button>
+          <button class="button button-secondary" data-billing-focus-action="refresh-account">Actualizar estado</button>
+        </div>
+      </div>
+
       <div class="card card-span-12">
         <h2>Soporte</h2>
         <div class="action-row">
@@ -5486,6 +5539,13 @@ function bindViewButtons() {
     button.onclick = () => {
       if (button.disabled) return;
       createAndOpenOraculumLink(button);
+    };
+  });
+
+  document.querySelectorAll('[data-open-sentinel]').forEach(button => {
+    button.onclick = () => {
+      if (button.disabled) return;
+      createAndOpenSentinelLink(button);
     };
   });
 
