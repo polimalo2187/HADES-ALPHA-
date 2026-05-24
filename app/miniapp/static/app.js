@@ -3027,6 +3027,10 @@ function renderHome() {
   const generatedAt = state.payload.generated_at;
   const diagnosis = summaryDiagnosis(summary);
   const activeCount = Number(dashboard.active_signals_count || 0);
+  const ecosystemPremiumActive = !isPlanExpired();
+  const ecosystemPlan = String(me.plan_name || 'FREE').toUpperCase();
+  const ecosystemDays = Number(me.days_left || 0);
+  const ecosystemStatusLabel = ecosystemPremiumActive ? 'PREMIUM ACTIVO' : 'PREMIUM REQUERIDO';
 
   // Bias utilities
   const biasRaw = String(market.bias || '').toLowerCase();
@@ -3239,6 +3243,71 @@ function renderHome() {
           </div>
         </div>
       </div>
+
+
+      <!-- ⑨ ECOSISTEMA HADES -->
+      <div class="card card-span-12 ecosystem-command-card">
+        <div class="ecosystem-command-head">
+          <div>
+            <div class="ecosystem-kicker">ECOSISTEMA HADES</div>
+            <h2>Centro de mando premium</h2>
+            <p>HADES Alpha organiza la operación. Oraculum filtra oportunidades predictivas. HADES Sentinel valida el riesgo antes de operar.</p>
+          </div>
+          <span class="ecosystem-status ${ecosystemPremiumActive ? 'active' : 'locked'}">${ecosystemStatusLabel}</span>
+        </div>
+
+        <div class="ecosystem-suite-grid">
+          <article class="ecosystem-suite-card alpha">
+            <div class="ecosystem-suite-icon">⚔️</div>
+            <div class="ecosystem-suite-body">
+              <strong>HADES Alpha</strong>
+              <span>Centro principal</span>
+              <p>Señales, radar, mercado, historial, rendimiento, gestión de riesgo, cuenta y acceso premium.</p>
+            </div>
+            <button class="ecosystem-suite-action" data-goto="signals">Ver señales</button>
+          </article>
+
+          <article class="ecosystem-suite-card oraculum ${ecosystemPremiumActive ? 'is-active' : 'is-locked'}">
+            <div class="ecosystem-suite-icon">🔮</div>
+            <div class="ecosystem-suite-body">
+              <strong>Oraculum</strong>
+              <span>Predicción accionable</span>
+              <p>Motor predictivo con señales LONG/SHORT, entrada fija, objetivo y filtros de coherencia.</p>
+            </div>
+            <button class="ecosystem-suite-action" data-open-oraculum ${ecosystemPremiumActive ? '' : 'disabled'}>Abrir Oraculum</button>
+          </article>
+
+          <article class="ecosystem-suite-card sentinel ${ecosystemPremiumActive ? 'is-active' : 'is-locked'}">
+            <div class="ecosystem-suite-icon">🛡️</div>
+            <div class="ecosystem-suite-body">
+              <strong>HADES Sentinel</strong>
+              <span>Defensa y riesgo</span>
+              <p>Riesgo operativo, anomalías, estrés de futuros, presión, noticias críticas y alertas internas.</p>
+            </div>
+            <button class="ecosystem-suite-action" data-open-sentinel ${ecosystemPremiumActive ? '' : 'disabled'}>Abrir Sentinel</button>
+          </article>
+        </div>
+
+        <div class="pretrade-card">
+          <div class="pretrade-orb">◎</div>
+          <div class="pretrade-copy">
+            <div class="ecosystem-kicker">ANTES DE OPERAR</div>
+            <h3>Flujo recomendado</h3>
+            <p>1) Revisa señales activas en HADES. 2) Consulta si Oraculum tiene oportunidad filtrada. 3) Valida en Sentinel si el mercado está limpio o cargado de riesgo.</p>
+            <div class="pill-row compact-pill-row">
+              <span class="pill">Plan: ${escapeHtml(ecosystemPlan)}</span>
+              <span class="pill">Días premium: ${escapeHtml(ecosystemDays)}</span>
+              <span class="pill">Señales activas: ${escapeHtml(activeCount)}</span>
+            </div>
+          </div>
+          <div class="pretrade-actions">
+            <button class="button button-secondary" data-goto="signals">1. Señales</button>
+            <button class="button button-secondary" data-open-oraculum ${ecosystemPremiumActive ? '' : 'disabled'}>2. Oraculum</button>
+            <button class="button button-primary" data-open-sentinel ${ecosystemPremiumActive ? '' : 'disabled'}>3. Sentinel</button>
+          </div>
+        </div>
+      </div>
+
 
       <!-- ⑨ ACCIONES RÁPIDAS -->
       <div class="card card-span-12 quick-actions-card">
