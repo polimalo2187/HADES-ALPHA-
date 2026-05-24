@@ -90,9 +90,9 @@ const state = {
   },
 };
 
-const LIVE_SIGNALS_HOME_POLL_INTERVAL_MS = 15000;
-const LIVE_SIGNALS_VIEW_POLL_INTERVAL_MS = 8000;
-const LIVE_SIGNALS_FOCUS_DEBOUNCE_MS = 2500;
+const LIVE_SIGNALS_HOME_POLL_INTERVAL_MS = 45000;
+const LIVE_SIGNALS_VIEW_POLL_INTERVAL_MS = 20000;
+const LIVE_SIGNALS_FOCUS_DEBOUNCE_MS = 8000;
 const PAYLOAD_CACHE_TTL_MS = 10 * 60 * 1000;
 const PAYLOAD_CACHE_PREFIX = 'hades-miniapp-payload-v3';
 
@@ -891,6 +891,16 @@ function applyLiveSignalsPayload(payload = {}) {
   state.lazy.signals.loaded = true;
 }
 
+
+function liveSignalsRecentlySynced(maxAgeMs = 12000) {
+  const raw = state.liveSignals.lastSyncedAt;
+  if (!raw) return false;
+  const t = Date.parse(raw);
+  if (!Number.isFinite(t)) return false;
+  return (Date.now() - t) >= 0 && (Date.now() - t) < maxAgeMs;
+}
+
+
 function shouldPollLiveSignals() {
   return Boolean(state.token) && !document.hidden && ['home', 'signals'].includes(String(state.currentView || 'home'));
 }
@@ -932,7 +942,12 @@ async function refreshLiveSignalsState(force = false, reason = 'manual') {
       : '/api/miniapp/live-signals';
     const headers = {};
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
-    const response = await fetch(url, { headers });
+    const response = await fetch(apiUrl ? apiUrl(url) : url, {
+      headers,
+      credentials: 'include',
+      cache: 'no-store',
+      mode: 'same-origin',
+    });
 
     if (response.status === 204) {
       state.liveSignals.feedVersion = response.headers.get('X-Live-Signals-Version') || currentVersion;
@@ -976,6 +991,11 @@ function queueLiveSignalsRefresh(reason = 'focus') {
     return;
   }
   scheduleLiveSignalsTick(getLiveSignalsPollIntervalMs());
+
+  if (liveSignalsRecentlySynced(12000) && !['manual', 'startup-focus', 'startup-cached-focus'].includes(String(reason))) {
+    return;
+  }
+
   Promise.resolve(refreshLiveSignalsState(true, reason)).catch(error => {
     console.warn(`MiniApp live signals ${reason} refresh failed`, error);
   });
@@ -6439,6 +6459,12 @@ document.addEventListener('visibilitychange', () => {
   }
   syncLiveSignalsPolling();
   queueLiveSignalsRefresh('visibility');
+});
+
+window.addEventListener('pagehide', () => {
+  stopLiveSignalsPolling();
+  stopMarketStream();
+  stopSignalPriceTicker();
 });
 
 window.addEventListener('focus', () => {
