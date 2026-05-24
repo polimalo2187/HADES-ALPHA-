@@ -6377,10 +6377,22 @@ const SPLASH_FEATURES = [
     detail: 'Crea tu lista de criptomonedas a vigilar. HADES los monitoriza de forma prioritaria y te alerta antes que al resto cuando se forma un setup válido en alguno de tus pares favoritos.',
   },
   {
+    icon: '🔮',
+    name: 'Oraculum',
+    desc: 'Predicciones filtradas con objetivo operativo',
+    detail: 'Oraculum es la plataforma de inteligencia predictiva del ecosistema HADES. Analiza pares de alto interés, filtra señales LONG y SHORT con objetivo coherente, contexto de mercado y horizonte operativo definido. Está pensada para consultar oportunidades accionables sin ruido, con acceso premium desde tu cuenta.',
+  },
+  {
+    icon: '🛡️',
+    name: 'HADES Sentinel',
+    desc: 'Terminal de riesgo y contexto antes de operar',
+    detail: 'HADES Sentinel es la capa defensiva del ecosistema. Resume riesgo operativo, anomalías de mercado, estrés de futuros, presión, noticias críticas y alertas internas para que revises el contexto antes de abrir una operación. Está diseñada como panel de validación previa para usuarios premium.',
+  },
+  {
     icon: '⚙️',
     name: 'Cuenta',
     desc: 'Suscripción y preferencias',
-    detail: 'Gestiona tu plan (Free, Plus, Premium), consulta tu estado de cuenta, configura el idioma de la interfaz y ajusta las preferencias de notificación. Accede también al programa de referidos para desbloquear beneficios exclusivos.',
+    detail: 'Gestiona tu plan (Free, Plus, Premium), consulta tu estado de cuenta, configura el idioma de la interfaz y ajusta las preferencias de notificación. Desde aquí también puedes vincular y abrir Oraculum y HADES Sentinel si tu plan premium está activo.',
   },
 ];
 

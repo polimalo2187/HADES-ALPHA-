@@ -5372,3 +5372,13 @@ html, body, .app-shell, .section-grid, .card {
 }
 .sentinel-bridge-card.is-active { box-shadow: 0 0 30px rgba(56, 232, 255, 0.08); }
 .sentinel-bridge-card.is-locked { opacity: 0.82; }
+
+
+/* Arsenal extendido: tarjetas compactas para incluir Oraculum y HADES Sentinel */
+.splash-cards-grid {
+  align-items: stretch;
+}
+.splash-card {
+  min-height: 138px;
+  justify-content: flex-start;
+}
