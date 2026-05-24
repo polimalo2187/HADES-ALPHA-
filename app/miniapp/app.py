@@ -437,6 +437,18 @@ def create_mini_app() -> FastAPI:
     async def miniapp_me(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
         return build_me_payload(user)
 
+    @app.get("/api/miniapp/ecosystem/status")
+    async def miniapp_ecosystem_status(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
+        import os
+        return {
+            "ok": True,
+            "premium": not str(user.get("subscription_status") or "").lower() in {"free", "expired"},
+            "oraculum_configured": bool(os.getenv("ORACULUM_URL")),
+            "sentinel_configured": bool(os.getenv("SENTINEL_URL")),
+            "plan_name": user.get("plan_name"),
+            "days_left": user.get("days_left"),
+        }
+
     @app.post("/api/miniapp/oraculum/link")
     async def miniapp_oraculum_link(request: Request, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
         try:
