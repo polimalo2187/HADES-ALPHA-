@@ -669,14 +669,54 @@ function showError(message) {
   els.bottomNav.classList.remove('hidden');
 }
 
+function apiUrl(path) {
+  const normalized = String(path || '').startsWith('/') ? String(path || '') : `/${path}`;
+  return `${window.location.origin}${normalized}`;
+}
+
 async function api(path, options = {}) {
   const headers = Object.assign({}, options.headers || {});
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
   if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-  const response = await fetch(path, { ...options, headers });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.detail || data.message || 'request_failed');
+
+  let response;
+  try {
+    response = await fetch(apiUrl(path), {
+      ...options,
+      headers,
+      credentials: 'include',
+      cache: 'no-store',
+      mode: 'same-origin',
+    });
+  } catch (error) {
+    console.warn('[HADES API] Network failure', path, error);
+    throw new Error('network_unavailable');
+  }
+
+  const contentType = response.headers.get('content-type') || '';
+  const data = contentType.includes('application/json')
+    ? await response.json().catch(() => ({}))
+    : { detail: await response.text().catch(() => '') };
+
+  if (!response.ok) throw new Error(data.detail || data.message || `request_failed_${response.status}`);
   return data;
+}
+
+function bridgeErrorMessage(product, error) {
+  const raw = String(error?.message || error || '').trim();
+  const map = {
+    premium_required: `${product} requiere PREMIUM activo. Renueva o activa tu plan para vincularlo.`,
+    network_unavailable: `No se pudo conectar con el servidor de HADES. Cierra y vuelve a abrir la Mini App, o actualiza la pantalla.`,
+    failed_to_fetch: `No se pudo conectar con el servidor de HADES. Cierra y vuelve a abrir la Mini App, o actualiza la pantalla.`,
+    oraculum_url_not_configured: 'ORACULUM_URL no está configurado en Railway.',
+    sentinel_url_not_configured: 'SENTINEL_URL no está configurado en Railway.',
+    oraculum_link_unavailable: 'El backend no devolvió la URL de Oraculum.',
+    sentinel_link_unavailable: 'El backend no devolvió la URL de Sentinel.',
+    request_failed_401: 'Tu sesión de HADES expiró. Cierra y vuelve a abrir la Mini App desde Telegram.',
+    request_failed_403: `${product} requiere PREMIUM activo o la sesión no tiene permiso.`,
+  };
+  const key = raw.toLowerCase().replaceAll(' ', '_');
+  return map[key] || `No se pudo vincular ${product}: ${raw || 'error desconocido'}`;
 }
 
 function openExternalUrl(url) {
@@ -705,13 +745,12 @@ async function createAndOpenSentinelLink(button = null) {
     setAccountNotice(`Sentinel vinculado. La sesión queda activa hasta el vencimiento premium${days ? ` (${days} días restantes)` : ''}.`, 'positive');
     openExternalUrl(result.url);
   } catch (error) {
-    const message = String(error.message || 'No se pudo vincular Sentinel.');
-    const display = message === 'premium_required'
-      ? 'Sentinel requiere PREMIUM activo. Renueva o activa tu plan para vincularlo.'
-      : `No se pudo vincular Sentinel: ${message}`;
+    const display = bridgeErrorMessage('Sentinel', error);
     setAccountNotice(display, 'warning');
-    renderAccount();
-    bindViewButtons();
+    if (state.currentView === 'account') {
+      renderAccount();
+      bindViewButtons();
+    }
     tg?.showAlert(display);
   } finally {
     if (button && button.isConnected) {
@@ -734,13 +773,12 @@ async function createAndOpenOraculumLink(button = null) {
     setAccountNotice(`Oraculum vinculado. La sesión queda activa hasta el vencimiento premium${days ? ` (${days} días restantes)` : ''}.`, 'positive');
     openExternalUrl(result.url);
   } catch (error) {
-    const message = String(error.message || 'No se pudo vincular Oraculum.');
-    const display = message === 'premium_required'
-      ? 'Oraculum requiere PREMIUM activo. Renueva o activa tu plan para vincularlo.'
-      : `No se pudo vincular Oraculum: ${message}`;
+    const display = bridgeErrorMessage('Oraculum', error);
     setAccountNotice(display, 'warning');
-    renderAccount();
-    bindViewButtons();
+    if (state.currentView === 'account') {
+      renderAccount();
+      bindViewButtons();
+    }
     tg?.showAlert(display);
   } finally {
     if (button && button.isConnected) {

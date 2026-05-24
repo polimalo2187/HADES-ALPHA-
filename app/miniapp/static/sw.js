@@ -127,3 +127,5 @@ self.addEventListener('notificationclick', event => {
     clients.openWindow(event.notification.data || '/')
   );
 });
+
+// ecosystem-bridge-fetch-fix-v2
