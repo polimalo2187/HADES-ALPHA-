@@ -732,20 +732,46 @@ function openExternalUrl(url) {
 }
 
 
-async function createAndOpenSentinelLink(button = null) {
+
+async function createAndOpenEcosystemLink(product, button = null) {
+  const normalized = String(product || '').toLowerCase();
+  const isOraculum = normalized === 'oraculum';
+  const productName = isOraculum ? 'Oraculum' : 'Sentinel';
+  const endpoint = isOraculum ? '/api/miniapp/oraculum/link' : '/api/miniapp/sentinel/link';
+  const unavailable = isOraculum ? 'oraculum_link_unavailable' : 'sentinel_link_unavailable';
+
   const original = button ? button.textContent : '';
   if (button) {
     button.disabled = true;
-    button.textContent = 'Vinculando...';
+    button.textContent = 'Validando premium...';
   }
+
   try {
-    const result = await api('/api/miniapp/sentinel/link', { method: 'POST' });
-    if (!result?.url) throw new Error('sentinel_link_unavailable');
+    // Punto crítico:
+    // Los botones del Inicio pueden operar con payload cacheado. Antes de crear
+    // el link refrescamos el estado de cuenta para asegurar que el backend use
+    // la sesión premium vigente, igual que ocurre desde la vista Cuenta.
+    try {
+      await refreshAccountState(true);
+    } catch (refreshError) {
+      console.warn(`[${productName}] No se pudo refrescar cuenta antes de vincular`, refreshError);
+    }
+
+    if (button) button.textContent = 'Creando acceso...';
+
+    const result = await api(endpoint, { method: 'POST' });
+    if (!result?.url) throw new Error(unavailable);
+
     const days = Number(result.days_left || 0);
-    setAccountNotice(`Sentinel vinculado. La sesión queda activa hasta el vencimiento premium${days ? ` (${days} días restantes)` : ''}.`, 'positive');
+    const message = `${productName} vinculado. La sesión queda activa hasta el vencimiento premium${days ? ` (${days} días restantes)` : ''}.`;
+    setAccountNotice(message, 'positive');
+
+    if (button) button.textContent = 'Abriendo...';
+
+    // Abrimos solo después de recibir la URL firmada con code.
     openExternalUrl(result.url);
   } catch (error) {
-    const display = bridgeErrorMessage('Sentinel', error);
+    const display = bridgeErrorMessage(productName, error);
     setAccountNotice(display, 'warning');
     if (state.currentView === 'account') {
       renderAccount();
@@ -760,33 +786,14 @@ async function createAndOpenSentinelLink(button = null) {
   }
 }
 
-async function createAndOpenOraculumLink(button = null) {
-  const original = button ? button.textContent : '';
-  if (button) {
-    button.disabled = true;
-    button.textContent = 'Vinculando...';
-  }
-  try {
-    const result = await api('/api/miniapp/oraculum/link', { method: 'POST' });
-    if (!result?.url) throw new Error('oraculum_link_unavailable');
-    const days = Number(result.days_left || 0);
-    setAccountNotice(`Oraculum vinculado. La sesión queda activa hasta el vencimiento premium${days ? ` (${days} días restantes)` : ''}.`, 'positive');
-    openExternalUrl(result.url);
-  } catch (error) {
-    const display = bridgeErrorMessage('Oraculum', error);
-    setAccountNotice(display, 'warning');
-    if (state.currentView === 'account') {
-      renderAccount();
-      bindViewButtons();
-    }
-    tg?.showAlert(display);
-  } finally {
-    if (button && button.isConnected) {
-      button.disabled = false;
-      button.textContent = original;
-    }
-  }
+async function createAndOpenSentinelLink(button = null) {
+  return createAndOpenEcosystemLink('sentinel', button);
 }
+
+async function createAndOpenOraculumLink(button = null) {
+  return createAndOpenEcosystemLink('oraculum', button);
+}
+
 
 const SESSION_TOKEN_KEY = 'hades_session_token';
 const SESSION_ME_KEY = 'hades_session_me';
@@ -3302,7 +3309,7 @@ function renderHome() {
               <span>Centro principal</span>
               <p>Señales, radar, mercado, historial, rendimiento, gestión de riesgo, cuenta y acceso premium.</p>
             </div>
-            <button class="ecosystem-suite-action" data-goto="signals">Ver señales</button>
+            <button type="button" class="ecosystem-suite-action" data-goto="signals">Ver señales</button>
           </article>
 
           <article class="ecosystem-suite-card oraculum ${ecosystemPremiumActive ? 'is-active' : 'is-locked'}">
@@ -3312,7 +3319,7 @@ function renderHome() {
               <span>Predicción accionable</span>
               <p>Motor predictivo con señales LONG/SHORT, entrada fija, objetivo y filtros de coherencia.</p>
             </div>
-            <button class="ecosystem-suite-action" data-open-oraculum ${ecosystemPremiumActive ? '' : 'disabled'}>Abrir Oraculum</button>
+            <button type="button" class="ecosystem-suite-action" data-open-oraculum ${ecosystemPremiumActive ? '' : 'disabled'}>Abrir Oraculum</button>
           </article>
 
           <article class="ecosystem-suite-card sentinel ${ecosystemPremiumActive ? 'is-active' : 'is-locked'}">
@@ -3322,7 +3329,7 @@ function renderHome() {
               <span>Defensa y riesgo</span>
               <p>Riesgo operativo, anomalías, estrés de futuros, presión, noticias críticas y alertas internas.</p>
             </div>
-            <button class="ecosystem-suite-action" data-open-sentinel ${ecosystemPremiumActive ? '' : 'disabled'}>Abrir Sentinel</button>
+            <button type="button" class="ecosystem-suite-action" data-open-sentinel ${ecosystemPremiumActive ? '' : 'disabled'}>Abrir Sentinel</button>
           </article>
         </div>
 
@@ -3339,9 +3346,9 @@ function renderHome() {
             </div>
           </div>
           <div class="pretrade-actions">
-            <button class="button button-secondary" data-goto="signals">1. Señales</button>
-            <button class="button button-secondary" data-open-oraculum ${ecosystemPremiumActive ? '' : 'disabled'}>2. Oraculum</button>
-            <button class="button button-primary" data-open-sentinel ${ecosystemPremiumActive ? '' : 'disabled'}>3. Sentinel</button>
+            <button type="button" class="button button-secondary" data-goto="signals">1. Señales</button>
+            <button type="button" class="button button-secondary" data-open-oraculum ${ecosystemPremiumActive ? '' : 'disabled'}>2. Oraculum</button>
+            <button type="button" class="button button-primary" data-open-sentinel ${ecosystemPremiumActive ? '' : 'disabled'}>3. Sentinel</button>
           </div>
         </div>
       </div>
@@ -5500,7 +5507,7 @@ function renderAccount() {
           ? 'Al tocar el botón se crea un acceso temporal de un solo uso y Sentinel guarda una sesión segura hasta tu plan_end premium.'
           : 'Activa PREMIUM para poder vincular Sentinel. Sin premium no se entregan eventos de inteligencia on-chain.'}</p>
         <div class="action-row">
-          <button class="button button-primary" data-open-sentinel ${isPremiumActive ? '' : 'disabled'}>🛰️ Vincular / Abrir Sentinel</button>
+          <button type="button" class="button button-primary" data-open-sentinel ${isPremiumActive ? '' : 'disabled'}>🛰️ Vincular / Abrir Sentinel</button>
           <button class="button button-secondary" data-billing-focus-action="refresh-account">Actualizar estado</button>
         </div>
       </div>

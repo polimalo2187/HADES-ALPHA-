@@ -129,3 +129,5 @@ self.addEventListener('notificationclick', event => {
 });
 
 // ecosystem-bridge-fetch-fix-v2
+
+// ecosystem-auth-flow-fix-v3
