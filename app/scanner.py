@@ -32,18 +32,19 @@ BINANCE_FUTURES_API = "https://fapi.binance.com"
 # Scanner runtime config
 # ==============================
 
-SCAN_INTERVAL_SECONDS = int(os.getenv("SCAN_INTERVAL_SECONDS", "20"))
+SCAN_INTERVAL_SECONDS = int(os.getenv("SCAN_INTERVAL_SECONDS", "45"))
 MIN_QUOTE_VOLUME = int(os.getenv("MIN_QUOTE_VOLUME", "20000000"))
+SCANNER_MAX_SYMBOLS = max(1, int(os.getenv("SCANNER_MAX_SYMBOLS", "50")))
 DEDUP_MINUTES = int(os.getenv("DEDUP_MINUTES", "10"))
 
 # Networking / rate limiting
 REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "0.2"))
-REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "15"))
-REQUEST_MAX_RETRIES = max(1, int(os.getenv("REQUEST_MAX_RETRIES", "4")))
+REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "8"))
+REQUEST_MAX_RETRIES = max(1, int(os.getenv("REQUEST_MAX_RETRIES", "2")))
 REQUEST_RETRY_BASE_SLEEP = float(os.getenv("REQUEST_RETRY_BASE_SLEEP", "0.6"))
 
 # Concurrency: how many symbols we process in parallel.
-SCANNER_SYMBOL_CONCURRENCY = max(1, int(os.getenv("SCANNER_SYMBOL_CONCURRENCY", "24")))
+SCANNER_SYMBOL_CONCURRENCY = max(1, int(os.getenv("SCANNER_SYMBOL_CONCURRENCY", "8")))
 
 # Force a global inter-request delay (serializes requests); keep false by default.
 SCANNER_FORCE_REQUEST_DELAY = str(os.getenv("SCANNER_FORCE_REQUEST_DELAY", "false")).strip().lower() in {"1", "true", "yes", "on"}
@@ -51,16 +52,16 @@ SCANNER_FORCE_REQUEST_DELAY = str(os.getenv("SCANNER_FORCE_REQUEST_DELAY", "fals
 # MTF cache: 15M/1H only refresh when a new candle bucket opens.
 # 5M remains uncached by default because the live breakout/reset setup is decided there.
 SCANNER_ENABLE_HTF_CACHE = str(os.getenv("SCANNER_ENABLE_HTF_CACHE", "true")).strip().lower() in {"1", "true", "yes", "on"}
-SCANNER_5M_CACHE_SECONDS = max(0.0, float(os.getenv("SCANNER_5M_CACHE_SECONDS", "0")))
+SCANNER_5M_CACHE_SECONDS = max(0.0, float(os.getenv("SCANNER_5M_CACHE_SECONDS", "45")))
 SCANNER_HTF_STALE_GRACE_SECONDS = max(0.0, float(os.getenv("SCANNER_HTF_STALE_GRACE_SECONDS", "900")))
-ACTIVE_SYMBOLS_CACHE_SECONDS = max(10.0, float(os.getenv("ACTIVE_SYMBOLS_CACHE_SECONDS", "300")))
+ACTIVE_SYMBOLS_CACHE_SECONDS = max(10.0, float(os.getenv("ACTIVE_SYMBOLS_CACHE_SECONDS", "900")))
 SCANNER_BOOTSTRAP_BATCH_SIZE = max(0, int(os.getenv("SCANNER_BOOTSTRAP_BATCH_SIZE", "48")))
 SCANNER_15M_REFRESH_BATCH_SIZE = max(0, int(os.getenv("SCANNER_15M_REFRESH_BATCH_SIZE", "20")))
 SCANNER_1H_REFRESH_BATCH_SIZE = max(0, int(os.getenv("SCANNER_1H_REFRESH_BATCH_SIZE", "8")))
 
 # Optional: soft QPS limiter (token-bucket). Defaults are conservative to avoid Binance bans.
-SCANNER_MAX_REQUESTS_PER_SECOND = float(os.getenv("SCANNER_MAX_REQUESTS_PER_SECOND", "8"))
-SCANNER_MAX_BURST = int(os.getenv("SCANNER_MAX_BURST", "16"))
+SCANNER_MAX_REQUESTS_PER_SECOND = float(os.getenv("SCANNER_MAX_REQUESTS_PER_SECOND", "4"))
+SCANNER_MAX_BURST = int(os.getenv("SCANNER_MAX_BURST", "8"))
 
 # 5m fetching.
 # La estrategia actual es 5M-nativa, así que el default permanece activado.
@@ -1024,14 +1025,29 @@ def get_active_futures_symbols(*, allow_stale_on_error: bool = True) -> List[str
                 return stale
         raise
 
-    symbols = [
-        item["symbol"]
-        for item in payload
-        if str(item.get("symbol", "")).endswith("USDT")
-        and float(item.get("quoteVolume", 0.0) or 0.0) >= MIN_QUOTE_VOLUME
-    ]
+    candidates = []
+    for item in payload:
+        symbol = str(item.get("symbol", "")).upper()
+        if not symbol.endswith("USDT"):
+            continue
+        try:
+            quote_volume = float(item.get("quoteVolume", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            quote_volume = 0.0
+        if quote_volume < MIN_QUOTE_VOLUME:
+            continue
+        candidates.append((symbol, quote_volume))
+
+    candidates.sort(key=lambda row: row[1], reverse=True)
+    symbols = [symbol for symbol, _ in candidates[:SCANNER_MAX_SYMBOLS]]
+
     _active_symbols_cache.set(symbols)
-    logger.info("📊 %s símbolos activos con volumen suficiente", len(symbols))
+    logger.info(
+        "📊 Scanner universe: top %s/%s símbolos USDT por volumen 24h (min_quote_volume=%s)",
+        len(symbols),
+        len(candidates),
+        MIN_QUOTE_VOLUME,
+    )
     return symbols
 
 
