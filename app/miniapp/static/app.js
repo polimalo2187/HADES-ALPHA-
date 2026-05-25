@@ -5344,15 +5344,17 @@ function renderAccount() {
   els.account.innerHTML = `
     <div class="section-grid">
       ${accountNoticeCard(state.accountNotice)}
-      <div class="card card-span-12">
-        <div class="item-header">
+      <div class="card card-span-12 account-hero-card">
+        <div class="account-hero-glow"></div>
+        <div class="item-header account-hero-header">
           <div>
+            <div class="account-hero-kicker">CENTRO DE CONTROL PREMIUM</div>
             <h2 style="margin:0;">Centro de cuenta</h2>
             <div class="item-subtitle">Estado comercial, suscripción, billing y referidos desde la MiniApp.</div>
           </div>
           <span class="plan-tag">${escapeHtml(me.plan_name || 'FREE')}</span>
         </div>
-        <div class="pill-row">
+        <div class="pill-row account-hero-pills">
           <span class="pill">Estado: ${escapeHtml(me.subscription_status_label || me.subscription_status || 'free')}</span>
           <span class="pill">Vence: ${escapeHtml(expiresText)}</span>
           <span class="pill">Días restantes: ${escapeHtml(me.days_left || 0)}</span>
@@ -5367,7 +5369,8 @@ function renderAccount() {
         </div>
       </div>
 
-      <div class="card card-span-6">
+      <div class="card card-span-6 account-pro-card subscription-pro-card">
+        <div class="account-card-icon">💎</div>
         <h2>Suscripción</h2>
         <p>${escapeHtml(subscription.plan_name || me.plan_name || 'FREE')} · ${escapeHtml(subscription.status_label || me.subscription_status_label || me.subscription_status || 'free')} · ${escapeHtml(expiresText)}</p>
         <div class="inline-meta">
@@ -5379,7 +5382,8 @@ function renderAccount() {
         ${subscription.features?.length ? `<div class="feature-list" style="margin-top:12px;">${subscription.features.map(feature => `<div class="feature-item">• ${escapeHtml(feature)}</div>`).join('')}</div>` : '<div class="empty-state">Sin beneficios listados por ahora.</div>'}
       </div>
 
-      <div class="card card-span-6">
+      <div class="card card-span-6 account-pro-card risk-pro-card">
+        <div class="account-card-icon">⚖️</div>
         <h2>Gestión de riesgo</h2>
         <p>Configura capital, riesgo por trade, fees, slippage y calcula sizing real desde señales vivas e históricas.</p>
         <div class="pill-row compact-pill-row">
@@ -5392,7 +5396,8 @@ function renderAccount() {
         </div>
       </div>
 
-      <div class="card card-span-6">
+      <div class="card card-span-6 account-pro-card performance-pro-card">
+        <div class="account-card-icon">🏆</div>
         <h2>Rendimiento</h2>
         <p>Módulo dedicado para revisar 7D / 30D / total, PF por R, expectancy, score buckets y breakdown por plan.</p>
         <div class="pill-row compact-pill-row">
@@ -5405,7 +5410,8 @@ function renderAccount() {
         </div>
       </div>
 
-      <div class="card card-span-6">
+      <div class="card card-span-6 account-pro-card settings-pro-card">
+        <div class="account-card-icon">⚙️</div>
         <h2>Ajustes y alertas push</h2>
         <p>Configura idioma y qué niveles de señal quieres recibir como aviso push en Telegram.</p>
         <div class="pill-row compact-pill-row">
@@ -5418,7 +5424,8 @@ function renderAccount() {
         </div>
       </div>
 
-      <div class="card card-span-6">
+      <div class="card card-span-6 account-pro-card referral-pro-card">
+        <div class="account-card-icon">🧬</div>
         <h2>Referidos</h2>
         <div class="pill-row">
           <span class="pill">Totales: ${escapeHtml(referrals.total_referred || 0)}</span>
@@ -5450,7 +5457,8 @@ function renderAccount() {
       ${billingFocusCard(billingFocus, billing)}
       ${paymentConfigDiagnosticsCard(billing)}
 
-      <div class="card card-span-12">
+      <div class="card card-span-12 account-billing-card">
+        <div class="account-card-icon">💳</div>
         <h2>Billing</h2>
         <div class="account-metric-grid">
           ${accountMetricCard('Config pago', billing.payment_config_ready ? 'Lista' : 'Incompleta', billing.payment_config_ready ? 'is-positive' : 'is-warning')}
@@ -5466,28 +5474,31 @@ function renderAccount() {
       ${planBlock('plus', plans.plus || [], me.plan, billing, { hidden: isPremiumActive })}
       ${planBlock('premium', plans.premium || [], me.plan, billing)}
 
-      <div class="card card-span-6">
+      <div class="card card-span-6 account-list-pro-card">
+        <div class="account-card-icon">🧾</div>
         <h2>Órdenes recientes</h2>
         <div class="list">
           ${recentOrders.length ? recentOrders.map(recentOrderItem).join('') : '<div class="empty-state">Todavía no hay órdenes registradas.</div>'}
         </div>
       </div>
 
-      <div class="card card-span-6">
+      <div class="card card-span-6 account-list-pro-card reward-list-pro-card">
+        <div class="account-card-icon">🎁</div>
         <h2>Recompensas recientes</h2>
         <div class="list">
           ${recentRewards.length ? recentRewards.map(referralRewardItem).join('') : '<div class="empty-state">Todavía no tienes recompensas aplicadas.</div>'}
         </div>
       </div>
 
-      <div class="card card-span-12">
+      <div class="card card-span-12 account-timeline-pro-card">
+        <div class="account-card-icon">🕒</div>
         <h2>Timeline comercial</h2>
         <div class="list">
           ${timeline.length ? timeline.map(accountTimelineItem).join('') : '<div class="empty-state">Sin eventos comerciales recientes.</div>'}
         </div>
       </div>
 
-      <div class="card card-span-12 oraculum-bridge-card ${isPremiumActive ? 'is-active' : 'is-locked'}">
+      <div class="card card-span-12 ecosystem-bridge-premium-card oraculum-bridge-card ${isPremiumActive ? 'is-active' : 'is-locked'}">
         <div class="item-header">
           <div>
             <h2 style="margin:0;">Oraculum AI Terminal</h2>
@@ -5510,7 +5521,7 @@ function renderAccount() {
       </div>
 
 
-      <div class="card card-span-12 sentinel-bridge-card ${isPremiumActive ? 'is-active' : 'is-locked'}">
+      <div class="card card-span-12 ecosystem-bridge-premium-card sentinel-bridge-card ${isPremiumActive ? 'is-active' : 'is-locked'}">
         <div class="item-header">
           <div>
             <h2 style="margin:0;">HADES Sentinel</h2>
@@ -5532,14 +5543,16 @@ function renderAccount() {
         </div>
       </div>
 
-      <div class="card card-span-12">
+      <div class="card card-span-12 account-support-pro-card">
+        <div class="account-card-icon">🛟</div>
         <h2>Soporte</h2>
         <div class="action-row">
           <a class="button button-secondary" target="_blank" rel="noopener" href="${escapeHtml(support.url || state.payload.support_url || '#')}">Abrir grupo de soporte</a>
         </div>
       </div>
 
-      <div class="card card-span-12">
+      <div class="card card-span-12 account-app-pro-card">
+        <div class="account-card-icon">📲</div>
         <h2>App instalada</h2>
         <p style="font-size:0.85rem;color:var(--text-muted,#8899aa);margin-bottom:12px">
           Si instalaste HADES como app, toca este botón para conectar tu sesión.

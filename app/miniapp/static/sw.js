@@ -133,3 +133,5 @@ self.addEventListener('notificationclick', event => {
 // ecosystem-auth-flow-fix-v3
 
 // egress-top50-v1
+
+// account-visual-pro-v1
