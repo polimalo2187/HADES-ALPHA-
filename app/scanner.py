@@ -1460,6 +1460,9 @@ def _market_regime_summary(snapshot: Optional[Dict[str, Any]]) -> Dict[str, Any]
 
 _BREAKOUT_RESET_FUNNEL_FIELDS = (
     "router_allowed_attempts",
+    "router_allowed_direct",
+    "router_allowed_override",
+    "router_allowed_fallback",
     "router_risk_off_overrides",
     "router_symbol_continuation_overrides",
     "router_sweep_fallbacks",
@@ -1473,6 +1476,9 @@ _BREAKOUT_RESET_FUNNEL_FIELDS = (
     "setup_armed_waiting_reset",
     "setup_loaded_waiting_reset",
     "reset_extension_wait",
+    "waiting_live_reset",
+    "reset_rebounded_before_publish",
+    "reset_late_or_lost",
     "reset_touched_candidates",
     "published_selected",
     "expired_no_reset",
@@ -1480,6 +1486,15 @@ _BREAKOUT_RESET_FUNNEL_FIELDS = (
     "soft_gate_hits",
     "score_floor_rejected",
     "hard_gate_rejected",
+    "hard_gate_indicator_warmup",
+    "hard_gate_insufficient_history",
+    "hard_gate_trend_structure",
+    "hard_gate_adx_strength",
+    "hard_gate_atr_pct",
+    "hard_gate_continuation_candle",
+    "hard_gate_breakout_invalidated",
+    "hard_gate_breakout_back_inside",
+    "hard_gate_trade_profile",
 )
 
 _BREAKOUT_RESET_HARD_REJECT_PREFIXES = (
@@ -1488,8 +1503,6 @@ _BREAKOUT_RESET_HARD_REJECT_PREFIXES = (
     "continuation_candle_hard",
     "breakout_invalidated",
     "breakout_drifted_back_inside",
-    "breakout_waiting_live_reset",
-    "breakout_reset_rebounded_before_publish",
     "breakout_trade_profile",
     "indicator_warmup",
     "insufficient_history",
@@ -1527,7 +1540,17 @@ def _build_breakout_reset_funnel(
     """
     funnel = _zero_breakout_reset_funnel()
     debug = reject_totals or {}
-    funnel["router_allowed_attempts"] = int(attempts_by_strategy.get("breakout_reset", 0) or 0)
+    router_allowed_total = int(debug.get("router_allowed_breakout_total", 0) or 0)
+    router_allowed_direct = int(debug.get("router_allowed_breakout_direct", 0) or 0)
+    router_allowed_override = int(debug.get("router_allowed_breakout_override", 0) or 0)
+    router_allowed_fallback = int(debug.get("router_allowed_breakout_fallback", 0) or 0)
+    legacy_attempts = int(attempts_by_strategy.get("breakout_reset", 0) or 0)
+    # Backward compatible fallback for cycles generated before the router emitted
+    # granular allow counters. New cycles should use router_allowed_breakout_total.
+    funnel["router_allowed_attempts"] = max(router_allowed_total, legacy_attempts)
+    funnel["router_allowed_direct"] = router_allowed_direct
+    funnel["router_allowed_override"] = router_allowed_override
+    funnel["router_allowed_fallback"] = router_allowed_fallback
     funnel["router_risk_off_overrides"] = int(debug.get("router_risk_off_breakout_reset_override", 0) or 0)
     funnel["router_symbol_continuation_overrides"] = int(debug.get("router_symbol_continuation_breakout_override", 0) or 0)
     funnel["router_sweep_fallbacks"] = int(debug.get("strategy_router_try_breakout_reset_fallback", 0) or 0)
@@ -1541,6 +1564,9 @@ def _build_breakout_reset_funnel(
     funnel["setup_armed_waiting_reset"] = int(debug.get("breakout_setup_armed_waiting_reset", 0) or 0)
     funnel["setup_loaded_waiting_reset"] = int(debug.get("breakout_stateful_setup_loaded", 0) or 0)
     funnel["reset_extension_wait"] = int(debug.get("breakout_stateful_extension_wait", 0) or 0)
+    funnel["waiting_live_reset"] = int(debug.get("breakout_waiting_live_reset", 0) or 0)
+    funnel["reset_rebounded_before_publish"] = int(debug.get("breakout_reset_rebounded_before_publish", 0) or 0)
+    funnel["reset_late_or_lost"] = int(debug.get("breakout_reset_late", 0) or 0)
     funnel["reset_touched_candidates"] = int(candidate_pool_by_strategy.get("breakout_reset", 0) or 0)
     funnel["published_selected"] = int(selected_by_strategy.get("breakout_reset", 0) or 0)
     funnel["expired_no_reset"] = int(debug.get("breakout_setup_expired", 0) or 0) + int(debug.get("expired_no_reset", 0) or 0)
@@ -1548,6 +1574,15 @@ def _build_breakout_reset_funnel(
     funnel["soft_gate_hits"] = _count_debug_prefix(debug, "soft_gate_")
     funnel["score_floor_rejected"] = _count_debug_prefix(debug, "score_floor_")
     funnel["hard_gate_rejected"] = _count_debug_prefix(debug, *_BREAKOUT_RESET_HARD_REJECT_PREFIXES)
+    funnel["hard_gate_indicator_warmup"] = int(debug.get("indicator_warmup", 0) or 0)
+    funnel["hard_gate_insufficient_history"] = int(debug.get("insufficient_history", 0) or 0)
+    funnel["hard_gate_trend_structure"] = int(debug.get("trend_structure", 0) or 0)
+    funnel["hard_gate_adx_strength"] = int(debug.get("adx_strength_hard", 0) or 0)
+    funnel["hard_gate_atr_pct"] = int(debug.get("atr_pct_hard", 0) or 0)
+    funnel["hard_gate_continuation_candle"] = int(debug.get("continuation_candle_hard", 0) or 0)
+    funnel["hard_gate_breakout_invalidated"] = _count_debug_prefix(debug, "breakout_invalidated")
+    funnel["hard_gate_breakout_back_inside"] = _count_debug_prefix(debug, "breakout_drifted_back_inside")
+    funnel["hard_gate_trade_profile"] = int(debug.get("breakout_trade_profile", 0) or 0)
     # Ensure candidate/selected never disappear from the funnel even when there
     # were no rejections in the cycle.
     if funnel["reset_touched_candidates"] < 0:
@@ -1668,6 +1703,8 @@ async def scan_market_async(bot: Bot):
                         failure_samples.append(failure)
                     continue
 
+                _merge_debug_counts(reject_totals, local_debug)
+
                 if candidate:
                     candidates.append(candidate)
                     continue
@@ -1677,7 +1714,6 @@ async def scan_market_async(bot: Bot):
                     risk_off_symbols_total += 1
                 elif regime_strategy_key:
                     rejected_by_strategy[regime_strategy_key] = int(rejected_by_strategy.get(regime_strategy_key, 0)) + 1
-                _merge_debug_counts(reject_totals, local_debug)
                 terminal_reason = _extract_failure_reason(local_debug) or "unknown"
                 if regime_strategy_key and regime_strategy_key != "risk_off":
                     _increment_reason_bucket(reject_reasons_by_strategy, regime_strategy_key, terminal_reason)
@@ -1796,6 +1832,11 @@ async def scan_market_async(bot: Bot):
                 rejected_by_strategy=rejected_by_strategy,
                 attempts_by_strategy=attempts_by_strategy,
             )
+            if int(breakout_reset_funnel.get("router_allowed_attempts", 0) or 0) > 0:
+                attempts_by_strategy["breakout_reset"] = max(
+                    int(attempts_by_strategy.get("breakout_reset", 0) or 0),
+                    int(breakout_reset_funnel.get("router_allowed_attempts", 0) or 0),
+                )
             overall_terminal_reasons: Dict[str, int] = {}
             for bucket in reject_reasons_by_strategy.values():
                 for reason, count in bucket.items():

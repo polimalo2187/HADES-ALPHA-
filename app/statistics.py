@@ -835,6 +835,9 @@ def _normalize_breakout_reset_funnel(value: Any) -> Dict[str, int]:
     raw = value if isinstance(value, dict) else {}
     keys = [
         "router_allowed_attempts",
+        "router_allowed_direct",
+        "router_allowed_override",
+        "router_allowed_fallback",
         "router_risk_off_overrides",
         "router_symbol_continuation_overrides",
         "router_sweep_fallbacks",
@@ -848,6 +851,9 @@ def _normalize_breakout_reset_funnel(value: Any) -> Dict[str, int]:
         "setup_armed_waiting_reset",
         "setup_loaded_waiting_reset",
         "reset_extension_wait",
+        "waiting_live_reset",
+        "reset_rebounded_before_publish",
+        "reset_late_or_lost",
         "reset_touched_candidates",
         "published_selected",
         "expired_no_reset",
@@ -855,6 +861,15 @@ def _normalize_breakout_reset_funnel(value: Any) -> Dict[str, int]:
         "soft_gate_hits",
         "score_floor_rejected",
         "hard_gate_rejected",
+        "hard_gate_indicator_warmup",
+        "hard_gate_insufficient_history",
+        "hard_gate_trend_structure",
+        "hard_gate_adx_strength",
+        "hard_gate_atr_pct",
+        "hard_gate_continuation_candle",
+        "hard_gate_breakout_invalidated",
+        "hard_gate_breakout_back_inside",
+        "hard_gate_trade_profile",
     ]
     return {key: _safe_int(raw.get(key)) for key in keys}
 
@@ -866,7 +881,10 @@ def _add_funnel_counts(target: Dict[str, int], source: Dict[str, int]) -> None:
 
 def _breakout_reset_funnel_rows(funnel: Dict[str, int]) -> List[Dict[str, Any]]:
     labels = {
-        "router_allowed_attempts": "Símbolos permitidos por router",
+        "router_allowed_attempts": "Permitidos por router total",
+        "router_allowed_direct": "Permitidos directos",
+        "router_allowed_override": "Permitidos por override",
+        "router_allowed_fallback": "Permitidos por fallback",
         "router_risk_off_overrides": "Override risk-off moderado",
         "router_symbol_continuation_overrides": "Override por continuación local",
         "router_sweep_fallbacks": "Fallback después de sweep",
@@ -880,13 +898,25 @@ def _breakout_reset_funnel_rows(funnel: Dict[str, int]) -> List[Dict[str, Any]]:
         "setup_armed_waiting_reset": "Breakout armado esperando reset",
         "setup_loaded_waiting_reset": "Setup stateful recuperado",
         "reset_extension_wait": "Esperando reset por extensión",
+        "waiting_live_reset": "Setup vivo esperando reset",
+        "reset_rebounded_before_publish": "Reset rebotó antes de publicar",
+        "reset_late_or_lost": "Reset tarde o perdido",
         "reset_touched_candidates": "Reset tocado / candidato",
         "published_selected": "Publicado",
         "expired_no_reset": "Expiró sin reset",
         "invalidated": "Invalidado",
         "soft_gate_hits": "Soft gates activados",
         "score_floor_rejected": "Rechazado por piso de score",
-        "hard_gate_rejected": "Hard gates rechazados",
+        "hard_gate_rejected": "Hard gates reales rechazados",
+        "hard_gate_indicator_warmup": "Hard: indicadores calentando",
+        "hard_gate_insufficient_history": "Hard: histórico insuficiente",
+        "hard_gate_trend_structure": "Hard: estructura de tendencia",
+        "hard_gate_adx_strength": "Hard: ADX muerto",
+        "hard_gate_atr_pct": "Hard: ATR extremo",
+        "hard_gate_continuation_candle": "Hard: continuación inválida",
+        "hard_gate_breakout_invalidated": "Hard: breakout invalidado",
+        "hard_gate_breakout_back_inside": "Hard: volvió al rango",
+        "hard_gate_trade_profile": "Hard: perfil de trade inválido",
     }
     order = list(labels.keys())
     return [

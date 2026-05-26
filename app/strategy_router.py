@@ -197,6 +197,13 @@ def route_candidate(
         router_override = "symbol_continuation_breakout_override"
         _record_reject(debug_counts, "router_symbol_continuation_breakout_override")
 
+    if selected_strategy == "breakout_reset":
+        _record_reject(debug_counts, "router_allowed_breakout_total")
+        if router_override:
+            _record_reject(debug_counts, "router_allowed_breakout_override")
+        else:
+            _record_reject(debug_counts, "router_allowed_breakout_direct")
+
     result, strategy_name, strategy_module = _call_strategy(
         selected_strategy,
         df_1h=df_1h,
@@ -216,6 +223,8 @@ def route_candidate(
         fallback_from = selected_strategy
         _record_reject(debug_counts, f"strategy_router_no_candidate_{selected_strategy}")
         _record_reject(debug_counts, "strategy_router_try_breakout_reset_fallback")
+        _record_reject(debug_counts, "router_allowed_breakout_total")
+        _record_reject(debug_counts, "router_allowed_breakout_fallback")
         result, strategy_name, strategy_module = _call_strategy(
             "breakout_reset",
             df_1h=df_1h,
