@@ -88,3 +88,82 @@ def test_raw_market_regime_switches_to_sweep_only_on_strong_chop(monkeypatch):
 
     assert raw["raw_state"] == "sweep_reversal"
     assert raw["reason"] == "market_regime_sweep_reversal"
+
+
+def _reset_regime_state():
+    with regime_engine._state_lock:
+        regime_engine._state.clear()
+        regime_engine._state.update({
+            "fetched_at_ts": 0.0,
+            "state": "unknown",
+            "raw_state": "unknown",
+            "bias": "neutral",
+            "allow": True,
+            "reason": "test_reset",
+            "risk_severity": "none",
+            "entered_at_ts": 0.0,
+            "candidate_state": None,
+            "candidate_count": 0,
+            "cooldown_until_ts": 0.0,
+        })
+
+
+def test_classify_market_regime_marks_moderate_risk_off_as_allowed():
+    _reset_regime_state()
+    closes_5m = [100.0 + (idx * 0.05) for idx in range(49)] + [102.8]
+    closes_15m = [100.0 + (idx * 0.10) for idx in range(18)]
+
+    snapshot = regime_engine.classify_market_regime(
+        _make_ohlc_frame(closes_5m, step_minutes=5),
+        _make_ohlc_frame(closes_15m, step_minutes=15),
+        now_ts=3_000_000.0,
+    )
+
+    assert snapshot["state"] == "risk_off"
+    assert snapshot["risk_severity"] == "moderate"
+    assert snapshot["strategy_name"] == "breakout_reset"
+    assert snapshot["allow"] is True
+    assert snapshot["metrics"]["risk_severity"] == "moderate"
+
+
+def test_classify_market_regime_keeps_severe_risk_off_as_hard_block():
+    _reset_regime_state()
+    closes_5m = [100.0 + (idx * 0.05) for idx in range(49)] + [103.8]
+    closes_15m = [100.0 + (idx * 0.10) for idx in range(18)]
+
+    snapshot = regime_engine.classify_market_regime(
+        _make_ohlc_frame(closes_5m, step_minutes=5),
+        _make_ohlc_frame(closes_15m, step_minutes=15),
+        now_ts=4_000_000.0,
+    )
+
+    assert snapshot["state"] == "risk_off"
+    assert snapshot["risk_severity"] == "severe"
+    assert snapshot["strategy_name"] == "risk_off"
+    assert snapshot["allow"] is False
+    assert snapshot["metrics"]["severe_shock_trigger_count"] >= 1
+
+
+def test_classify_market_regime_downgrades_cooldown_hold_to_moderate():
+    _reset_regime_state()
+    shock_5m = [100.0 + (idx * 0.05) for idx in range(49)] + [103.8]
+    normal_5m = [100.0 + (idx * 0.20) for idx in range(50)]
+    closes_15m = [100.0 + (idx * 0.10) for idx in range(18)]
+
+    first = regime_engine.classify_market_regime(
+        _make_ohlc_frame(shock_5m, step_minutes=5),
+        _make_ohlc_frame(closes_15m, step_minutes=15),
+        now_ts=5_000_000.0,
+    )
+    second = regime_engine.classify_market_regime(
+        _make_ohlc_frame(normal_5m, step_minutes=5),
+        _make_ohlc_frame(closes_15m, step_minutes=15),
+        now_ts=5_000_060.0,
+    )
+
+    assert first["risk_severity"] == "severe"
+    assert second["state"] == "risk_off"
+    assert second["reason"] == "market_regime_cooldown_hold"
+    assert second["risk_severity"] == "moderate"
+    assert second["strategy_name"] == "breakout_reset"
+    assert second["allow"] is True
