@@ -1475,6 +1475,11 @@ _BREAKOUT_RESET_FUNNEL_FIELDS = (
     "symbol_unknown",
     "setup_armed_waiting_reset",
     "setup_loaded_waiting_reset",
+    "signal_pending_entry_candidates",
+    "preentry_model_level",
+    "preentry_model_ema20",
+    "preentry_model_midpoint",
+    "preentry_model_shallow",
     "reset_extension_wait",
     "waiting_live_reset",
     "reset_rebounded_before_publish",
@@ -1579,6 +1584,11 @@ def _build_breakout_reset_funnel(
     funnel["symbol_unknown"] = int(debug.get("symbol_regime_symbol_unknown", 0) or 0)
     funnel["setup_armed_waiting_reset"] = int(debug.get("breakout_setup_armed_waiting_reset", 0) or 0)
     funnel["setup_loaded_waiting_reset"] = int(debug.get("breakout_stateful_setup_loaded", 0) or 0)
+    funnel["signal_pending_entry_candidates"] = int(debug.get("breakout_signal_pending_entry_candidate", 0) or 0)
+    funnel["preentry_model_level"] = int(debug.get("breakout_preentry_model_level", 0) or 0)
+    funnel["preentry_model_ema20"] = int(debug.get("breakout_preentry_model_ema20", 0) or 0)
+    funnel["preentry_model_midpoint"] = int(debug.get("breakout_preentry_model_midpoint", 0) or 0)
+    funnel["preentry_model_shallow"] = int(debug.get("breakout_preentry_model_shallow", 0) or 0)
     funnel["reset_extension_wait"] = int(debug.get("breakout_stateful_extension_wait", 0) or 0)
     funnel["waiting_live_reset"] = int(debug.get("breakout_waiting_live_reset", 0) or 0)
     funnel["reset_rebounded_before_publish"] = int(debug.get("breakout_reset_rebounded_before_publish", 0) or 0)

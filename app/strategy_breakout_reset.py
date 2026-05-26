@@ -73,8 +73,8 @@ BREAKOUT_LOOKBACK = 24
 
 MAX_SCORE = 100.0
 FREE_NORMALIZATION_PENALTY = 8.0
-SCORE_CALIBRATION_VERSION = "v18_multi_reset_timing_guard"
-ENTRY_MODEL_NAME = "breakout_reset_multi_model_timing_guard_v1"
+SCORE_CALIBRATION_VERSION = "v19_preentry_pending_reset"
+ENTRY_MODEL_NAME = "breakout_reset_preentry_pending_v1"
 SETUP_STAGE_PRE_RESET_WAITING_RETEST = "pre_reset_waiting_retest"
 SETUP_STAGE_RESET_TOUCH_LIVE = "reset_touch_live"
 SETUP_STAGE_RESET_REBOUNDED_BEFORE_PUBLISH = "reset_rebounded_before_publish"
@@ -114,6 +114,7 @@ BREAKOUT_RESET_PUBLICATION_TIMING_GUARD_ENABLED = str(os.getenv("BREAKOUT_RESET_
 BREAKOUT_RESET_MAX_ENTRY_SLIPPAGE_ATR = float(os.getenv("BREAKOUT_RESET_MAX_ENTRY_SLIPPAGE_ATR", "0.12"))
 BREAKOUT_RESET_MAX_TP1_PROGRESS_BEFORE_PUBLISH = float(os.getenv("BREAKOUT_RESET_MAX_TP1_PROGRESS_BEFORE_PUBLISH", "0.30"))
 BREAKOUT_RESET_MAX_LIVE_RANGE_ATR = float(os.getenv("BREAKOUT_RESET_MAX_LIVE_RANGE_ATR", "1.35"))
+BREAKOUT_RESET_PUBLISH_BEFORE_TOUCH_ENABLED = str(os.getenv("BREAKOUT_RESET_PUBLISH_BEFORE_TOUCH_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _env_float(name: str, default: float) -> float:
@@ -567,6 +568,58 @@ def _select_live_reset_model(
     if near_miss_recorded:
         _record_reject(debug_counts, "breakout_reset_near_miss")
     return None, best_wait_stage
+
+
+def _select_pending_reset_model(
+    quality: Dict[str, float],
+    last: pd.Series,
+    direction: str,
+    atr: float,
+    atr_pct: float,
+    live_price: float,
+    live_high: float,
+    live_low: float,
+    debug_counts: Optional[Dict[str, int]],
+) -> Optional[Dict[str, Any]]:
+    """Select a future reset/entry model before the price touches it.
+
+    This restores the intended signal flow for Breakout + Reset: publish a
+    pending-entry signal while the reset is still ahead of price, then let the
+    normal tracking layer activate it only when the entry zone is touched.
+    """
+    if not BREAKOUT_RESET_PUBLISH_BEFORE_TOUCH_ENABLED:
+        return None
+    best: Optional[Dict[str, Any]] = None
+    best_distance = float("inf")
+    for model in _reset_model_candidates(quality, last, direction, atr):
+        zone = _model_zone(float(model["entry_model_price"]), direction, atr_pct, atr)
+        if not zone:
+            continue
+        stage = _classify_live_reset_state(
+            direction,
+            live_price,
+            float(zone["zone_low"]),
+            float(zone["zone_high"]),
+            candle_high=live_high,
+            candle_low=live_low,
+        )
+        if stage != SETUP_STAGE_PRE_RESET_WAITING_RETEST:
+            continue
+        if str(direction).upper() == "LONG":
+            distance = max(0.0, float(live_price) - float(zone["zone_high"]))
+        else:
+            distance = max(0.0, float(zone["zone_low"]) - float(live_price))
+        if distance < best_distance:
+            payload = dict(zone)
+            payload["reset_model"] = str(model["name"])
+            payload["stage"] = SETUP_STAGE_PRE_RESET_WAITING_RETEST
+            payload["pre_entry_distance_atr"] = round(distance / max(float(atr or 0.0), 1e-9), 4)
+            best = payload
+            best_distance = distance
+    if best is not None:
+        _record_reject(debug_counts, "breakout_preentry_pending_candidate")
+        _record_reject(debug_counts, f"breakout_preentry_model_{best['reset_model']}")
+    return best
 
 
 def _tp1_progress(direction: str, entry_price: float, current_price: float, tp1: float) -> float:
@@ -1740,6 +1793,87 @@ def _evaluate_profile(
         reject_reason = "breakout_waiting_live_reset" if live_stage == SETUP_STAGE_PRE_RESET_WAITING_RETEST else (
             "breakout_reset_rebounded_before_publish" if live_stage == SETUP_STAGE_RESET_REBOUNDED_BEFORE_PUBLISH else "breakout_reset_late"
         )
+        pending_reset = _select_pending_reset_model(
+            quality=quality,
+            last=last,
+            direction=direction,
+            atr=float(last["atr"]),
+            atr_pct=atr_pct,
+            live_price=live_price,
+            live_high=live_high,
+            live_low=live_low,
+            debug_counts=debug_counts,
+        ) if live_stage == SETUP_STAGE_PRE_RESET_WAITING_RETEST else None
+
+        if pending_reset is not None:
+            model_entry_price = float(pending_reset["entry_model_price"])
+            zone_low = float(pending_reset["zone_low"])
+            zone_high = float(pending_reset["zone_high"])
+            base_zone_low = float(pending_reset["base_zone_low"])
+            base_zone_high = float(pending_reset["base_zone_high"])
+            reset_model = str(pending_reset.get("reset_model") or "level")
+            trade_profiles = pending_reset.get("trade_profiles") or _build_trade_profiles(model_entry_price, direction, atr_pct)
+            setup_doc = _persist_waiting_setup(
+                symbol=symbol,
+                direction=direction,
+                profile=profile,
+                quality=quality,
+                entry_price=model_entry_price,
+                zone_low=zone_low,
+                zone_high=zone_high,
+                atr=float(last["atr"]),
+                atr_pct=atr_pct,
+                df=setup_df,
+            )
+            _record_reject(debug_counts, "breakout_setup_armed_waiting_reset")
+            _record_reject(debug_counts, "breakout_signal_pending_entry_candidate")
+            quality["reset_model_" + reset_model] = 1.0
+            quality["reset_model_used"] = 1.0
+            raw_score, raw_components = _compute_raw_score(setup_df, direction, profile, quality)
+            normalized_score, normalized_components = _compute_normalized_score(
+                df=setup_df,
+                direction=direction,
+                setup_group=str(profile["name"]),
+                quality=quality,
+            )
+            return {
+                "direction": direction,
+                "entry_price": round(float(model_entry_price), 4),
+                "raw_score": raw_score,
+                "score": normalized_score,
+                "normalized_score": normalized_score,
+                "raw_components": raw_components,
+                "normalized_components": normalized_components,
+                "components": normalized_components,
+                "trade_profiles": trade_profiles,
+                "setup_group": str(profile["name"]),
+                "atr_pct": round(atr_pct, 6),
+                "score_profile": str(profile["name"]),
+                "score_calibration": SCORE_CALIBRATION_VERSION,
+                "higher_tf_context": higher_tf_context,
+                "send_mode": SEND_MODE_PENDING_ENTRY,
+                "setup_stage": SETUP_STAGE_PRE_RESET_WAITING_RETEST,
+                "entry_model": ENTRY_MODEL_NAME,
+                "entry_model_price": round(float(model_entry_price), 8),
+                "entry_sent_price": round(float(model_entry_price), 8),
+                "reset_zone_low": round(float(zone_low), 8),
+                "reset_zone_high": round(float(zone_high), 8),
+                "reset_base_zone_low": round(float(base_zone_low), 8),
+                "reset_base_zone_high": round(float(base_zone_high), 8),
+                "reset_zone_padding_atr": round(float(BREAKOUT_RESET_RESET_ZONE_PADDING_ATR if BREAKOUT_RESET_ADAPTIVE_RESET_ZONE_ENABLED else 0.0), 4),
+                "reset_model": reset_model,
+                "publication_timing": {
+                    "pre_entry": True,
+                    "pre_entry_distance_atr": float(pending_reset.get("pre_entry_distance_atr", 0.0) or 0.0),
+                },
+                "reset_level": round(float(level), 8),
+                "reset_close_price": round(float(close_price), 8),
+                "signal_reference_price": round(float(live_price), 8),
+                "stateful_setup_id": str((setup_doc or {}).get("setup_id") or quality.get("setup_id") or ""),
+                "stateful_setup_status": "published_waiting_entry",
+                "stateful_setup_age_bars": round(float(quality.get("setup_age_bars", quality.get("breakout_age_bars", 0.0)) or 0.0), 2),
+            }
+
         # Persist with the classic level band as the structural waiting anchor.
         # Multi-reset publication models are recomputed live on every cycle so
         # stored setups do not become stale when EMA20 or extension changes.
@@ -1869,10 +2003,17 @@ def _mark_result_published(result: Optional[Dict], profile_name: str) -> None:
     setup_id = str(result.get("stateful_setup_id") or "").strip()
     if not setup_id:
         return
+    stage = str(result.get("setup_stage") or "")
+    if stage == SETUP_STAGE_PRE_RESET_WAITING_RETEST:
+        status = "published_waiting_entry"
+        reason = "signal_sent_waiting_entry"
+    else:
+        status = "published"
+        reason = "reset_touched"
     breakout_reset_setup_store.mark_setup_status(
         setup_id,
-        "published",
-        "reset_touched",
+        status,
+        reason,
         extra={"published_at": _utcnow_naive(), "published_profile": str(profile_name or "unknown")},
     )
 
