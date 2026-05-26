@@ -1479,10 +1479,15 @@ _BREAKOUT_RESET_FUNNEL_FIELDS = (
     "waiting_live_reset",
     "reset_rebounded_before_publish",
     "reset_late_or_lost",
+    "reset_near_miss",
     "reset_touched_candidates",
     "published_selected",
     "expired_no_reset",
     "invalidated",
+    "invalidated_back_inside",
+    "invalidated_breakout_invalidated",
+    "invalidated_breakout_back_inside",
+    "invalidated_invalid_price",
     "soft_gate_hits",
     "score_floor_rejected",
     "hard_gate_rejected",
@@ -1567,10 +1572,21 @@ def _build_breakout_reset_funnel(
     funnel["waiting_live_reset"] = int(debug.get("breakout_waiting_live_reset", 0) or 0)
     funnel["reset_rebounded_before_publish"] = int(debug.get("breakout_reset_rebounded_before_publish", 0) or 0)
     funnel["reset_late_or_lost"] = int(debug.get("breakout_reset_late", 0) or 0)
+    funnel["reset_near_miss"] = int(debug.get("breakout_reset_near_miss", 0) or 0)
     funnel["reset_touched_candidates"] = int(candidate_pool_by_strategy.get("breakout_reset", 0) or 0)
     funnel["published_selected"] = int(selected_by_strategy.get("breakout_reset", 0) or 0)
     funnel["expired_no_reset"] = int(debug.get("breakout_setup_expired", 0) or 0) + int(debug.get("expired_no_reset", 0) or 0)
-    funnel["invalidated"] = _count_debug_prefix(debug, "stateful_setup_", "breakout_setup_invalidated", "breakout_invalidated", "breakout_drifted_back_inside")
+    funnel["invalidated_back_inside"] = int(debug.get("stateful_setup_back_inside_range", 0) or 0)
+    funnel["invalidated_breakout_invalidated"] = _count_debug_prefix(debug, "breakout_invalidated")
+    funnel["invalidated_breakout_back_inside"] = _count_debug_prefix(debug, "breakout_drifted_back_inside")
+    funnel["invalidated_invalid_price"] = int(debug.get("stateful_setup_invalid_price", 0) or 0)
+    funnel["invalidated"] = (
+        int(funnel["invalidated_back_inside"])
+        + int(funnel["invalidated_breakout_invalidated"])
+        + int(funnel["invalidated_breakout_back_inside"])
+        + int(funnel["invalidated_invalid_price"])
+        + int(debug.get("breakout_setup_invalidated", 0) or 0)
+    )
     funnel["soft_gate_hits"] = _count_debug_prefix(debug, "soft_gate_")
     funnel["score_floor_rejected"] = _count_debug_prefix(debug, "score_floor_")
     funnel["hard_gate_rejected"] = _count_debug_prefix(debug, *_BREAKOUT_RESET_HARD_REJECT_PREFIXES)

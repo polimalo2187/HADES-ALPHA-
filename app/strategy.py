@@ -73,7 +73,7 @@ BREAKOUT_LOOKBACK = 24
 
 MAX_SCORE = 100.0
 FREE_NORMALIZATION_PENALTY = 8.0
-SCORE_CALIBRATION_VERSION = "v16_breakout_reset_soft_gates"
+SCORE_CALIBRATION_VERSION = "v17_adaptive_reset_zone"
 ENTRY_MODEL_NAME = "breakout_reset_first_touch_live_v2"
 SETUP_STAGE_PRE_RESET_WAITING_RETEST = "pre_reset_waiting_retest"
 SETUP_STAGE_RESET_TOUCH_LIVE = "reset_touch_live"
@@ -100,6 +100,10 @@ BREAKOUT_RESET_MIN_OVERSHOOT_HARD_ATR = float(os.getenv("BREAKOUT_RESET_MIN_OVER
 BREAKOUT_RESET_MIN_PRE_RESET_SPACE_HARD_ATR = float(os.getenv("BREAKOUT_RESET_MIN_PRE_RESET_SPACE_HARD_ATR", "0.020"))
 BREAKOUT_RESET_MIN_EXTENSION_HARD_ATR = float(os.getenv("BREAKOUT_RESET_MIN_EXTENSION_HARD_ATR", "0.040"))
 BREAKOUT_RESET_MAX_EXTENSION_HARD_ATR = float(os.getenv("BREAKOUT_RESET_MAX_EXTENSION_HARD_ATR", "1.35"))
+BREAKOUT_RESET_ADAPTIVE_RESET_ZONE_ENABLED = str(os.getenv("BREAKOUT_RESET_ADAPTIVE_RESET_ZONE_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
+BREAKOUT_RESET_RESET_ZONE_PADDING_ATR = float(os.getenv("BREAKOUT_RESET_RESET_ZONE_PADDING_ATR", "0.12"))
+BREAKOUT_RESET_RESET_ZONE_MAX_PADDING_ATR = float(os.getenv("BREAKOUT_RESET_RESET_ZONE_MAX_PADDING_ATR", "0.18"))
+BREAKOUT_RESET_RESET_ZONE_NEAR_MISS_ATR = float(os.getenv("BREAKOUT_RESET_RESET_ZONE_NEAR_MISS_ATR", "0.10"))
 
 
 def _env_float(name: str, default: float) -> float:
@@ -341,6 +345,54 @@ def _calculate_entry_zone(entry: float, stop_loss: float) -> Tuple[float, float]
     low = _round_price_dynamic(entry * (1 - zone_pct))
     high = _round_price_dynamic(entry * (1 + zone_pct))
     return low, high
+
+
+def _expand_reset_zone_with_atr(zone_low: float, zone_high: float, atr: float) -> Tuple[float, float]:
+    """Expand the reset touch band by a bounded ATR padding.
+
+    Breakout resets in fast crypto markets often miss the exact broken level by
+    a few basis points. This keeps the original risk-derived zone as the anchor,
+    but gives the live-touch detector a small, bounded ATR cushion instead of
+    requiring a perfect tick-level retest.
+    """
+    if not BREAKOUT_RESET_ADAPTIVE_RESET_ZONE_ENABLED:
+        return float(zone_low), float(zone_high)
+    try:
+        atr_value = max(float(atr), 0.0)
+    except Exception:
+        atr_value = 0.0
+    if atr_value <= 0:
+        return float(zone_low), float(zone_high)
+    padding_atr = _clamp(
+        float(BREAKOUT_RESET_RESET_ZONE_PADDING_ATR),
+        0.0,
+        max(float(BREAKOUT_RESET_RESET_ZONE_MAX_PADDING_ATR), 0.0),
+    )
+    padding = atr_value * padding_atr
+    if padding <= 0:
+        return float(zone_low), float(zone_high)
+    return _round_price_dynamic(float(zone_low) - padding), _round_price_dynamic(float(zone_high) + padding)
+
+
+def _entry_zone_distance_atr(zone_low: float, zone_high: float, atr: float, candle_high: Optional[float], candle_low: Optional[float]) -> float:
+    """Distance from a candle range to the reset zone, normalized by ATR."""
+    try:
+        atr_value = max(float(atr), 1e-9)
+        high = float(candle_high) if candle_high is not None else float("nan")
+        low = float(candle_low) if candle_low is not None else float("nan")
+    except Exception:
+        return float("inf")
+    if not math.isfinite(high) or not math.isfinite(low):
+        return float("inf")
+    if low <= float(zone_high) and high >= float(zone_low):
+        return 0.0
+    if low > float(zone_high):
+        return max(0.0, low - float(zone_high)) / atr_value
+    return max(0.0, float(zone_low) - high) / atr_value
+
+
+def _is_reset_near_miss(zone_low: float, zone_high: float, atr: float, candle_high: Optional[float], candle_low: Optional[float]) -> bool:
+    return _entry_zone_distance_atr(zone_low, zone_high, atr, candle_high, candle_low) <= max(float(BREAKOUT_RESET_RESET_ZONE_NEAR_MISS_ATR), 0.0)
 
 
 def _candle_touched_entry_zone(zone_low: float, zone_high: float, candle_high: Optional[float], candle_low: Optional[float]) -> bool:
@@ -1463,7 +1515,8 @@ def _evaluate_profile(
         _record_reject(debug_counts, "breakout_trade_profile")
         return None
 
-    zone_low, zone_high = _calculate_entry_zone(model_entry_price, model_stop_loss)
+    base_zone_low, base_zone_high = _calculate_entry_zone(model_entry_price, model_stop_loss)
+    zone_low, zone_high = _expand_reset_zone_with_atr(base_zone_low, base_zone_high, float(last["atr"]))
     live_price = float(reference_market_price or float(live_row.get("close", close_price)) or close_price or model_entry_price)
     live_high = float(live_row.get("high", live_price) or live_price)
     live_low = float(live_row.get("low", live_price) or live_price)
@@ -1479,6 +1532,9 @@ def _evaluate_profile(
         reject_reason = "breakout_waiting_live_reset" if live_stage == SETUP_STAGE_PRE_RESET_WAITING_RETEST else (
             "breakout_reset_rebounded_before_publish" if live_stage == SETUP_STAGE_RESET_REBOUNDED_BEFORE_PUBLISH else "breakout_reset_late"
         )
+        if _is_reset_near_miss(zone_low, zone_high, float(last["atr"]), live_high, live_low):
+            _record_reject(debug_counts, "breakout_reset_near_miss")
+
         if live_stage == SETUP_STAGE_PRE_RESET_WAITING_RETEST:
             _persist_waiting_setup(
                 symbol=symbol,
@@ -1545,6 +1601,9 @@ def _evaluate_profile(
         "entry_sent_price": round(float(entry_price), 8),
         "reset_zone_low": round(float(zone_low), 8),
         "reset_zone_high": round(float(zone_high), 8),
+        "reset_base_zone_low": round(float(base_zone_low), 8),
+        "reset_base_zone_high": round(float(base_zone_high), 8),
+        "reset_zone_padding_atr": round(float(BREAKOUT_RESET_RESET_ZONE_PADDING_ATR if BREAKOUT_RESET_ADAPTIVE_RESET_ZONE_ENABLED else 0.0), 4),
         "reset_level": round(float(level), 8),
         "reset_close_price": round(float(close_price), 8),
         "signal_reference_price": round(float(live_price), 8),
