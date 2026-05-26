@@ -82,3 +82,21 @@ def test_stateful_setup_is_persisted_and_reloaded_from_memory(monkeypatch):
     assert loaded_quality is not None
     assert loaded_quality["level"] == quality["level"]
     assert debug["breakout_stateful_setup_loaded"] if "breakout_stateful_setup_loaded" in debug else True
+
+
+def test_adaptive_reset_zone_expands_base_zone_by_bounded_atr(monkeypatch):
+    monkeypatch.setattr(strategy, "BREAKOUT_RESET_ADAPTIVE_RESET_ZONE_ENABLED", True)
+    monkeypatch.setattr(strategy, "BREAKOUT_RESET_RESET_ZONE_PADDING_ATR", 0.12)
+    monkeypatch.setattr(strategy, "BREAKOUT_RESET_RESET_ZONE_MAX_PADDING_ATR", 0.18)
+
+    low, high = strategy._expand_reset_zone_with_atr(99.90, 100.10, 1.0)
+
+    assert low == 99.78
+    assert high == 100.22
+
+
+def test_reset_near_miss_uses_candle_distance_to_zone(monkeypatch):
+    monkeypatch.setattr(strategy, "BREAKOUT_RESET_RESET_ZONE_NEAR_MISS_ATR", 0.10)
+
+    assert strategy._is_reset_near_miss(99.90, 100.10, 1.0, candle_high=100.25, candle_low=100.21) is False
+    assert strategy._is_reset_near_miss(99.90, 100.10, 1.0, candle_high=100.25, candle_low=100.19) is True
