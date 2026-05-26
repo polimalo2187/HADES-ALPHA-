@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from typing import Optional, Dict, Tuple, List
+from typing import Optional, Dict, Tuple, List, Any
 
+import hashlib
 import math
 import os
+from datetime import datetime, timedelta, timezone
 import pandas as pd
+
+from app import breakout_reset_setup_store
 
 try:
     import ta  # type: ignore
@@ -68,8 +72,8 @@ ATR_PERIOD = 14
 BREAKOUT_LOOKBACK = 24
 
 MAX_SCORE = 100.0
-FREE_NORMALIZATION_PENALTY = 6.0
-SCORE_CALIBRATION_VERSION = "v12_breakout_reset_relaxed_shape_trend_rebalance"
+FREE_NORMALIZATION_PENALTY = 8.0
+SCORE_CALIBRATION_VERSION = "v16_breakout_reset_soft_gates"
 ENTRY_MODEL_NAME = "breakout_reset_first_touch_live_v2"
 SETUP_STAGE_PRE_RESET_WAITING_RETEST = "pre_reset_waiting_retest"
 SETUP_STAGE_RESET_TOUCH_LIVE = "reset_touch_live"
@@ -80,7 +84,22 @@ ENTRY_ZONE_MAX_PCT = float(os.getenv("ENTRY_ZONE_MAX_PCT", "0.0035"))
 ENTRY_ZONE_RISK_FRACTION = float(os.getenv("ENTRY_ZONE_RISK_FRACTION", "0.22"))
 PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "83"))
 PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "76"))
-FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "69"))
+FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "72"))
+BREAKOUT_RESET_RECENT_BARS = int(os.getenv("BREAKOUT_RESET_RECENT_BARS", "6"))
+BREAKOUT_RESET_INVALIDATION_BODY_ATR = float(os.getenv("BREAKOUT_RESET_INVALIDATION_BODY_ATR", "0.20"))
+BREAKOUT_RESET_SETUP_TTL_BARS = int(os.getenv("BREAKOUT_RESET_SETUP_TTL_BARS", "10"))
+BREAKOUT_RESET_SETUP_TTL_MINUTES = int(os.getenv("BREAKOUT_RESET_SETUP_TTL_MINUTES", str(max(30, BREAKOUT_RESET_SETUP_TTL_BARS * 5))))
+BREAKOUT_RESET_STATEFUL_ENABLED = str(os.getenv("BREAKOUT_RESET_STATEFUL_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
+BREAKOUT_RESET_SOFT_GATES_ENABLED = str(os.getenv("BREAKOUT_RESET_SOFT_GATES_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
+BREAKOUT_RESET_HARD_ADX_MIN = float(os.getenv("BREAKOUT_RESET_HARD_ADX_MIN", "8.0"))
+BREAKOUT_RESET_ATR_HARD_MIN_FRACTION = float(os.getenv("BREAKOUT_RESET_ATR_HARD_MIN_FRACTION", "0.55"))
+BREAKOUT_RESET_ATR_HARD_MAX_MULT = float(os.getenv("BREAKOUT_RESET_ATR_HARD_MAX_MULT", "1.35"))
+BREAKOUT_RESET_BREAKOUT_BODY_HARD_FRACTION = float(os.getenv("BREAKOUT_RESET_BREAKOUT_BODY_HARD_FRACTION", "0.55"))
+BREAKOUT_RESET_CONTINUATION_BODY_HARD_FRACTION = float(os.getenv("BREAKOUT_RESET_CONTINUATION_BODY_HARD_FRACTION", "0.55"))
+BREAKOUT_RESET_MIN_OVERSHOOT_HARD_ATR = float(os.getenv("BREAKOUT_RESET_MIN_OVERSHOOT_HARD_ATR", "0.035"))
+BREAKOUT_RESET_MIN_PRE_RESET_SPACE_HARD_ATR = float(os.getenv("BREAKOUT_RESET_MIN_PRE_RESET_SPACE_HARD_ATR", "0.020"))
+BREAKOUT_RESET_MIN_EXTENSION_HARD_ATR = float(os.getenv("BREAKOUT_RESET_MIN_EXTENSION_HARD_ATR", "0.040"))
+BREAKOUT_RESET_MAX_EXTENSION_HARD_ATR = float(os.getenv("BREAKOUT_RESET_MAX_EXTENSION_HARD_ATR", "1.35"))
 
 
 def _env_float(name: str, default: float) -> float:
@@ -251,6 +270,41 @@ def _record_reject(debug_counts: Optional[Dict[str, int]], reason: str) -> None:
     debug_counts[key] = int(debug_counts.get(key, 0)) + 1
 
 
+def _record_soft_gate(debug_counts: Optional[Dict[str, int]], quality: Optional[Dict[str, float]], reason: str) -> None:
+    """Track a quality issue that should reduce score instead of killing the setup.
+
+    Phase 6 explicitly separates safety hard gates from quality gates. The score
+    components already penalize weak ADX/body/volume/extension; this helper makes
+    the penalty observable in the admin/debug funnel without returning None early.
+    """
+    key = str(reason or "soft_gate").strip() or "soft_gate"
+    _record_reject(debug_counts, f"soft_gate_{key}")
+    if quality is not None:
+        quality[f"soft_gate_{key}"] = 1.0
+        quality["soft_gate_count"] = float(quality.get("soft_gate_count", 0.0) or 0.0) + 1.0
+
+
+def _atr_pct_within_hard_safety_band(atr_pct: float, profile: Dict) -> bool:
+    lo = float(profile["atr_pct_min"]) * float(BREAKOUT_RESET_ATR_HARD_MIN_FRACTION)
+    hi = float(profile["atr_pct_max"]) * float(BREAKOUT_RESET_ATR_HARD_MAX_MULT)
+    return lo <= float(atr_pct) <= hi
+
+
+def _continuation_hard_gate(last: pd.Series, direction: str, profile: Dict) -> bool:
+    """Minimal safety gate for the post-breakout candle.
+
+    The old _continuation_ok remains available for compatibility/tests, but the
+    live strategy now lets marginal continuation quality flow into scoring.
+    """
+    if direction == "LONG":
+        if float(last["close"]) <= float(last["open"]):
+            return False
+    else:
+        if float(last["close"]) >= float(last["open"]):
+            return False
+    hard_body_min = float(profile["min_body_ratio_continuation"]) * float(BREAKOUT_RESET_CONTINUATION_BODY_HARD_FRACTION)
+    return float(last["body_ratio"]) >= hard_body_min
+
 
 def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
@@ -371,21 +425,26 @@ def _trend_direction(last: pd.Series) -> Optional[str]:
     if ema20 < ema50 < ema200:
         return "SHORT"
 
-    # Relajación mínima del filtro de estructura:
-    # seguimos exigiendo sesgo de continuación, pero permitimos estados de transición
-    # donde EMA50 todavía va retrasada o EMA20/EMA50 están casi cruzadas.
-    if ema20 > ema50 and close > ema200:
+    # Relajación controlada: permitimos la transición donde EMA20 > EMA50
+    # pero EMA50 aún no superó EMA200, siempre que el precio esté claramente
+    # por encima de EMA200 (sesgo alcista confirmado en largo plazo).
+    # Las condiciones "near cross" (EMA20 ≈ EMA50) han sido eliminadas porque
+    # generaban señales en zonas de transición con win rate inferior al 35%.
+    if ema20 > ema50 and close > ema200 and (close - ema200) > tolerance * 2:
         return "LONG"
-    if ema20 < ema50 and close < ema200:
+    if ema20 < ema50 and close < ema200 and (ema200 - close) > tolerance * 2:
         return "SHORT"
 
-    near_bull_cross = ema20 >= (ema50 - tolerance)
-    near_bear_cross = ema20 <= (ema50 + tolerance)
-
-    if ema20 > ema200 and close > ema50 and near_bull_cross:
+    # Phase 6: allow a narrow EMA20/EMA50 near-cross as a soft continuation
+    # state. This is not a full trend gate bypass: price must already be on the
+    # correct side of EMA50 and EMA200, and the fast/medium separation must be
+    # genuinely tight. Wider disagreement still rejects as trend_structure.
+    near_cross = abs(ema20 - ema50) <= tolerance
+    if near_cross and ema50 > ema200 and close > ema50 and (close - ema200) > tolerance * 2:
         return "LONG"
-    if ema20 < ema200 and close < ema50 and near_bear_cross:
+    if near_cross and ema50 < ema200 and close < ema50 and (ema200 - close) > tolerance * 2:
         return "SHORT"
+
     return None
 
 
@@ -493,10 +552,94 @@ def _higher_tf_short_context_ok(df_15m: pd.DataFrame, df_1h: pd.DataFrame) -> Tu
 
 
 
+def _higher_tf_long_context_ok(df_15m: pd.DataFrame, df_1h: pd.DataFrame) -> Tuple[bool, Dict[str, float]]:
+    """
+    Filtro contextual LIVIANO solo para LONG.
+
+    Veta LONGs en 5M que van claramente contra un contexto superior demasiado
+    bajista. Simétrico a _higher_tf_short_context_ok para mantener coherencia
+    entre direcciones y evitar el sesgo de win rate que tenía LONG (25% WR)
+    por carecer de este filtro.
+    """
+    diag: Dict[str, float] = {}
+
+    if len(df_15m) < 220 or len(df_1h) < 220:
+        return True, {"filter_applied": 0.0, "reason": 0.0}
+
+    df15 = add_indicators(df_15m)
+    df1h = add_indicators(df_1h)
+
+    last15 = df15.iloc[-1]
+    last1h = df1h.iloc[-1]
+
+    if not _indicators_ready(last15) or not _indicators_ready(last1h):
+        return True, {"filter_applied": 0.0, "reason": -1.0}
+
+    dir15 = _trend_direction(last15)
+    dir1h = _trend_direction(last1h)
+    strength15 = _trend_strength_score(last15)
+    strength1h = _trend_strength_score(last1h)
+
+    close15 = float(last15["close"])
+    close1h = float(last1h["close"])
+    ema20_15 = float(last15["ema20"])
+    ema50_15 = float(last15["ema50"])
+    ema20_1h = float(last1h["ema20"])
+    ema50_1h = float(last1h["ema50"])
+
+    below_ema20_15 = 1.0 if close15 < ema20_15 else 0.0
+    below_ema20_1h = 1.0 if close1h < ema20_1h else 0.0
+    bearish_bias_15 = 1.0 if ema20_15 < ema50_15 else 0.0
+    bearish_bias_1h = 1.0 if ema20_1h < ema50_1h else 0.0
+
+    diag = {
+        "filter_applied": 1.0,
+        "dir_15m_short": 1.0 if dir15 == "SHORT" else 0.0,
+        "dir_1h_short": 1.0 if dir1h == "SHORT" else 0.0,
+        "strength_15m": round(float(strength15), 2),
+        "strength_1h": round(float(strength1h), 2),
+        "close_below_ema20_15m": below_ema20_15,
+        "close_below_ema20_1h": below_ema20_1h,
+        "ema20_lt_ema50_15m": bearish_bias_15,
+        "ema20_lt_ema50_1h": bearish_bias_1h,
+    }
+
+    # Veto fuerte: ambos marcos siguen claramente cortos y el precio se
+    # sostiene por debajo de EMA20. El LONG en 5M carecería de follow-through.
+    if (
+        dir15 == "SHORT"
+        and dir1h == "SHORT"
+        and strength15 >= 7.0
+        and strength1h >= 7.0
+        and close15 <= ema20_15
+        and close1h <= ema20_1h
+    ):
+        diag["blocked"] = 1.0
+        diag["block_reason"] = 1.0
+        return False, diag
+
+    # Veto intermedio: el 1H está claramente bajista y el 15M no muestra
+    # fortaleza alcista suficiente. Reduce LONGs correctivos dentro de impulsos bajistas.
+    if (
+        dir1h == "SHORT"
+        and strength1h >= 9.0
+        and close1h <= ema20_1h
+        and bearish_bias_15 == 1.0
+        and below_ema20_15 == 1.0
+    ):
+        diag["blocked"] = 1.0
+        diag["block_reason"] = 2.0
+        return False, diag
+
+    diag["blocked"] = 0.0
+    diag["block_reason"] = 0.0
+    return True, diag
+
+
+
 def _adx_score(adx_value: float, adx_min: float) -> float:
     # Pleno puntaje alrededor de adx_min + 18.
     return _clamp(((adx_value - adx_min) / 18.0) * 16.0, 0.0, 16.0)
-
 
 
 def _atr_score(atr_pct: float, profile: Dict) -> float:
@@ -534,6 +677,260 @@ def _volume_score(last: pd.Series) -> float:
 
 
 
+def _breakout_level_for_candle(df: pd.DataFrame, candle_pos: int, direction: str) -> Optional[float]:
+    """Return the structural level broken by a specific candle.
+
+    The previous implementation always used the last two candles. That made
+    Breakout + Reset behave like a one-snapshot pattern. Here the level belongs
+    to the candle that actually broke structure, so a setup can remain valid for
+    several candles while it waits for the reset.
+    """
+    try:
+        pos = int(candle_pos)
+        if pos <= 0:
+            return None
+        start = max(0, pos - int(BREAKOUT_LOOKBACK))
+        ref = df.iloc[start:pos]
+        if len(ref) < max(8, min(int(BREAKOUT_LOOKBACK), 12)):
+            return None
+        if str(direction).upper() == "LONG":
+            return float(ref["high"].max())
+        return float(ref["low"].min())
+    except Exception:
+        return None
+
+
+def _recent_breakout_candidate_positions(df: pd.DataFrame) -> List[int]:
+    last_pos = len(df) - 1
+    lookback = max(1, int(BREAKOUT_RESET_RECENT_BARS))
+    first_pos = max(int(BREAKOUT_LOOKBACK), last_pos - lookback + 1)
+    if first_pos > last_pos:
+        return []
+    # Newest first: if two breakouts are still alive, the latest structure is
+    # the one whose reset zone should be published.
+    return list(range(last_pos, first_pos - 1, -1))
+
+
+def _post_breakout_invalidated(df: pd.DataFrame, breakout_pos: int, level: float, direction: str, atr: float) -> Tuple[bool, str]:
+    if breakout_pos >= len(df) - 1:
+        return False, ""
+    post = df.iloc[breakout_pos + 1:]
+    body_threshold = max(float(atr) * float(BREAKOUT_RESET_INVALIDATION_BODY_ATR), 1e-9)
+
+    if direction == "LONG":
+        back_inside = post[post["close"].astype(float) < float(level)]
+    else:
+        back_inside = post[post["close"].astype(float) > float(level)]
+
+    if back_inside.empty:
+        return False, ""
+
+    bodies = (back_inside["close"].astype(float) - back_inside["open"].astype(float)).abs()
+    if bool((bodies >= body_threshold).any()):
+        return True, "breakout_invalidated"
+    return True, "breakout_drifted_back_inside"
+
+
+
+
+def _utcnow_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _row_time_value(row: pd.Series) -> Optional[str]:
+    for key in ("close_time", "open_time", "timestamp", "time"):
+        value = row.get(key) if hasattr(row, "get") else None
+        if value is None:
+            continue
+        try:
+            ts = pd.Timestamp(value)
+            if ts.tzinfo is not None:
+                ts = ts.tz_convert("UTC").tz_localize(None)
+            return ts.isoformat()
+        except Exception:
+            return str(value)
+    try:
+        value = row.name
+        if value is not None:
+            ts = pd.Timestamp(value)
+            if ts.tzinfo is not None:
+                ts = ts.tz_convert("UTC").tz_localize(None)
+            return ts.isoformat()
+    except Exception:
+        pass
+    return None
+
+
+def _setup_id(symbol: str, direction: str, level: float, breakout_time: Optional[str], breakout_pos: Optional[int]) -> str:
+    raw = "|".join([
+        str(symbol or "UNKNOWN").upper().strip(),
+        str(direction or "").upper().strip(),
+        f"{float(level):.12f}",
+        str(breakout_time or ""),
+        str(breakout_pos if breakout_pos is not None else ""),
+    ])
+    return "br_" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _quality_from_setup_doc(doc: Dict[str, Any], last: pd.Series) -> Dict[str, float]:
+    quality = dict(doc.get("quality") or {})
+    level = float(doc.get("level") or quality.get("level") or 0.0)
+    atr = max(float(last.get("atr", doc.get("atr", 0.0)) or doc.get("atr", 0.0) or 0.0), 1e-9)
+    reference_price = float(last.get("close", quality.get("reference_price", 0.0)) or 0.0)
+    direction = str(doc.get("direction") or "").upper().strip()
+    if direction == "LONG":
+        current_extension_atr = max(0.0, reference_price - level) / atr
+    else:
+        current_extension_atr = max(0.0, level - reference_price) / atr
+    # Keep the original post-breakout extension for quality scoring. At the live
+    # reset touch the current distance to the level is naturally small; using it
+    # would incorrectly downgrade a valid stateful setup.
+    original_extension_atr = float(quality.get("extension_atr", current_extension_atr) or current_extension_atr)
+    quality.update({
+        "level": level,
+        "reference_price": reference_price,
+        "extension_atr": original_extension_atr,
+        "current_extension_atr": current_extension_atr,
+        "setup_id": str(doc.get("setup_id") or ""),
+        "stateful_setup": 1.0,
+    })
+    return quality
+
+
+def _locate_breakout_position(df: pd.DataFrame, setup_doc: Dict[str, Any]) -> Optional[int]:
+    try:
+        target_time = str(setup_doc.get("breakout_candle_time") or "").strip()
+        if target_time:
+            for pos in range(len(df)):
+                if _row_time_value(df.iloc[pos]) == target_time:
+                    return pos
+        pos_value = setup_doc.get("breakout_candle_pos")
+        if pos_value is not None:
+            pos = int(float(pos_value))
+            if 0 <= pos < len(df):
+                return pos
+    except Exception:
+        return None
+    return None
+
+
+def _setup_age_bars(df: pd.DataFrame, setup_doc: Dict[str, Any]) -> Optional[int]:
+    pos = _locate_breakout_position(df, setup_doc)
+    if pos is None:
+        return None
+    return max(0, (len(df) - 1) - int(pos))
+
+
+def _is_setup_expired(df: pd.DataFrame, setup_doc: Dict[str, Any]) -> bool:
+    age_bars = _setup_age_bars(df, setup_doc)
+    if age_bars is not None and age_bars > int(BREAKOUT_RESET_SETUP_TTL_BARS):
+        return True
+    expires_at = setup_doc.get("expires_at")
+    if expires_at is not None:
+        try:
+            expires_ts = pd.Timestamp(expires_at)
+            now_ts = pd.Timestamp(_utcnow_naive())
+            if expires_ts.tzinfo is not None:
+                expires_ts = expires_ts.tz_convert("UTC").tz_localize(None)
+            return now_ts > expires_ts
+        except Exception:
+            return False
+    return False
+
+
+def _setup_still_structurally_valid(df: pd.DataFrame, setup_doc: Dict[str, Any], last: pd.Series) -> Tuple[bool, str]:
+    direction = str(setup_doc.get("direction") or "").upper().strip()
+    level = float(setup_doc.get("level") or 0.0)
+    atr = max(float(last.get("atr", setup_doc.get("atr", 0.0)) or setup_doc.get("atr", 0.0) or 0.0), 1e-9)
+    close_price = float(last.get("close", 0.0) or 0.0)
+    if level <= 0 or close_price <= 0:
+        return False, "stateful_setup_invalid_price"
+    if direction == "LONG" and close_price <= level:
+        return False, "stateful_setup_back_inside_range"
+    if direction == "SHORT" and close_price >= level:
+        return False, "stateful_setup_back_inside_range"
+    pos = _locate_breakout_position(df, setup_doc)
+    if pos is not None:
+        invalidated, reason = _post_breakout_invalidated(df, pos, level, direction, atr)
+        if invalidated:
+            return False, reason or "stateful_setup_invalidated"
+    return True, ""
+
+
+def _load_stateful_setup(symbol: Optional[str], direction: str, df: pd.DataFrame, profile: Dict, debug_counts: Optional[Dict[str, int]]) -> Tuple[Optional[Dict[str, float]], Optional[Dict[str, Any]]]:
+    if not BREAKOUT_RESET_STATEFUL_ENABLED or not symbol:
+        return None, None
+    last = df.iloc[-1]
+    for setup_doc in breakout_reset_setup_store.find_waiting_setups(str(symbol), direction=direction, limit=5):
+        setup_id = str(setup_doc.get("setup_id") or "")
+        if _is_setup_expired(df, setup_doc):
+            breakout_reset_setup_store.mark_setup_status(setup_id, "expired", "expired_no_reset")
+            _record_reject(debug_counts, "breakout_setup_expired")
+            continue
+        valid, reason = _setup_still_structurally_valid(df, setup_doc, last)
+        if not valid:
+            breakout_reset_setup_store.mark_setup_status(setup_id, "invalidated", reason)
+            _record_reject(debug_counts, reason or "breakout_setup_invalidated")
+            continue
+        quality = _quality_from_setup_doc(setup_doc, last)
+        min_ext = float(profile.get("min_extension_atr", 0.15))
+        max_ext = float(profile.get("max_extension_atr", 0.95))
+        ext = float(quality.get("extension_atr", 0.0) or 0.0)
+        if ext < min_ext or ext > max_ext:
+            # Do not invalidate yet: it may pull back into the usable reset band before TTL.
+            _record_reject(debug_counts, "breakout_stateful_extension_wait")
+        quality["stateful_loaded"] = 1.0
+        quality["setup_age_bars"] = float(_setup_age_bars(df, setup_doc) or quality.get("breakout_age_bars", 0.0) or 0.0)
+        return quality, setup_doc
+    return None, None
+
+
+def _persist_waiting_setup(
+    *,
+    symbol: Optional[str],
+    direction: str,
+    profile: Dict,
+    quality: Dict[str, float],
+    entry_price: float,
+    zone_low: float,
+    zone_high: float,
+    atr: float,
+    atr_pct: float,
+    df: pd.DataFrame,
+) -> Optional[Dict[str, Any]]:
+    if not BREAKOUT_RESET_STATEFUL_ENABLED or not symbol:
+        return None
+    level = float(quality.get("level") or 0.0)
+    breakout_pos_raw = quality.get("breakout_candle_pos")
+    breakout_pos = int(float(breakout_pos_raw)) if breakout_pos_raw is not None else None
+    breakout_time = None
+    if breakout_pos is not None and 0 <= breakout_pos < len(df):
+        breakout_time = _row_time_value(df.iloc[breakout_pos])
+    setup_id = _setup_id(str(symbol), direction, level, breakout_time, breakout_pos)
+    now = _utcnow_naive()
+    expires_at = now + timedelta(minutes=int(BREAKOUT_RESET_SETUP_TTL_MINUTES))
+    payload = {
+        "setup_id": setup_id,
+        "symbol": str(symbol).upper().strip(),
+        "direction": str(direction).upper().strip(),
+        "status": "waiting_reset",
+        "level": level,
+        "entry_model_price": float(entry_price),
+        "zone_low": float(zone_low),
+        "zone_high": float(zone_high),
+        "atr": float(atr),
+        "atr_pct": float(atr_pct),
+        "profile": str(profile.get("name") or "unknown"),
+        "quality": dict(quality),
+        "breakout_candle_pos": breakout_pos,
+        "breakout_candle_time": breakout_time,
+        "expires_at": expires_at,
+        "ttl_bars": int(BREAKOUT_RESET_SETUP_TTL_BARS),
+        "ttl_minutes": int(BREAKOUT_RESET_SETUP_TTL_MINUTES),
+        "strategy_version": SCORE_CALIBRATION_VERSION,
+    }
+    return breakout_reset_setup_store.upsert_waiting_setup(payload)
+
 def _confirm_breakout_prereset(
     df: pd.DataFrame,
     direction: str,
@@ -541,19 +938,25 @@ def _confirm_breakout_prereset(
     reference_market_price: Optional[float],
 ) -> Tuple[bool, Dict[str, float], Optional[str]]:
     """
-    Detecta un breakout ya confirmado y una extensión suficiente para ANTICIPAR
-    el reset futuro.
+    Detect a recent confirmed breakout that is still alive and waiting for a
+    first live reset.
 
-    No buscamos la vela que ya hizo el retest. Buscamos exactamente lo contrario:
-    una estructura que ya rompió y se alejó del nivel, pero que todavía no ha vuelto
-    a tocar la zona donde esperamos el reset.
+    Phase 4 change:
+    - old model: previous candle must be the breakout and the last closed candle
+      must be the continuation candle;
+    - new model: search the last N closed candles for a valid breakout, then
+      verify it has not been invalidated or already reset before publishing.
+
+    This keeps the first-touch safety model, but stops missing valid setups that
+    take 2-6 candles to pull back into the reset zone.
     """
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
+    if len(df) < max(BREAKOUT_LOOKBACK + 3, 32):
+        return False, {}, "insufficient_history"
 
-    level = breakout_level(df, direction)
-    atr = float(last["atr"])
-    setup_reference_price = float(last["close"] or 0.0)
+    direction = str(direction).upper().strip()
+    last = df.iloc[-1]
+    atr = float(last.get("atr", 0.0) or 0.0)
+    setup_reference_price = float(last.get("close", 0.0) or 0.0)
     current_price = float(reference_market_price or setup_reference_price or 0.0)
 
     if atr <= 0 or current_price <= 0 or setup_reference_price <= 0:
@@ -561,63 +964,104 @@ def _confirm_breakout_prereset(
 
     min_ext = float(profile.get("min_extension_atr", 0.15))
     max_ext = float(profile.get("max_extension_atr", 0.95))
+    min_body = float(profile.get("min_body_ratio_breakout", 0.0))
+    min_overshoot_atr = float(profile.get("min_breakout_overshoot_atr", 0.0) or 0.0)
+    min_pre_reset_space_atr = float(profile.get("min_pre_reset_space_atr", 0.0) or 0.0)
 
-    if direction == "LONG":
-        breakout_ok = (
-            float(prev["close"]) > level
-            and float(prev["high"]) > level
-            and float(prev["body_ratio"]) >= float(profile["min_body_ratio_breakout"])
-        )
-        continuation_ok = (
-            float(last["close"]) > float(last["open"])
-            and float(last["close"]) > level
-            and float(last["body_ratio"]) >= float(profile["min_body_ratio_continuation"])
-        )
-        no_reset_yet = float(last["low"]) > level
-        extension_atr = max(0.0, setup_reference_price - level) / atr
-        overshoot_atr = max(0.0, float(prev["close"]) - level) / atr
-    else:
-        breakout_ok = (
-            float(prev["close"]) < level
-            and float(prev["low"]) < level
-            and float(prev["body_ratio"]) >= float(profile["min_body_ratio_breakout"])
-        )
-        continuation_ok = (
-            float(last["close"]) < float(last["open"])
-            and float(last["close"]) < level
-            and float(last["body_ratio"]) >= float(profile["min_body_ratio_continuation"])
-        )
-        no_reset_yet = float(last["high"]) < level
-        extension_atr = max(0.0, level - setup_reference_price) / atr
-        overshoot_atr = max(0.0, level - float(prev["close"])) / atr
-
-    if not breakout_ok or not continuation_ok or not no_reset_yet:
+    positions = _recent_breakout_candidate_positions(df)
+    if not positions:
         return False, {}, "breakout_shape"
 
-    if extension_atr < min_ext or extension_atr > max_ext:
-        return False, {}, "breakout_extension"
+    fallback_reason = "breakout_shape"
 
-    pre_reset_space_atr = float(abs(float(last["low"]) - level) / atr) if direction == "LONG" else float(abs(level - float(last["high"])) / atr)
+    for pos in positions:
+        breakout = df.iloc[pos]
+        level = _breakout_level_for_candle(df, pos, direction)
+        if level is None or not math.isfinite(float(level)):
+            continue
 
-    min_overshoot_atr = float(profile.get("min_breakout_overshoot_atr", 0.0) or 0.0)
-    if overshoot_atr < min_overshoot_atr:
-        return False, {}, "breakout_overshoot"
+        body_ratio = float(breakout.get("body_ratio", 0.0) or 0.0)
+        hard_body_min = min_body * float(BREAKOUT_RESET_BREAKOUT_BODY_HARD_FRACTION)
+        soft_gate_reasons: List[str] = []
+        if body_ratio < hard_body_min:
+            if fallback_reason not in {"breakout_invalidated", "breakout_drifted_back_inside"}:
+                fallback_reason = "breakout_shape"
+            continue
+        if BREAKOUT_RESET_SOFT_GATES_ENABLED and body_ratio < min_body:
+            soft_gate_reasons.append("breakout_body_ratio")
 
-    min_pre_reset_space_atr = float(profile.get("min_pre_reset_space_atr", 0.0) or 0.0)
-    if pre_reset_space_atr < min_pre_reset_space_atr:
-        return False, {}, "reset_freshness"
+        if direction == "LONG":
+            breakout_ok = float(breakout["close"]) > float(level) and float(breakout["high"]) > float(level)
+            overshoot_atr = max(0.0, float(breakout["close"]) - float(level)) / atr
+            extension_atr = max(0.0, setup_reference_price - float(level)) / atr
+            post_window = df.iloc[pos + 1:] if pos < len(df) - 1 else df.iloc[0:0]
+            if not post_window.empty:
+                pre_reset_space_atr = max(0.0, float(post_window["low"].astype(float).min()) - float(level)) / atr
+            else:
+                pre_reset_space_atr = max(0.0, float(breakout["low"]) - float(level)) / atr
+            still_on_breakout_side = setup_reference_price > float(level)
+        else:
+            breakout_ok = float(breakout["close"]) < float(level) and float(breakout["low"]) < float(level)
+            overshoot_atr = max(0.0, float(level) - float(breakout["close"])) / atr
+            extension_atr = max(0.0, float(level) - setup_reference_price) / atr
+            post_window = df.iloc[pos + 1:] if pos < len(df) - 1 else df.iloc[0:0]
+            if not post_window.empty:
+                pre_reset_space_atr = max(0.0, float(level) - float(post_window["high"].astype(float).max())) / atr
+            else:
+                pre_reset_space_atr = max(0.0, float(level) - float(breakout["high"])) / atr
+            still_on_breakout_side = setup_reference_price < float(level)
 
-    quality = {
-        "level": float(level),
-        "breakout_body_ratio": float(prev["body_ratio"]),
-        "continuation_body_ratio": float(last["body_ratio"]),
-        "extension_atr": float(extension_atr),
-        "overshoot_atr": float(overshoot_atr),
-        "reference_price": float(setup_reference_price),
-        "pre_reset_space_atr": pre_reset_space_atr,
-    }
-    return True, quality, None
+        if not breakout_ok or not still_on_breakout_side:
+            if fallback_reason not in {"breakout_invalidated", "breakout_drifted_back_inside", "breakout_overshoot_hard", "breakout_extension_hard", "reset_freshness_hard"}:
+                fallback_reason = "breakout_shape"
+            continue
 
+        invalidated, invalid_reason = _post_breakout_invalidated(df, pos, float(level), direction, atr)
+        if invalidated:
+            fallback_reason = invalid_reason or "breakout_invalidated"
+            continue
+
+        if overshoot_atr < float(BREAKOUT_RESET_MIN_OVERSHOOT_HARD_ATR):
+            if fallback_reason not in {"breakout_invalidated", "breakout_drifted_back_inside"}:
+                fallback_reason = "breakout_overshoot_hard"
+            continue
+        if BREAKOUT_RESET_SOFT_GATES_ENABLED and overshoot_atr < min_overshoot_atr:
+            soft_gate_reasons.append("breakout_overshoot")
+
+        if extension_atr < float(BREAKOUT_RESET_MIN_EXTENSION_HARD_ATR) or extension_atr > float(BREAKOUT_RESET_MAX_EXTENSION_HARD_ATR):
+            if fallback_reason not in {"breakout_invalidated", "breakout_drifted_back_inside"}:
+                fallback_reason = "breakout_extension_hard"
+            continue
+        if BREAKOUT_RESET_SOFT_GATES_ENABLED and (extension_atr < min_ext or extension_atr > max_ext):
+            soft_gate_reasons.append("breakout_extension")
+
+        if pre_reset_space_atr < float(BREAKOUT_RESET_MIN_PRE_RESET_SPACE_HARD_ATR):
+            if fallback_reason not in {"breakout_invalidated", "breakout_drifted_back_inside"}:
+                fallback_reason = "reset_freshness_hard"
+            continue
+        if BREAKOUT_RESET_SOFT_GATES_ENABLED and pre_reset_space_atr < min_pre_reset_space_atr:
+            soft_gate_reasons.append("reset_freshness")
+
+        quality = {
+            "level": float(level),
+            "breakout_body_ratio": float(body_ratio),
+            "continuation_body_ratio": float(last.get("body_ratio", 0.0) or 0.0),
+            "extension_atr": float(extension_atr),
+            "overshoot_atr": float(overshoot_atr),
+            "reference_price": float(setup_reference_price),
+            "pre_reset_space_atr": float(pre_reset_space_atr),
+            "breakout_age_bars": float((len(df) - 1) - pos),
+            "breakout_candle_pos": float(pos),
+            "recent_breakout_window_bars": float(max(1, int(BREAKOUT_RESET_RECENT_BARS))),
+            "post_breakout_bars": float(max(0, (len(df) - 1) - pos)),
+            "breakout_candle_close": float(breakout.get("close", 0.0) or 0.0),
+            "soft_gate_count": float(len(soft_gate_reasons)),
+        }
+        for reason in soft_gate_reasons:
+            quality[f"soft_gate_{reason}"] = 1.0
+        return True, quality, None
+
+    return False, {}, fallback_reason
 
 
 def _relative_volume_ratio(last: pd.Series) -> float:
@@ -832,7 +1276,7 @@ def _build_score_components(
         float(last["atr"]),
     )
 
-    return [
+    components = [
         ("trend_structure", round(trend_points, 2)),
         ("adx_strength", round(adx_points, 2)),
         ("atr_quality", round(atr_points, 2)),
@@ -842,6 +1286,12 @@ def _build_score_components(
         ("volume_quality", round(volume_points, 2)),
         ("entry_freshness", round(entry_points, 2)),
     ]
+
+    soft_gate_count = float(quality.get("soft_gate_count", 0.0) or 0.0)
+    if soft_gate_count > 0:
+        components.append(("soft_gate_penalty", round(-min(10.0, soft_gate_count * 2.0), 2)))
+
+    return components
 
 
 
@@ -917,6 +1367,7 @@ def _evaluate_profile(
     df_1h: Optional[pd.DataFrame] = None,
     reference_market_price: Optional[float] = None,
     debug_counts: Optional[Dict[str, int]] = None,
+    symbol: Optional[str] = None,
 ) -> Optional[Dict]:
     if len(df) < 3:
         _record_reject(debug_counts, 'insufficient_history')
@@ -940,35 +1391,66 @@ def _evaluate_profile(
         return None
 
     higher_tf_context: Dict[str, float] = {}
+    htf_soft_block_reason: Optional[str] = None
     if direction == "SHORT" and df_15m is not None and df_1h is not None:
         higher_tf_ok, higher_tf_context = _higher_tf_short_context_ok(df_15m, df_1h)
         if not higher_tf_ok:
-            _record_reject(debug_counts, "htf_context")
-            return None
+            htf_soft_block_reason = "htf_context"
+            _record_reject(debug_counts, "soft_gate_htf_context")
+
+    if direction == "LONG" and df_15m is not None and df_1h is not None:
+        higher_tf_ok, higher_tf_context = _higher_tf_long_context_ok(df_15m, df_1h)
+        if not higher_tf_ok:
+            htf_soft_block_reason = "htf_context_long"
+            _record_reject(debug_counts, "soft_gate_htf_context_long")
 
     adx_value = float(last["adx"])
-    if adx_value < float(profile["adx_min"]):
-        _record_reject(debug_counts, "adx_strength")
+    if adx_value < float(BREAKOUT_RESET_HARD_ADX_MIN):
+        _record_reject(debug_counts, "adx_strength_hard")
         return None
+    adx_soft = adx_value < float(profile["adx_min"])
+    if adx_soft:
+        _record_reject(debug_counts, "soft_gate_adx_strength")
 
     atr_pct = float(last["atr_pct"])
-    if not (float(profile["atr_pct_min"]) <= atr_pct <= float(profile["atr_pct_max"])):
-        _record_reject(debug_counts, "atr_pct")
+    if not _atr_pct_within_hard_safety_band(atr_pct, profile):
+        _record_reject(debug_counts, "atr_pct_hard")
         return None
+    atr_soft = not (float(profile["atr_pct_min"]) <= atr_pct <= float(profile["atr_pct_max"]))
+    if atr_soft:
+        _record_reject(debug_counts, "soft_gate_atr_pct")
 
-    breakout_ok, quality, breakout_reason = _confirm_breakout_prereset(
-        setup_df,
-        direction,
-        profile,
-        reference_market_price=None,
-    )
-    if not breakout_ok:
-        _record_reject(debug_counts, breakout_reason or "breakout_retest")
-        return None
+    setup_doc: Optional[Dict[str, Any]] = None
+    quality, setup_doc = _load_stateful_setup(symbol, direction, setup_df, profile, debug_counts)
 
-    if not _continuation_ok(last, direction, profile, quality):
-        _record_reject(debug_counts, "continuation_candle")
-        return None
+    if quality is None:
+        breakout_ok, quality, breakout_reason = _confirm_breakout_prereset(
+            setup_df,
+            direction,
+            profile,
+            reference_market_price=None,
+        )
+        if not breakout_ok:
+            _record_reject(debug_counts, breakout_reason or "breakout_retest")
+            return None
+
+        if not _continuation_hard_gate(last, direction, profile):
+            _record_reject(debug_counts, "continuation_candle_hard")
+            return None
+        if not _continuation_ok(last, direction, profile, quality):
+            _record_soft_gate(debug_counts, quality, "continuation_candle")
+    else:
+        _record_reject(debug_counts, "breakout_stateful_setup_loaded")
+
+    if adx_soft:
+        _record_soft_gate(debug_counts, quality, "adx_strength")
+    if atr_soft:
+        _record_soft_gate(debug_counts, quality, "atr_pct")
+    if htf_soft_block_reason:
+        _record_soft_gate(debug_counts, quality, htf_soft_block_reason)
+    for q_key, q_value in list((quality or {}).items()):
+        if str(q_key).startswith("soft_gate_") and float(q_value or 0.0) > 0:
+            _record_reject(debug_counts, str(q_key))
 
     level = float(quality["level"])
     close_price = float(quality.get("reference_price") or last["close"])
@@ -997,11 +1479,41 @@ def _evaluate_profile(
         reject_reason = "breakout_waiting_live_reset" if live_stage == SETUP_STAGE_PRE_RESET_WAITING_RETEST else (
             "breakout_reset_rebounded_before_publish" if live_stage == SETUP_STAGE_RESET_REBOUNDED_BEFORE_PUBLISH else "breakout_reset_late"
         )
+        if live_stage == SETUP_STAGE_PRE_RESET_WAITING_RETEST:
+            _persist_waiting_setup(
+                symbol=symbol,
+                direction=direction,
+                profile=profile,
+                quality=quality,
+                entry_price=model_entry_price,
+                zone_low=zone_low,
+                zone_high=zone_high,
+                atr=float(last["atr"]),
+                atr_pct=atr_pct,
+                df=setup_df,
+            )
+            _record_reject(debug_counts, "breakout_setup_armed_waiting_reset")
+        elif setup_doc is not None:
+            breakout_reset_setup_store.mark_setup_status(str(setup_doc.get("setup_id") or ""), "invalidated", reject_reason)
         _record_reject(debug_counts, reject_reason)
         return None
 
     entry_price = _round_price_dynamic(_clamp(live_price, zone_low, zone_high))
     trade_profiles = _build_trade_profiles(entry_price, direction, atr_pct)
+
+    if setup_doc is None:
+        setup_doc = _persist_waiting_setup(
+            symbol=symbol,
+            direction=direction,
+            profile=profile,
+            quality=quality,
+            entry_price=model_entry_price,
+            zone_low=zone_low,
+            zone_high=zone_high,
+            atr=float(last["atr"]),
+            atr_pct=atr_pct,
+            df=setup_df,
+        )
 
     raw_score, raw_components = _compute_raw_score(setup_df, direction, profile, quality)
     normalized_score, normalized_components = _compute_normalized_score(
@@ -1036,8 +1548,26 @@ def _evaluate_profile(
         "reset_level": round(float(level), 8),
         "reset_close_price": round(float(close_price), 8),
         "signal_reference_price": round(float(live_price), 8),
+        "stateful_setup_id": str((setup_doc or {}).get("setup_id") or quality.get("setup_id") or ""),
+        "stateful_setup_status": "published",
+        "stateful_setup_age_bars": round(float(quality.get("setup_age_bars", quality.get("breakout_age_bars", 0.0)) or 0.0), 2),
     }
 
+
+
+
+def _mark_result_published(result: Optional[Dict], profile_name: str) -> None:
+    if not result:
+        return
+    setup_id = str(result.get("stateful_setup_id") or "").strip()
+    if not setup_id:
+        return
+    breakout_reset_setup_store.mark_setup_status(
+        setup_id,
+        "published",
+        "reset_touched",
+        extra={"published_at": _utcnow_naive(), "published_profile": str(profile_name or "unknown")},
+    )
 
 # =======================================
 # ESTRATEGIA 5M
@@ -1050,6 +1580,7 @@ def mtf_strategy(
     df_5m: pd.DataFrame,
     reference_market_price: Optional[float] = None,
     debug_counts: Optional[Dict[str, int]] = None,
+    symbol: Optional[str] = None,
 ) -> Optional[Dict]:
     # Mantenemos la firma para no romper el scanner actual.
     # La lógica operativa final vive en 5M.
@@ -1071,8 +1602,9 @@ def mtf_strategy(
         return None
 
     # 1) PREMIUM primero: misma estrategia, pero con puertas algo más altas que PLUS.
-    premium_result = _evaluate_profile(df, PREMIUM_PROFILE, df_15m=df_15m, df_1h=df_1h, reference_market_price=reference_market_price, debug_counts=debug_counts)
+    premium_result = _evaluate_profile(df, PREMIUM_PROFILE, df_15m=df_15m, df_1h=df_1h, reference_market_price=reference_market_price, debug_counts=debug_counts, symbol=symbol)
     if premium_result and _passes_profile_score_floor(premium_result, PREMIUM_PROFILE["name"]):
+        _mark_result_published(premium_result, PREMIUM_PROFILE["name"])
         return {
             "direction": premium_result["direction"],
             "entry_price": premium_result["entry_price"],
@@ -1098,11 +1630,15 @@ def mtf_strategy(
             "reset_level": premium_result["reset_level"],
             "reset_close_price": premium_result["reset_close_price"],
             "signal_reference_price": premium_result.get("signal_reference_price"),
+            "stateful_setup_id": premium_result.get("stateful_setup_id"),
+            "stateful_setup_status": premium_result.get("stateful_setup_status"),
+            "stateful_setup_age_bars": premium_result.get("stateful_setup_age_bars"),
         }
 
     # 2) PLUS después: sigue siendo setup bueno, pero algo menos exigente que PREMIUM.
-    plus_result = _evaluate_profile(df, PLUS_PROFILE, df_15m=df_15m, df_1h=df_1h, reference_market_price=reference_market_price, debug_counts=debug_counts)
+    plus_result = _evaluate_profile(df, PLUS_PROFILE, df_15m=df_15m, df_1h=df_1h, reference_market_price=reference_market_price, debug_counts=debug_counts, symbol=symbol)
     if plus_result and _passes_profile_score_floor(plus_result, PLUS_PROFILE["name"]):
+        _mark_result_published(plus_result, PLUS_PROFILE["name"])
         return {
             "direction": plus_result["direction"],
             "entry_price": plus_result["entry_price"],
@@ -1128,11 +1664,15 @@ def mtf_strategy(
             "reset_level": plus_result["reset_level"],
             "reset_close_price": plus_result["reset_close_price"],
             "signal_reference_price": plus_result.get("signal_reference_price"),
+            "stateful_setup_id": plus_result.get("stateful_setup_id"),
+            "stateful_setup_status": plus_result.get("stateful_setup_status"),
+            "stateful_setup_age_bars": plus_result.get("stateful_setup_age_bars"),
         }
 
     # 3) Si no pasa premium/plus, intenta el perfil flexible de FREE.
-    free_result = _evaluate_profile(df, FREE_PROFILE, df_15m=df_15m, df_1h=df_1h, reference_market_price=reference_market_price, debug_counts=debug_counts)
+    free_result = _evaluate_profile(df, FREE_PROFILE, df_15m=df_15m, df_1h=df_1h, reference_market_price=reference_market_price, debug_counts=debug_counts, symbol=symbol)
     if free_result and _passes_profile_score_floor(free_result, FREE_PROFILE["name"]):
+        _mark_result_published(free_result, FREE_PROFILE["name"])
         return {
             "direction": free_result["direction"],
             "entry_price": free_result["entry_price"],
@@ -1158,6 +1698,9 @@ def mtf_strategy(
             "reset_level": free_result["reset_level"],
             "reset_close_price": free_result["reset_close_price"],
             "signal_reference_price": free_result.get("signal_reference_price"),
+            "stateful_setup_id": free_result.get("stateful_setup_id"),
+            "stateful_setup_status": free_result.get("stateful_setup_status"),
+            "stateful_setup_age_bars": free_result.get("stateful_setup_age_bars"),
         }
 
     return None

@@ -73,7 +73,7 @@ BREAKOUT_LOOKBACK = 24
 
 MAX_SCORE = 100.0
 FREE_NORMALIZATION_PENALTY = 8.0
-SCORE_CALIBRATION_VERSION = "v15_breakout_reset_stateful_waiting_reset"
+SCORE_CALIBRATION_VERSION = "v16_breakout_reset_soft_gates"
 ENTRY_MODEL_NAME = "breakout_reset_first_touch_live_v2"
 SETUP_STAGE_PRE_RESET_WAITING_RETEST = "pre_reset_waiting_retest"
 SETUP_STAGE_RESET_TOUCH_LIVE = "reset_touch_live"
@@ -90,6 +90,16 @@ BREAKOUT_RESET_INVALIDATION_BODY_ATR = float(os.getenv("BREAKOUT_RESET_INVALIDAT
 BREAKOUT_RESET_SETUP_TTL_BARS = int(os.getenv("BREAKOUT_RESET_SETUP_TTL_BARS", "10"))
 BREAKOUT_RESET_SETUP_TTL_MINUTES = int(os.getenv("BREAKOUT_RESET_SETUP_TTL_MINUTES", str(max(30, BREAKOUT_RESET_SETUP_TTL_BARS * 5))))
 BREAKOUT_RESET_STATEFUL_ENABLED = str(os.getenv("BREAKOUT_RESET_STATEFUL_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
+BREAKOUT_RESET_SOFT_GATES_ENABLED = str(os.getenv("BREAKOUT_RESET_SOFT_GATES_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
+BREAKOUT_RESET_HARD_ADX_MIN = float(os.getenv("BREAKOUT_RESET_HARD_ADX_MIN", "8.0"))
+BREAKOUT_RESET_ATR_HARD_MIN_FRACTION = float(os.getenv("BREAKOUT_RESET_ATR_HARD_MIN_FRACTION", "0.55"))
+BREAKOUT_RESET_ATR_HARD_MAX_MULT = float(os.getenv("BREAKOUT_RESET_ATR_HARD_MAX_MULT", "1.35"))
+BREAKOUT_RESET_BREAKOUT_BODY_HARD_FRACTION = float(os.getenv("BREAKOUT_RESET_BREAKOUT_BODY_HARD_FRACTION", "0.55"))
+BREAKOUT_RESET_CONTINUATION_BODY_HARD_FRACTION = float(os.getenv("BREAKOUT_RESET_CONTINUATION_BODY_HARD_FRACTION", "0.55"))
+BREAKOUT_RESET_MIN_OVERSHOOT_HARD_ATR = float(os.getenv("BREAKOUT_RESET_MIN_OVERSHOOT_HARD_ATR", "0.035"))
+BREAKOUT_RESET_MIN_PRE_RESET_SPACE_HARD_ATR = float(os.getenv("BREAKOUT_RESET_MIN_PRE_RESET_SPACE_HARD_ATR", "0.020"))
+BREAKOUT_RESET_MIN_EXTENSION_HARD_ATR = float(os.getenv("BREAKOUT_RESET_MIN_EXTENSION_HARD_ATR", "0.040"))
+BREAKOUT_RESET_MAX_EXTENSION_HARD_ATR = float(os.getenv("BREAKOUT_RESET_MAX_EXTENSION_HARD_ATR", "1.35"))
 
 
 def _env_float(name: str, default: float) -> float:
@@ -260,6 +270,41 @@ def _record_reject(debug_counts: Optional[Dict[str, int]], reason: str) -> None:
     debug_counts[key] = int(debug_counts.get(key, 0)) + 1
 
 
+def _record_soft_gate(debug_counts: Optional[Dict[str, int]], quality: Optional[Dict[str, float]], reason: str) -> None:
+    """Track a quality issue that should reduce score instead of killing the setup.
+
+    Phase 6 explicitly separates safety hard gates from quality gates. The score
+    components already penalize weak ADX/body/volume/extension; this helper makes
+    the penalty observable in the admin/debug funnel without returning None early.
+    """
+    key = str(reason or "soft_gate").strip() or "soft_gate"
+    _record_reject(debug_counts, f"soft_gate_{key}")
+    if quality is not None:
+        quality[f"soft_gate_{key}"] = 1.0
+        quality["soft_gate_count"] = float(quality.get("soft_gate_count", 0.0) or 0.0) + 1.0
+
+
+def _atr_pct_within_hard_safety_band(atr_pct: float, profile: Dict) -> bool:
+    lo = float(profile["atr_pct_min"]) * float(BREAKOUT_RESET_ATR_HARD_MIN_FRACTION)
+    hi = float(profile["atr_pct_max"]) * float(BREAKOUT_RESET_ATR_HARD_MAX_MULT)
+    return lo <= float(atr_pct) <= hi
+
+
+def _continuation_hard_gate(last: pd.Series, direction: str, profile: Dict) -> bool:
+    """Minimal safety gate for the post-breakout candle.
+
+    The old _continuation_ok remains available for compatibility/tests, but the
+    live strategy now lets marginal continuation quality flow into scoring.
+    """
+    if direction == "LONG":
+        if float(last["close"]) <= float(last["open"]):
+            return False
+    else:
+        if float(last["close"]) >= float(last["open"]):
+            return False
+    hard_body_min = float(profile["min_body_ratio_continuation"]) * float(BREAKOUT_RESET_CONTINUATION_BODY_HARD_FRACTION)
+    return float(last["body_ratio"]) >= hard_body_min
+
 
 def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
@@ -388,6 +433,16 @@ def _trend_direction(last: pd.Series) -> Optional[str]:
     if ema20 > ema50 and close > ema200 and (close - ema200) > tolerance * 2:
         return "LONG"
     if ema20 < ema50 and close < ema200 and (ema200 - close) > tolerance * 2:
+        return "SHORT"
+
+    # Phase 6: allow a narrow EMA20/EMA50 near-cross as a soft continuation
+    # state. This is not a full trend gate bypass: price must already be on the
+    # correct side of EMA50 and EMA200, and the fast/medium separation must be
+    # genuinely tight. Wider disagreement still rejects as trend_structure.
+    near_cross = abs(ema20 - ema50) <= tolerance
+    if near_cross and ema50 > ema200 and close > ema50 and (close - ema200) > tolerance * 2:
+        return "LONG"
+    if near_cross and ema50 < ema200 and close < ema50 and (ema200 - close) > tolerance * 2:
         return "SHORT"
 
     return None
@@ -926,10 +981,14 @@ def _confirm_breakout_prereset(
             continue
 
         body_ratio = float(breakout.get("body_ratio", 0.0) or 0.0)
-        if body_ratio < min_body:
+        hard_body_min = min_body * float(BREAKOUT_RESET_BREAKOUT_BODY_HARD_FRACTION)
+        soft_gate_reasons: List[str] = []
+        if body_ratio < hard_body_min:
             if fallback_reason not in {"breakout_invalidated", "breakout_drifted_back_inside"}:
                 fallback_reason = "breakout_shape"
             continue
+        if BREAKOUT_RESET_SOFT_GATES_ENABLED and body_ratio < min_body:
+            soft_gate_reasons.append("breakout_body_ratio")
 
         if direction == "LONG":
             breakout_ok = float(breakout["close"]) > float(level) and float(breakout["high"]) > float(level)
@@ -953,7 +1012,7 @@ def _confirm_breakout_prereset(
             still_on_breakout_side = setup_reference_price < float(level)
 
         if not breakout_ok or not still_on_breakout_side:
-            if fallback_reason not in {"breakout_invalidated", "breakout_drifted_back_inside"}:
+            if fallback_reason not in {"breakout_invalidated", "breakout_drifted_back_inside", "breakout_overshoot_hard", "breakout_extension_hard", "reset_freshness_hard"}:
                 fallback_reason = "breakout_shape"
             continue
 
@@ -962,20 +1021,26 @@ def _confirm_breakout_prereset(
             fallback_reason = invalid_reason or "breakout_invalidated"
             continue
 
-        if overshoot_atr < min_overshoot_atr:
+        if overshoot_atr < float(BREAKOUT_RESET_MIN_OVERSHOOT_HARD_ATR):
             if fallback_reason not in {"breakout_invalidated", "breakout_drifted_back_inside"}:
-                fallback_reason = "breakout_overshoot"
+                fallback_reason = "breakout_overshoot_hard"
             continue
+        if BREAKOUT_RESET_SOFT_GATES_ENABLED and overshoot_atr < min_overshoot_atr:
+            soft_gate_reasons.append("breakout_overshoot")
 
-        if extension_atr < min_ext or extension_atr > max_ext:
+        if extension_atr < float(BREAKOUT_RESET_MIN_EXTENSION_HARD_ATR) or extension_atr > float(BREAKOUT_RESET_MAX_EXTENSION_HARD_ATR):
             if fallback_reason not in {"breakout_invalidated", "breakout_drifted_back_inside"}:
-                fallback_reason = "breakout_extension"
+                fallback_reason = "breakout_extension_hard"
             continue
+        if BREAKOUT_RESET_SOFT_GATES_ENABLED and (extension_atr < min_ext or extension_atr > max_ext):
+            soft_gate_reasons.append("breakout_extension")
 
-        if pre_reset_space_atr < min_pre_reset_space_atr:
+        if pre_reset_space_atr < float(BREAKOUT_RESET_MIN_PRE_RESET_SPACE_HARD_ATR):
             if fallback_reason not in {"breakout_invalidated", "breakout_drifted_back_inside"}:
-                fallback_reason = "reset_freshness"
+                fallback_reason = "reset_freshness_hard"
             continue
+        if BREAKOUT_RESET_SOFT_GATES_ENABLED and pre_reset_space_atr < min_pre_reset_space_atr:
+            soft_gate_reasons.append("reset_freshness")
 
         quality = {
             "level": float(level),
@@ -990,7 +1055,10 @@ def _confirm_breakout_prereset(
             "recent_breakout_window_bars": float(max(1, int(BREAKOUT_RESET_RECENT_BARS))),
             "post_breakout_bars": float(max(0, (len(df) - 1) - pos)),
             "breakout_candle_close": float(breakout.get("close", 0.0) or 0.0),
+            "soft_gate_count": float(len(soft_gate_reasons)),
         }
+        for reason in soft_gate_reasons:
+            quality[f"soft_gate_{reason}"] = 1.0
         return True, quality, None
 
     return False, {}, fallback_reason
@@ -1208,7 +1276,7 @@ def _build_score_components(
         float(last["atr"]),
     )
 
-    return [
+    components = [
         ("trend_structure", round(trend_points, 2)),
         ("adx_strength", round(adx_points, 2)),
         ("atr_quality", round(atr_points, 2)),
@@ -1218,6 +1286,12 @@ def _build_score_components(
         ("volume_quality", round(volume_points, 2)),
         ("entry_freshness", round(entry_points, 2)),
     ]
+
+    soft_gate_count = float(quality.get("soft_gate_count", 0.0) or 0.0)
+    if soft_gate_count > 0:
+        components.append(("soft_gate_penalty", round(-min(10.0, soft_gate_count * 2.0), 2)))
+
+    return components
 
 
 
@@ -1317,27 +1391,34 @@ def _evaluate_profile(
         return None
 
     higher_tf_context: Dict[str, float] = {}
+    htf_soft_block_reason: Optional[str] = None
     if direction == "SHORT" and df_15m is not None and df_1h is not None:
         higher_tf_ok, higher_tf_context = _higher_tf_short_context_ok(df_15m, df_1h)
         if not higher_tf_ok:
-            _record_reject(debug_counts, "htf_context")
-            return None
+            htf_soft_block_reason = "htf_context"
+            _record_reject(debug_counts, "soft_gate_htf_context")
 
     if direction == "LONG" and df_15m is not None and df_1h is not None:
         higher_tf_ok, higher_tf_context = _higher_tf_long_context_ok(df_15m, df_1h)
         if not higher_tf_ok:
-            _record_reject(debug_counts, "htf_context_long")
-            return None
+            htf_soft_block_reason = "htf_context_long"
+            _record_reject(debug_counts, "soft_gate_htf_context_long")
 
     adx_value = float(last["adx"])
-    if adx_value < float(profile["adx_min"]):
-        _record_reject(debug_counts, "adx_strength")
+    if adx_value < float(BREAKOUT_RESET_HARD_ADX_MIN):
+        _record_reject(debug_counts, "adx_strength_hard")
         return None
+    adx_soft = adx_value < float(profile["adx_min"])
+    if adx_soft:
+        _record_reject(debug_counts, "soft_gate_adx_strength")
 
     atr_pct = float(last["atr_pct"])
-    if not (float(profile["atr_pct_min"]) <= atr_pct <= float(profile["atr_pct_max"])):
-        _record_reject(debug_counts, "atr_pct")
+    if not _atr_pct_within_hard_safety_band(atr_pct, profile):
+        _record_reject(debug_counts, "atr_pct_hard")
         return None
+    atr_soft = not (float(profile["atr_pct_min"]) <= atr_pct <= float(profile["atr_pct_max"]))
+    if atr_soft:
+        _record_reject(debug_counts, "soft_gate_atr_pct")
 
     setup_doc: Optional[Dict[str, Any]] = None
     quality, setup_doc = _load_stateful_setup(symbol, direction, setup_df, profile, debug_counts)
@@ -1353,12 +1434,23 @@ def _evaluate_profile(
             _record_reject(debug_counts, breakout_reason or "breakout_retest")
             return None
 
-        if not _continuation_ok(last, direction, profile, quality):
-            _record_reject(debug_counts, "continuation_candle")
+        if not _continuation_hard_gate(last, direction, profile):
+            _record_reject(debug_counts, "continuation_candle_hard")
             return None
+        if not _continuation_ok(last, direction, profile, quality):
+            _record_soft_gate(debug_counts, quality, "continuation_candle")
     else:
         _record_reject(debug_counts, "breakout_stateful_setup_loaded")
 
+    if adx_soft:
+        _record_soft_gate(debug_counts, quality, "adx_strength")
+    if atr_soft:
+        _record_soft_gate(debug_counts, quality, "atr_pct")
+    if htf_soft_block_reason:
+        _record_soft_gate(debug_counts, quality, htf_soft_block_reason)
+    for q_key, q_value in list((quality or {}).items()):
+        if str(q_key).startswith("soft_gate_") and float(q_value or 0.0) > 0:
+            _record_reject(debug_counts, str(q_key))
 
     level = float(quality["level"])
     close_price = float(quality.get("reference_price") or last["close"])
