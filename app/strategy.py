@@ -1635,6 +1635,9 @@ def mtf_strategy(
             "stateful_setup_age_bars": premium_result.get("stateful_setup_age_bars"),
         }
 
+    if premium_result:
+        _record_reject(debug_counts, "score_floor_premium")
+
     # 2) PLUS después: sigue siendo setup bueno, pero algo menos exigente que PREMIUM.
     plus_result = _evaluate_profile(df, PLUS_PROFILE, df_15m=df_15m, df_1h=df_1h, reference_market_price=reference_market_price, debug_counts=debug_counts, symbol=symbol)
     if plus_result and _passes_profile_score_floor(plus_result, PLUS_PROFILE["name"]):
@@ -1669,6 +1672,9 @@ def mtf_strategy(
             "stateful_setup_age_bars": plus_result.get("stateful_setup_age_bars"),
         }
 
+    if plus_result:
+        _record_reject(debug_counts, "score_floor_plus")
+
     # 3) Si no pasa premium/plus, intenta el perfil flexible de FREE.
     free_result = _evaluate_profile(df, FREE_PROFILE, df_15m=df_15m, df_1h=df_1h, reference_market_price=reference_market_price, debug_counts=debug_counts, symbol=symbol)
     if free_result and _passes_profile_score_floor(free_result, FREE_PROFILE["name"]):
@@ -1702,5 +1708,8 @@ def mtf_strategy(
             "stateful_setup_status": free_result.get("stateful_setup_status"),
             "stateful_setup_age_bars": free_result.get("stateful_setup_age_bars"),
         }
+
+    if free_result:
+        _record_reject(debug_counts, "score_floor_free")
 
     return None
