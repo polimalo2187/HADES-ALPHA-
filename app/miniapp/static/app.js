@@ -1685,6 +1685,32 @@ function adminRegimeStrategyItem(item = {}) {
   `;
 }
 
+
+function adminBreakoutResetFunnelCard(rows = [], latestRows = []) {
+  const historical = Array.isArray(rows) ? rows : [];
+  const latest = Array.isArray(latestRows) ? latestRows : [];
+  const renderRows = historical.length ? historical : latest;
+  return `
+    <div class="card card-span-12">
+      <div class="item-header">
+        <div>
+          <h2 style="margin:0;">Funnel Breakout + Reset</h2>
+          <div class="item-subtitle">Ciclo de vida interno: router, régimen local, setups armados, reset, publicación, expiración, invalidación y score.</div>
+        </div>
+        <span class="plan-tag">STATEFUL</span>
+      </div>
+      <div class="section-grid" style="margin-top:12px;">
+        ${renderRows.length ? renderRows.map(row => `
+          <div class="card card-span-3 compact-card">
+            <div class="metric-label">${escapeHtml(row.label || row.key || '—')}</div>
+            <div class="metric-value">${escapeHtml(row.count ?? 0)}</div>
+          </div>
+        `).join('') : '<div class="empty-state">Todavía no hay datos del funnel stateful. Aparecerán después del próximo ciclo del scanner.</div>'}
+      </div>
+    </div>
+  `;
+}
+
 function adminLatestCycleCard(latestCycle = {}) {
   if (!latestCycle?.available) {
     return `
@@ -2601,6 +2627,7 @@ function renderAdmin() {
   const strategyRejects = Array.isArray(strategyObservability.reject_reasons_by_strategy) ? strategyObservability.reject_reasons_by_strategy : [];
   const regimeDistribution = Array.isArray(strategyObservability.regime_distribution) ? strategyObservability.regime_distribution : [];
   const regimeStrategyMatrix = Array.isArray(strategyObservability.regime_strategy_matrix) ? strategyObservability.regime_strategy_matrix : [];
+  const breakoutResetFunnelRows = Array.isArray(strategyObservability.breakout_reset_funnel_rows) ? strategyObservability.breakout_reset_funnel_rows : [];
   const latestCycle = strategyObservability.latest_cycle || {};
   const manualActivation = state.adminPanel.manualActivation || {};
   const activationDraft = manualActivation.draft || { userId: '', plan: 'plus', days: '30' };
@@ -2761,6 +2788,8 @@ function renderAdmin() {
       </div>
 
       ${adminLatestCycleCard(latestCycle)}
+
+      ${adminBreakoutResetFunnelCard(breakoutResetFunnelRows, latestCycle.breakout_reset_funnel_rows || [])}
 
       <div class="card card-span-12">
         <h2>Embudo por estrategia (30D)</h2>
