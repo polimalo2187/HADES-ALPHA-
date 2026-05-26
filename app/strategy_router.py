@@ -9,7 +9,7 @@ import pandas as pd
 from app import strategy_breakout_reset as breakout_strategy
 from app import strategy_liquidity_sweep as liquidity_strategy
 
-ROUTER_VERSION = "v2_regime_router_guarded_breakout_fallback"
+ROUTER_VERSION = "v3_symbol_regime_aware_router"
 
 _STRATEGY_MAP = {
     "breakout_reset": breakout_strategy,
@@ -79,6 +79,20 @@ def _risk_severity(snapshot: Dict) -> str:
     return value or "unknown"
 
 
+def _symbol_state(symbol_regime: Optional[Dict]) -> str:
+    return str((symbol_regime or {}).get("state") or "symbol_unknown").strip().lower() or "symbol_unknown"
+
+
+def _symbol_allows_breakout(symbol_regime: Optional[Dict]) -> bool:
+    if not symbol_regime:
+        return True
+    return bool(symbol_regime.get("allow_breakout", True))
+
+
+def _symbol_bias(symbol_regime: Optional[Dict]) -> str:
+    return str((symbol_regime or {}).get("bias") or "neutral").strip().lower() or "neutral"
+
+
 
 def _is_risk_off_hard_block(snapshot: Dict) -> bool:
     severity = _risk_severity(snapshot)
@@ -90,13 +104,20 @@ def _is_risk_off_hard_block(snapshot: Dict) -> bool:
 
 
 
-def select_strategy_name(market_regime: Optional[Dict]) -> str:
+def select_strategy_name(market_regime: Optional[Dict], symbol_regime: Optional[Dict] = None) -> str:
     snapshot = dict(market_regime or {})
     state = _snapshot_state(snapshot)
     explicit_strategy = _explicit_strategy(snapshot)
+    local_state = _symbol_state(symbol_regime)
 
     if state == "risk_off":
         return "risk_off" if _is_risk_off_hard_block(snapshot) else "breakout_reset"
+
+    # Phase 3: the local symbol regime can override BTC/global sweep routing.
+    # A symbol already in clean continuation should let Breakout + Reset compete
+    # instead of being forced into the liquidity-sweep strategy only.
+    if local_state == "symbol_continuation_clean":
+        return "breakout_reset"
 
     if explicit_strategy in _STRATEGY_MAP:
         return explicit_strategy
@@ -140,7 +161,8 @@ def route_candidate(
     df_15m: pd.DataFrame,
     df_5m: Optional[pd.DataFrame],
     market_regime: Optional[Dict],
-    reference_market_price: Optional[float],
+    symbol_regime: Optional[Dict] = None,
+    reference_market_price: Optional[float] = None,
     debug_counts: Optional[Dict[str, int]] = None,
 ) -> Optional[Dict]:
     snapshot = dict(market_regime or {})
@@ -148,8 +170,15 @@ def route_candidate(
     bias = str(snapshot.get("bias") or "neutral").strip().lower()
     reason = str(snapshot.get("reason") or "market_regime_unknown")
     raw_reason = str(snapshot.get("raw_reason") or reason)
-    selected_strategy = select_strategy_name(snapshot)
+    local_regime = dict(symbol_regime or {})
+    local_state = _symbol_state(local_regime)
+    local_bias = _symbol_bias(local_regime)
+    selected_strategy = select_strategy_name(snapshot, local_regime)
     router_override = None
+
+    if selected_strategy == "breakout_reset" and not _symbol_allows_breakout(local_regime):
+        _record_reject(debug_counts, f"symbol_regime_block_{local_state}")
+        return None
 
     if selected_strategy == "risk_off":
         _record_reject(debug_counts, "market_regime_risk_off_hard_block")
@@ -158,6 +187,10 @@ def route_candidate(
     if state == "risk_off" and selected_strategy == "breakout_reset":
         router_override = "risk_off_breakout_reset_guarded_override"
         _record_reject(debug_counts, "router_risk_off_breakout_reset_override")
+
+    if state == "sweep_reversal" and selected_strategy == "breakout_reset" and local_state == "symbol_continuation_clean":
+        router_override = "symbol_continuation_breakout_override"
+        _record_reject(debug_counts, "router_symbol_continuation_breakout_override")
 
     result, strategy_name, strategy_module = _call_strategy(
         selected_strategy,
@@ -201,6 +234,12 @@ def route_candidate(
     enriched["regime_risk_severity"] = _risk_severity(snapshot)
     enriched["regime_strategy_selected"] = strategy_name
     enriched["regime_strategy_requested"] = selected_strategy
+    enriched["symbol_regime_state"] = local_state
+    enriched["symbol_regime_bias"] = local_bias
+    enriched["symbol_regime_reason"] = str(local_regime.get("reason") or "symbol_regime_unknown")
+    enriched["symbol_regime_score"] = int(local_regime.get("score") or 0)
+    enriched["symbol_regime_version"] = str(local_regime.get("version") or "unknown")
+    enriched["symbol_regime_metrics"] = dict(local_regime.get("metrics") or {})
     enriched["router_override"] = router_override
     enriched["router_fallback_from"] = fallback_from
     enriched["router_policy"] = "guarded_breakout_fallback"

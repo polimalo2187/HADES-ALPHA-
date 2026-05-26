@@ -21,7 +21,7 @@ from app.plans import PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM
 from app.signals import create_base_signal
 from app.observability import heartbeat
 from app.models import new_scanner_cycle_stat
-from app import regime_engine, strategy_router
+from app import regime_engine, strategy_router, symbol_regime as symbol_regime_engine
 from app import strategy as strategy_engine
 
 logger = logging.getLogger(__name__)
@@ -579,12 +579,17 @@ def route_symbol_candidate(
     except Exception:
         reference_price = None
 
+    symbol_regime = symbol_regime_engine.classify_symbol_regime(df_5m, closed_15m, symbol=symbol)
+    if debug_counts is not None:
+        debug_counts[f"symbol_regime_{symbol_regime.get('state', 'symbol_unknown')}"] = int(debug_counts.get(f"symbol_regime_{symbol_regime.get('state', 'symbol_unknown')}", 0)) + 1
+
     result = strategy_router.route_candidate(
         symbol=symbol,
         df_1h=closed_1h,
         df_15m=closed_15m,
         df_5m=df_5m,
         market_regime=market_regime,
+        symbol_regime=symbol_regime,
         reference_market_price=reference_price,
         debug_counts=debug_counts,
     )
