@@ -23,6 +23,7 @@ class ScannerStrategyObservabilityTests(unittest.TestCase):
                 'selected_by_strategy': {'breakout_reset': 1},
                 'rejected_by_strategy': {'breakout_reset': 45},
                 'reject_reasons_by_strategy': {'breakout_reset': {'trend_structure': 20, 'continuation_candle': 10}},
+                'breakout_reset_funnel': {'router_allowed_attempts': 48, 'setup_armed_waiting_reset': 4, 'reset_touched_candidates': 3, 'published_selected': 1, 'score_floor_rejected': 2},
             },
             {
                 'cycle_started_at': datetime(2026, 4, 20, 10, 1, 0),
@@ -38,6 +39,7 @@ class ScannerStrategyObservabilityTests(unittest.TestCase):
                 'selected_by_strategy': {'liquidity_sweep_reversal': 2},
                 'rejected_by_strategy': {'liquidity_sweep_reversal': 43},
                 'reject_reasons_by_strategy': {'liquidity_sweep_reversal': {'liquidity_confirmation': 12}},
+                'breakout_reset_funnel': {'router_allowed_attempts': 0, 'setup_armed_waiting_reset': 1},
             },
         ]
         latest_cycle = {
@@ -67,6 +69,10 @@ class ScannerStrategyObservabilityTests(unittest.TestCase):
         self.assertIn(('continuation_clean', 'breakout_reset'), matrix_keys)
         self.assertIn(('sweep_reversal', 'liquidity_sweep_reversal'), matrix_keys)
         self.assertEqual(payload['latest_cycle']['cycle_number'], 501)
+        self.assertEqual(payload['breakout_reset_funnel']['router_allowed_attempts'], 48)
+        self.assertEqual(payload['breakout_reset_funnel']['setup_armed_waiting_reset'], 5)
+        labels = {row['key']: row['label'] for row in payload['breakout_reset_funnel_rows']}
+        self.assertIn('setup_armed_waiting_reset', labels)
 
 
 if __name__ == '__main__':
