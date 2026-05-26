@@ -73,8 +73,8 @@ BREAKOUT_LOOKBACK = 24
 
 MAX_SCORE = 100.0
 FREE_NORMALIZATION_PENALTY = 8.0
-SCORE_CALIBRATION_VERSION = "v17_adaptive_reset_zone"
-ENTRY_MODEL_NAME = "breakout_reset_first_touch_live_v2"
+SCORE_CALIBRATION_VERSION = "v18_multi_reset_timing_guard"
+ENTRY_MODEL_NAME = "breakout_reset_multi_model_timing_guard_v1"
 SETUP_STAGE_PRE_RESET_WAITING_RETEST = "pre_reset_waiting_retest"
 SETUP_STAGE_RESET_TOUCH_LIVE = "reset_touch_live"
 SETUP_STAGE_RESET_REBOUNDED_BEFORE_PUBLISH = "reset_rebounded_before_publish"
@@ -104,6 +104,16 @@ BREAKOUT_RESET_ADAPTIVE_RESET_ZONE_ENABLED = str(os.getenv("BREAKOUT_RESET_ADAPT
 BREAKOUT_RESET_RESET_ZONE_PADDING_ATR = float(os.getenv("BREAKOUT_RESET_RESET_ZONE_PADDING_ATR", "0.12"))
 BREAKOUT_RESET_RESET_ZONE_MAX_PADDING_ATR = float(os.getenv("BREAKOUT_RESET_RESET_ZONE_MAX_PADDING_ATR", "0.18"))
 BREAKOUT_RESET_RESET_ZONE_NEAR_MISS_ATR = float(os.getenv("BREAKOUT_RESET_RESET_ZONE_NEAR_MISS_ATR", "0.10"))
+BREAKOUT_RESET_MULTI_RESET_ENABLED = str(os.getenv("BREAKOUT_RESET_MULTI_RESET_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
+BREAKOUT_RESET_ALLOW_EMA20_RESET = str(os.getenv("BREAKOUT_RESET_ALLOW_EMA20_RESET", "true")).strip().lower() in {"1", "true", "yes", "on"}
+BREAKOUT_RESET_ALLOW_MIDPOINT_RESET = str(os.getenv("BREAKOUT_RESET_ALLOW_MIDPOINT_RESET", "true")).strip().lower() in {"1", "true", "yes", "on"}
+BREAKOUT_RESET_ALLOW_SHALLOW_RESET = str(os.getenv("BREAKOUT_RESET_ALLOW_SHALLOW_RESET", "true")).strip().lower() in {"1", "true", "yes", "on"}
+BREAKOUT_RESET_SHALLOW_MIN_ATR = float(os.getenv("BREAKOUT_RESET_SHALLOW_MIN_ATR", "0.16"))
+BREAKOUT_RESET_SHALLOW_MAX_ATR = float(os.getenv("BREAKOUT_RESET_SHALLOW_MAX_ATR", "0.42"))
+BREAKOUT_RESET_PUBLICATION_TIMING_GUARD_ENABLED = str(os.getenv("BREAKOUT_RESET_PUBLICATION_TIMING_GUARD_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
+BREAKOUT_RESET_MAX_ENTRY_SLIPPAGE_ATR = float(os.getenv("BREAKOUT_RESET_MAX_ENTRY_SLIPPAGE_ATR", "0.12"))
+BREAKOUT_RESET_MAX_TP1_PROGRESS_BEFORE_PUBLISH = float(os.getenv("BREAKOUT_RESET_MAX_TP1_PROGRESS_BEFORE_PUBLISH", "0.30"))
+BREAKOUT_RESET_MAX_LIVE_RANGE_ATR = float(os.getenv("BREAKOUT_RESET_MAX_LIVE_RANGE_ATR", "1.35"))
 
 
 def _env_float(name: str, default: float) -> float:
@@ -426,6 +436,207 @@ def _classify_live_reset_state(
     if current_price < zone_low:
         return SETUP_STAGE_PRE_RESET_WAITING_RETEST if not touched_zone else SETUP_STAGE_RESET_REBOUNDED_BEFORE_PUBLISH
     return "reset_late_or_lost"
+
+
+def _valid_reset_anchor(anchor: Optional[float], direction: str, level: float, reference_price: float) -> bool:
+    try:
+        value = float(anchor)
+        level = float(level)
+        reference_price = float(reference_price)
+    except Exception:
+        return False
+    if not math.isfinite(value) or value <= 0:
+        return False
+    # Reset anchors must remain on the breakout side of the broken level and not
+    # beyond the current reference extension. Otherwise they are either invalid
+    # retests or late chase entries.
+    if str(direction).upper() == "LONG":
+        return level <= value <= max(reference_price, level)
+    return min(reference_price, level) <= value <= level
+
+
+def _reset_model_candidates(quality: Dict[str, float], last: pd.Series, direction: str, atr: float) -> List[Dict[str, float]]:
+    """Build executable reset models without allowing late chase entries.
+
+    Models are evaluated in priority order. The classic broken-level retest is
+    still preferred, but strong continuations may reset on EMA20, the breakout
+    body midpoint, or a shallow ATR pullback. Every model is later protected by
+    the publication timing guard, so additional models cannot publish a signal
+    that already ran toward TP1.
+    """
+    direction = str(direction).upper().strip()
+    level = float(quality.get("level") or 0.0)
+    reference_price = float(quality.get("reference_price") or last.get("close", 0.0) or 0.0)
+    atr_value = max(float(atr or 0.0), 1e-9)
+    models: List[Dict[str, float]] = []
+
+    def add_model(name: str, anchor: Optional[float]) -> None:
+        if not _valid_reset_anchor(anchor, direction, level, reference_price):
+            return
+        rounded = _round_price_dynamic(float(anchor))
+        for existing in models:
+            if abs(float(existing["entry_model_price"]) - rounded) <= atr_value * 0.015:
+                return
+        models.append({"name": name, "entry_model_price": rounded})
+
+    add_model("level", _reset_entry_price(level, last, direction))
+
+    if BREAKOUT_RESET_MULTI_RESET_ENABLED and BREAKOUT_RESET_ALLOW_EMA20_RESET:
+        add_model("ema20", float(last.get("ema20", 0.0) or 0.0))
+
+    if BREAKOUT_RESET_MULTI_RESET_ENABLED and BREAKOUT_RESET_ALLOW_MIDPOINT_RESET:
+        bo = quality.get("breakout_candle_open")
+        bc = quality.get("breakout_candle_close")
+        if bo is not None and bc is not None:
+            add_model("midpoint", (float(bo) + float(bc)) / 2.0)
+
+    if BREAKOUT_RESET_MULTI_RESET_ENABLED and BREAKOUT_RESET_ALLOW_SHALLOW_RESET:
+        current_extension = float(quality.get("current_extension_atr", quality.get("extension_atr", 0.0)) or 0.0)
+        shallow_atr = _clamp(
+            current_extension * 0.45,
+            max(float(BREAKOUT_RESET_SHALLOW_MIN_ATR), 0.0),
+            max(float(BREAKOUT_RESET_SHALLOW_MAX_ATR), float(BREAKOUT_RESET_SHALLOW_MIN_ATR)),
+        )
+        if direction == "LONG":
+            add_model("shallow", level + (atr_value * shallow_atr))
+        else:
+            add_model("shallow", level - (atr_value * shallow_atr))
+
+    return models
+
+
+def _model_zone(entry_model_price: float, direction: str, atr_pct: float, atr: float) -> Dict[str, float]:
+    trade_profiles = _build_trade_profiles(float(entry_model_price), direction, atr_pct)
+    conservative = trade_profiles.get("conservador") or {}
+    stop_loss = float(conservative.get("stop_loss") or 0.0)
+    if stop_loss <= 0:
+        return {}
+    base_low, base_high = _calculate_entry_zone(float(entry_model_price), stop_loss)
+    zone_low, zone_high = _expand_reset_zone_with_atr(base_low, base_high, atr)
+    return {
+        "entry_model_price": float(entry_model_price),
+        "stop_loss": stop_loss,
+        "base_zone_low": float(base_low),
+        "base_zone_high": float(base_high),
+        "zone_low": float(zone_low),
+        "zone_high": float(zone_high),
+        "trade_profiles": trade_profiles,
+    }
+
+
+def _select_live_reset_model(
+    quality: Dict[str, float],
+    last: pd.Series,
+    direction: str,
+    atr: float,
+    atr_pct: float,
+    live_price: float,
+    live_high: float,
+    live_low: float,
+    debug_counts: Optional[Dict[str, int]],
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    best_wait_stage = SETUP_STAGE_PRE_RESET_WAITING_RETEST
+    near_miss_recorded = False
+    for model in _reset_model_candidates(quality, last, direction, atr):
+        zone = _model_zone(float(model["entry_model_price"]), direction, atr_pct, atr)
+        if not zone:
+            continue
+        stage = _classify_live_reset_state(
+            direction,
+            live_price,
+            float(zone["zone_low"]),
+            float(zone["zone_high"]),
+            candle_high=live_high,
+            candle_low=live_low,
+        )
+        if stage == SETUP_STAGE_RESET_TOUCH_LIVE:
+            _record_reject(debug_counts, "breakout_reset_touch_live")
+            _record_reject(debug_counts, f"breakout_reset_model_{model['name']}")
+            payload = dict(zone)
+            payload["reset_model"] = str(model["name"])
+            payload["stage"] = stage
+            return payload, stage
+        if _is_reset_near_miss(float(zone["zone_low"]), float(zone["zone_high"]), atr, live_high, live_low):
+            near_miss_recorded = True
+            _record_reject(debug_counts, f"breakout_reset_near_miss_{model['name']}")
+        if stage == SETUP_STAGE_RESET_REBOUNDED_BEFORE_PUBLISH:
+            best_wait_stage = SETUP_STAGE_RESET_REBOUNDED_BEFORE_PUBLISH
+        elif stage == "reset_late_or_lost" and best_wait_stage != SETUP_STAGE_RESET_REBOUNDED_BEFORE_PUBLISH:
+            best_wait_stage = "reset_late_or_lost"
+
+    if near_miss_recorded:
+        _record_reject(debug_counts, "breakout_reset_near_miss")
+    return None, best_wait_stage
+
+
+def _tp1_progress(direction: str, entry_price: float, current_price: float, tp1: float) -> float:
+    direction = str(direction).upper().strip()
+    entry_price = float(entry_price)
+    current_price = float(current_price)
+    tp1 = float(tp1)
+    if direction == "LONG":
+        distance = max(tp1 - entry_price, 1e-9)
+        return max(0.0, current_price - entry_price) / distance
+    distance = max(entry_price - tp1, 1e-9)
+    return max(0.0, entry_price - current_price) / distance
+
+
+def _publication_timing_guard(
+    *,
+    direction: str,
+    live_price: float,
+    live_high: float,
+    live_low: float,
+    entry_model_price: float,
+    entry_price: float,
+    atr: float,
+    trade_profiles: Dict[str, Dict],
+    debug_counts: Optional[Dict[str, int]],
+) -> Tuple[bool, str, Dict[str, float]]:
+    if not BREAKOUT_RESET_PUBLICATION_TIMING_GUARD_ENABLED:
+        return True, "", {}
+    atr_value = max(float(atr or 0.0), 1e-9)
+    conservative = trade_profiles.get("conservador") or {}
+    tps = conservative.get("take_profits") or []
+    if not tps:
+        _record_reject(debug_counts, "publication_timing_missing_tp1")
+        return False, "publication_timing_missing_tp1", {}
+    tp1 = float(tps[0])
+    stop_loss = float(conservative.get("stop_loss") or 0.0)
+    direction = str(direction).upper().strip()
+    slippage_atr = abs(float(live_price) - float(entry_model_price)) / atr_value
+    progress = _tp1_progress(direction, float(entry_price), float(live_price), tp1)
+    live_range_atr = max(0.0, float(live_high) - float(live_low)) / atr_value
+    diagnostics = {
+        "entry_slippage_atr": round(slippage_atr, 4),
+        "tp1_progress": round(progress, 4),
+        "live_range_atr": round(live_range_atr, 4),
+    }
+
+    if slippage_atr > max(float(BREAKOUT_RESET_MAX_ENTRY_SLIPPAGE_ATR), 0.0):
+        _record_reject(debug_counts, "publication_timing_entry_slippage")
+        return False, "publication_timing_entry_slippage", diagnostics
+    if progress > max(float(BREAKOUT_RESET_MAX_TP1_PROGRESS_BEFORE_PUBLISH), 0.0):
+        _record_reject(debug_counts, "publication_timing_tp1_progress")
+        return False, "publication_timing_tp1_progress", diagnostics
+    if live_range_atr > max(float(BREAKOUT_RESET_MAX_LIVE_RANGE_ATR), 0.0):
+        _record_reject(debug_counts, "publication_timing_live_range_extended")
+        return False, "publication_timing_live_range_extended", diagnostics
+    if direction == "LONG":
+        if float(live_high) >= tp1:
+            _record_reject(debug_counts, "publication_timing_tp1_already_touched")
+            return False, "publication_timing_tp1_already_touched", diagnostics
+        if stop_loss > 0 and float(live_low) <= stop_loss:
+            _record_reject(debug_counts, "publication_timing_sl_already_touched")
+            return False, "publication_timing_sl_already_touched", diagnostics
+    else:
+        if float(live_low) <= tp1:
+            _record_reject(debug_counts, "publication_timing_tp1_already_touched")
+            return False, "publication_timing_tp1_already_touched", diagnostics
+        if stop_loss > 0 and float(live_high) >= stop_loss:
+            _record_reject(debug_counts, "publication_timing_sl_already_touched")
+            return False, "publication_timing_sl_already_touched", diagnostics
+    return True, "", diagnostics
 
 
 def _round_price_dynamic(value: float) -> float:
@@ -1106,6 +1317,9 @@ def _confirm_breakout_prereset(
             "breakout_candle_pos": float(pos),
             "recent_breakout_window_bars": float(max(1, int(BREAKOUT_RESET_RECENT_BARS))),
             "post_breakout_bars": float(max(0, (len(df) - 1) - pos)),
+            "breakout_candle_open": float(breakout.get("open", 0.0) or 0.0),
+            "breakout_candle_high": float(breakout.get("high", 0.0) or 0.0),
+            "breakout_candle_low": float(breakout.get("low", 0.0) or 0.0),
             "breakout_candle_close": float(breakout.get("close", 0.0) or 0.0),
             "soft_gate_count": float(len(soft_gate_reasons)),
         }
@@ -1507,34 +1721,37 @@ def _evaluate_profile(
     level = float(quality["level"])
     close_price = float(quality.get("reference_price") or last["close"])
 
-    model_entry_price = _reset_entry_price(level, last, direction)
-    model_trade_profiles = _build_trade_profiles(model_entry_price, direction, atr_pct)
-    model_conservative = model_trade_profiles.get("conservador") or {}
-    model_stop_loss = float(model_conservative.get("stop_loss") or 0.0)
-    if model_stop_loss <= 0:
-        _record_reject(debug_counts, "breakout_trade_profile")
-        return None
-
-    base_zone_low, base_zone_high = _calculate_entry_zone(model_entry_price, model_stop_loss)
-    zone_low, zone_high = _expand_reset_zone_with_atr(base_zone_low, base_zone_high, float(last["atr"]))
-    live_price = float(reference_market_price or float(live_row.get("close", close_price)) or close_price or model_entry_price)
+    live_price = float(reference_market_price or float(live_row.get("close", close_price)) or close_price or level)
     live_high = float(live_row.get("high", live_price) or live_price)
     live_low = float(live_row.get("low", live_price) or live_price)
-    live_stage = _classify_live_reset_state(
-        direction,
-        live_price,
-        zone_low,
-        zone_high,
-        candle_high=live_high,
-        candle_low=live_low,
+    selected_reset, live_stage = _select_live_reset_model(
+        quality=quality,
+        last=last,
+        direction=direction,
+        atr=float(last["atr"]),
+        atr_pct=atr_pct,
+        live_price=live_price,
+        live_high=live_high,
+        live_low=live_low,
+        debug_counts=debug_counts,
     )
-    if live_stage != SETUP_STAGE_RESET_TOUCH_LIVE:
+
+    if selected_reset is None:
         reject_reason = "breakout_waiting_live_reset" if live_stage == SETUP_STAGE_PRE_RESET_WAITING_RETEST else (
             "breakout_reset_rebounded_before_publish" if live_stage == SETUP_STAGE_RESET_REBOUNDED_BEFORE_PUBLISH else "breakout_reset_late"
         )
-        if _is_reset_near_miss(zone_low, zone_high, float(last["atr"]), live_high, live_low):
-            _record_reject(debug_counts, "breakout_reset_near_miss")
-
+        # Persist with the classic level band as the structural waiting anchor.
+        # Multi-reset publication models are recomputed live on every cycle so
+        # stored setups do not become stale when EMA20 or extension changes.
+        model_entry_price = _reset_entry_price(level, last, direction)
+        model_trade_profiles = _build_trade_profiles(model_entry_price, direction, atr_pct)
+        model_conservative = model_trade_profiles.get("conservador") or {}
+        model_stop_loss = float(model_conservative.get("stop_loss") or 0.0)
+        if model_stop_loss <= 0:
+            _record_reject(debug_counts, "breakout_trade_profile")
+            return None
+        base_zone_low, base_zone_high = _calculate_entry_zone(model_entry_price, model_stop_loss)
+        zone_low, zone_high = _expand_reset_zone_with_atr(base_zone_low, base_zone_high, float(last["atr"]))
         if live_stage == SETUP_STAGE_PRE_RESET_WAITING_RETEST:
             _persist_waiting_setup(
                 symbol=symbol,
@@ -1554,8 +1771,37 @@ def _evaluate_profile(
         _record_reject(debug_counts, reject_reason)
         return None
 
+    model_entry_price = float(selected_reset["entry_model_price"])
+    zone_low = float(selected_reset["zone_low"])
+    zone_high = float(selected_reset["zone_high"])
+    base_zone_low = float(selected_reset["base_zone_low"])
+    base_zone_high = float(selected_reset["base_zone_high"])
+    reset_model = str(selected_reset.get("reset_model") or "level")
     entry_price = _round_price_dynamic(_clamp(live_price, zone_low, zone_high))
     trade_profiles = _build_trade_profiles(entry_price, direction, atr_pct)
+
+    timing_ok, timing_reason, timing_diag = _publication_timing_guard(
+        direction=direction,
+        live_price=live_price,
+        live_high=live_high,
+        live_low=live_low,
+        entry_model_price=model_entry_price,
+        entry_price=entry_price,
+        atr=float(last["atr"]),
+        trade_profiles=trade_profiles,
+        debug_counts=debug_counts,
+    )
+    if not timing_ok:
+        _record_reject(debug_counts, "publication_timing_rejected")
+        if setup_doc is not None:
+            # Do not mark the setup invalidated: a late/unsafe touch is not the
+            # same as structural failure. Keep waiting until TTL unless price
+            # actually breaks the setup rules.
+            _record_reject(debug_counts, "breakout_setup_kept_after_timing_reject")
+        return None
+
+    quality["reset_model_" + reset_model] = 1.0
+    quality["reset_model_used"] = 1.0
 
     if setup_doc is None:
         setup_doc = _persist_waiting_setup(
@@ -1604,6 +1850,8 @@ def _evaluate_profile(
         "reset_base_zone_low": round(float(base_zone_low), 8),
         "reset_base_zone_high": round(float(base_zone_high), 8),
         "reset_zone_padding_atr": round(float(BREAKOUT_RESET_RESET_ZONE_PADDING_ATR if BREAKOUT_RESET_ADAPTIVE_RESET_ZONE_ENABLED else 0.0), 4),
+        "reset_model": reset_model,
+        "publication_timing": timing_diag,
         "reset_level": round(float(level), 8),
         "reset_close_price": round(float(close_price), 8),
         "signal_reference_price": round(float(live_price), 8),

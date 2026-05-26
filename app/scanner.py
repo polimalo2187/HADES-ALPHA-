@@ -1480,6 +1480,17 @@ _BREAKOUT_RESET_FUNNEL_FIELDS = (
     "reset_rebounded_before_publish",
     "reset_late_or_lost",
     "reset_near_miss",
+    "reset_touch_live",
+    "reset_model_level",
+    "reset_model_ema20",
+    "reset_model_midpoint",
+    "reset_model_shallow",
+    "publication_timing_rejected",
+    "publication_timing_entry_slippage",
+    "publication_timing_tp1_progress",
+    "publication_timing_tp1_already_touched",
+    "publication_timing_sl_already_touched",
+    "publication_timing_live_range_extended",
     "reset_touched_candidates",
     "published_selected",
     "expired_no_reset",
@@ -1573,6 +1584,17 @@ def _build_breakout_reset_funnel(
     funnel["reset_rebounded_before_publish"] = int(debug.get("breakout_reset_rebounded_before_publish", 0) or 0)
     funnel["reset_late_or_lost"] = int(debug.get("breakout_reset_late", 0) or 0)
     funnel["reset_near_miss"] = int(debug.get("breakout_reset_near_miss", 0) or 0)
+    funnel["reset_touch_live"] = int(debug.get("breakout_reset_touch_live", 0) or 0)
+    funnel["reset_model_level"] = int(debug.get("breakout_reset_model_level", 0) or 0)
+    funnel["reset_model_ema20"] = int(debug.get("breakout_reset_model_ema20", 0) or 0)
+    funnel["reset_model_midpoint"] = int(debug.get("breakout_reset_model_midpoint", 0) or 0)
+    funnel["reset_model_shallow"] = int(debug.get("breakout_reset_model_shallow", 0) or 0)
+    funnel["publication_timing_rejected"] = int(debug.get("publication_timing_rejected", 0) or 0)
+    funnel["publication_timing_entry_slippage"] = int(debug.get("publication_timing_entry_slippage", 0) or 0)
+    funnel["publication_timing_tp1_progress"] = int(debug.get("publication_timing_tp1_progress", 0) or 0)
+    funnel["publication_timing_tp1_already_touched"] = int(debug.get("publication_timing_tp1_already_touched", 0) or 0)
+    funnel["publication_timing_sl_already_touched"] = int(debug.get("publication_timing_sl_already_touched", 0) or 0)
+    funnel["publication_timing_live_range_extended"] = int(debug.get("publication_timing_live_range_extended", 0) or 0)
     funnel["reset_touched_candidates"] = int(candidate_pool_by_strategy.get("breakout_reset", 0) or 0)
     funnel["published_selected"] = int(selected_by_strategy.get("breakout_reset", 0) or 0)
     funnel["expired_no_reset"] = int(debug.get("breakout_setup_expired", 0) or 0) + int(debug.get("expired_no_reset", 0) or 0)
