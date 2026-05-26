@@ -148,6 +148,11 @@ def scanner_cycle_stats_collection():
     """Telemetría histórica compacta del embudo del scanner"""
     return get_db()["scanner_cycle_stats"]
 
+
+def breakout_reset_setups_collection():
+    """Setups persistidos de Breakout + Reset esperando primer reset."""
+    return get_db()["breakout_reset_setups"]
+
 UNIQUE_INDEX_DUPLICATE_QUERIES = {
     "users.user_id": ["user_id"],
     "users.ref_code": ["ref_code"],
@@ -290,6 +295,13 @@ COLLECTION_INDEX_MODELS = {
         IndexModel([("schema_version", ASCENDING)], name="schema_version_idx"),
         IndexModel([("created_at", ASCENDING)], name="ttl_created_at_45d", expireAfterSeconds=45 * 24 * 60 * 60),
     ],
+    "breakout_reset_setups": [
+        IndexModel([("setup_id", ASCENDING)], name="setup_id_unique", unique=True),
+        IndexModel([("symbol", ASCENDING), ("status", ASCENDING), ("updated_at", DESCENDING)], name="symbol_status_updated_idx"),
+        IndexModel([("status", ASCENDING), ("expires_at", ASCENDING)], name="status_expires_idx"),
+        IndexModel([("schema_version", ASCENDING)], name="schema_version_idx"),
+        IndexModel([("created_at", ASCENDING)], name="ttl_created_at_7d", expireAfterSeconds=7 * 24 * 60 * 60),
+    ],
 }
 
 
@@ -312,6 +324,7 @@ COLLECTION_GETTERS = {
     "audit_logs": audit_logs_collection,
     "system_health": system_health_collection,
     "scanner_cycle_stats": scanner_cycle_stats_collection,
+    "breakout_reset_setups": breakout_reset_setups_collection,
 }
 
 

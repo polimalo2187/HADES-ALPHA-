@@ -34,6 +34,7 @@ def _strategy_call_kwargs(
     df_5m: Optional[pd.DataFrame],
     reference_market_price: Optional[float],
     debug_counts: Optional[Dict[str, int]],
+    symbol: Optional[str] = None,
 ) -> Dict:
     kwargs: Dict = {
         "df_1h": df_1h,
@@ -50,6 +51,8 @@ def _strategy_call_kwargs(
         kwargs["reference_market_price"] = reference_market_price
     if "debug_counts" in parameters:
         kwargs["debug_counts"] = debug_counts if debug_counts is not None else {}
+    if "symbol" in parameters:
+        kwargs["symbol"] = symbol
     return kwargs
 
 
@@ -140,6 +143,7 @@ def _call_strategy(
     df_5m: Optional[pd.DataFrame],
     reference_market_price: Optional[float],
     debug_counts: Optional[Dict[str, int]],
+    symbol: Optional[str] = None,
 ) -> Tuple[Optional[Dict], str, object]:
     strategy_module = _STRATEGY_MAP.get(strategy_name, breakout_strategy)
     strategy_kwargs = _strategy_call_kwargs(
@@ -149,6 +153,7 @@ def _call_strategy(
         df_5m=df_5m,
         reference_market_price=reference_market_price,
         debug_counts=debug_counts,
+        symbol=symbol,
     )
     return strategy_module.mtf_strategy(**strategy_kwargs), strategy_name, strategy_module
 
@@ -199,6 +204,7 @@ def route_candidate(
         df_5m=df_5m,
         reference_market_price=reference_market_price,
         debug_counts=debug_counts,
+        symbol=symbol,
     )
 
     fallback_from = None
@@ -217,6 +223,7 @@ def route_candidate(
             df_5m=df_5m,
             reference_market_price=reference_market_price,
             debug_counts=debug_counts,
+            symbol=symbol,
         )
 
     if not result:

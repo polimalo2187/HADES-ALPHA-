@@ -154,6 +154,7 @@ def _strategy_call_kwargs(
     *,
     reference_market_price: Optional[float],
     debug_counts: Optional[Dict[str, int]],
+    symbol: Optional[str] = None,
 ) -> Dict:
     kwargs: Dict = {
         "df_1h": df_1h,
@@ -171,6 +172,8 @@ def _strategy_call_kwargs(
 
     if "debug_counts" in parameters:
         kwargs["debug_counts"] = debug_counts if debug_counts is not None else {}
+    if "symbol" in parameters:
+        kwargs["symbol"] = symbol
 
     return kwargs
 
@@ -546,6 +549,7 @@ def build_symbol_candidate(symbol: str, df_1h: pd.DataFrame, df_15m: pd.DataFram
         df_5m=df_5m,
         reference_market_price=reference_price,
         debug_counts=debug_counts,
+        symbol=symbol,
     )
     result = strategy_engine.mtf_strategy(**strategy_kwargs)
     if not result:
