@@ -1456,6 +1456,107 @@ def _market_regime_summary(snapshot: Optional[Dict[str, Any]]) -> Dict[str, Any]
     }
 
 
+
+
+_BREAKOUT_RESET_FUNNEL_FIELDS = (
+    "router_allowed_attempts",
+    "router_risk_off_overrides",
+    "router_symbol_continuation_overrides",
+    "router_sweep_fallbacks",
+    "blocked_risk_off_severe",
+    "blocked_symbol_regime",
+    "symbol_continuation_clean",
+    "symbol_compression",
+    "symbol_sweep_chop",
+    "symbol_exhaustion",
+    "symbol_unknown",
+    "setup_armed_waiting_reset",
+    "setup_loaded_waiting_reset",
+    "reset_extension_wait",
+    "reset_touched_candidates",
+    "published_selected",
+    "expired_no_reset",
+    "invalidated",
+    "soft_gate_hits",
+    "score_floor_rejected",
+    "hard_gate_rejected",
+)
+
+_BREAKOUT_RESET_HARD_REJECT_PREFIXES = (
+    "adx_strength_hard",
+    "atr_pct_hard",
+    "continuation_candle_hard",
+    "breakout_invalidated",
+    "breakout_drifted_back_inside",
+    "breakout_waiting_live_reset",
+    "breakout_reset_rebounded_before_publish",
+    "breakout_trade_profile",
+    "indicator_warmup",
+    "insufficient_history",
+    "trend_structure",
+)
+
+
+def _zero_breakout_reset_funnel() -> Dict[str, int]:
+    return {field: 0 for field in _BREAKOUT_RESET_FUNNEL_FIELDS}
+
+
+def _count_debug_prefix(debug_counts: Dict[str, int], *prefixes: str) -> int:
+    total = 0
+    for key, value in (debug_counts or {}).items():
+        key_s = str(key or "")
+        if any(key_s == prefix or key_s.startswith(prefix) for prefix in prefixes):
+            total += int(value or 0)
+    return total
+
+
+def _build_breakout_reset_funnel(
+    *,
+    reject_totals: Dict[str, int],
+    candidate_pool_by_strategy: Dict[str, int],
+    selected_by_strategy: Dict[str, int],
+    rejected_by_strategy: Dict[str, int],
+    attempts_by_strategy: Dict[str, int],
+) -> Dict[str, int]:
+    """Compact lifecycle metrics for Breakout + Reset.
+
+    These counters intentionally separate lifecycle events from terminal reject
+    reasons. A setup that is armed and waiting for reset is not a bad reject;
+    it is a useful intermediate state that explains why the strategy may not
+    have published yet.
+    """
+    funnel = _zero_breakout_reset_funnel()
+    debug = reject_totals or {}
+    funnel["router_allowed_attempts"] = int(attempts_by_strategy.get("breakout_reset", 0) or 0)
+    funnel["router_risk_off_overrides"] = int(debug.get("router_risk_off_breakout_reset_override", 0) or 0)
+    funnel["router_symbol_continuation_overrides"] = int(debug.get("router_symbol_continuation_breakout_override", 0) or 0)
+    funnel["router_sweep_fallbacks"] = int(debug.get("strategy_router_try_breakout_reset_fallback", 0) or 0)
+    funnel["blocked_risk_off_severe"] = int(debug.get("market_regime_risk_off_hard_block", 0) or 0)
+    funnel["blocked_symbol_regime"] = _count_debug_prefix(debug, "symbol_regime_block_")
+    funnel["symbol_continuation_clean"] = int(debug.get("symbol_regime_symbol_continuation_clean", 0) or 0)
+    funnel["symbol_compression"] = int(debug.get("symbol_regime_symbol_compression", 0) or 0)
+    funnel["symbol_sweep_chop"] = int(debug.get("symbol_regime_symbol_sweep_chop", 0) or 0)
+    funnel["symbol_exhaustion"] = int(debug.get("symbol_regime_symbol_exhaustion", 0) or 0)
+    funnel["symbol_unknown"] = int(debug.get("symbol_regime_symbol_unknown", 0) or 0)
+    funnel["setup_armed_waiting_reset"] = int(debug.get("breakout_setup_armed_waiting_reset", 0) or 0)
+    funnel["setup_loaded_waiting_reset"] = int(debug.get("breakout_stateful_setup_loaded", 0) or 0)
+    funnel["reset_extension_wait"] = int(debug.get("breakout_stateful_extension_wait", 0) or 0)
+    funnel["reset_touched_candidates"] = int(candidate_pool_by_strategy.get("breakout_reset", 0) or 0)
+    funnel["published_selected"] = int(selected_by_strategy.get("breakout_reset", 0) or 0)
+    funnel["expired_no_reset"] = int(debug.get("breakout_setup_expired", 0) or 0) + int(debug.get("expired_no_reset", 0) or 0)
+    funnel["invalidated"] = _count_debug_prefix(debug, "stateful_setup_", "breakout_setup_invalidated", "breakout_invalidated", "breakout_drifted_back_inside")
+    funnel["soft_gate_hits"] = _count_debug_prefix(debug, "soft_gate_")
+    funnel["score_floor_rejected"] = _count_debug_prefix(debug, "score_floor_")
+    funnel["hard_gate_rejected"] = _count_debug_prefix(debug, *_BREAKOUT_RESET_HARD_REJECT_PREFIXES)
+    # Ensure candidate/selected never disappear from the funnel even when there
+    # were no rejections in the cycle.
+    if funnel["reset_touched_candidates"] < 0:
+        funnel["reset_touched_candidates"] = 0
+    if funnel["published_selected"] < 0:
+        funnel["published_selected"] = 0
+    return funnel
+
+
 def _persist_scanner_cycle_stat(payload: Dict[str, Any]) -> None:
     try:
         scanner_cycle_stats_collection().insert_one(payload)
@@ -1688,6 +1789,13 @@ async def scan_market_async(bot: Bot):
 
             selected_by_strategy = _summarize_selected_by_strategy(selected_signals)
             attempts_by_strategy = {regime_strategy_key: attempted_symbols_total} if regime_strategy_key and regime_strategy_key != "risk_off" else {}
+            breakout_reset_funnel = _build_breakout_reset_funnel(
+                reject_totals=reject_totals,
+                candidate_pool_by_strategy=candidate_pool_by_strategy,
+                selected_by_strategy=selected_by_strategy,
+                rejected_by_strategy=rejected_by_strategy,
+                attempts_by_strategy=attempts_by_strategy,
+            )
             overall_terminal_reasons: Dict[str, int] = {}
             for bucket in reject_reasons_by_strategy.values():
                 for reason, count in bucket.items():
@@ -1715,6 +1823,7 @@ async def scan_market_async(bot: Bot):
                 "rejected_by_strategy": rejected_by_strategy,
                 "reject_reasons": overall_terminal_reasons,
                 "reject_reasons_by_strategy": reject_reasons_by_strategy,
+                "breakout_reset_funnel": breakout_reset_funnel,
                 "kline_cache": cache_stats,
             }
 
@@ -1742,6 +1851,7 @@ async def scan_market_async(bot: Bot):
                     rejected_by_strategy=rejected_by_strategy,
                     reject_reasons=overall_terminal_reasons,
                     reject_reasons_by_strategy=reject_reasons_by_strategy,
+                    breakout_reset_funnel=breakout_reset_funnel,
                     cache_stats=cache_stats,
                 )
             )

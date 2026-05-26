@@ -822,10 +822,78 @@ def _fetch_scanner_cycle_stats(from_date: datetime) -> List[Dict[str, Any]]:
         "rejected_by_strategy": 1,
         "reject_reasons": 1,
         "reject_reasons_by_strategy": 1,
+        "breakout_reset_funnel": 1,
         "created_at": 1,
     }
     return list(scanner_cycle_stats_collection().find(query, projection))
 
+
+
+
+
+def _normalize_breakout_reset_funnel(value: Any) -> Dict[str, int]:
+    raw = value if isinstance(value, dict) else {}
+    keys = [
+        "router_allowed_attempts",
+        "router_risk_off_overrides",
+        "router_symbol_continuation_overrides",
+        "router_sweep_fallbacks",
+        "blocked_risk_off_severe",
+        "blocked_symbol_regime",
+        "symbol_continuation_clean",
+        "symbol_compression",
+        "symbol_sweep_chop",
+        "symbol_exhaustion",
+        "symbol_unknown",
+        "setup_armed_waiting_reset",
+        "setup_loaded_waiting_reset",
+        "reset_extension_wait",
+        "reset_touched_candidates",
+        "published_selected",
+        "expired_no_reset",
+        "invalidated",
+        "soft_gate_hits",
+        "score_floor_rejected",
+        "hard_gate_rejected",
+    ]
+    return {key: _safe_int(raw.get(key)) for key in keys}
+
+
+def _add_funnel_counts(target: Dict[str, int], source: Dict[str, int]) -> None:
+    for key, value in (source or {}).items():
+        target[key] = int(target.get(key, 0)) + int(value or 0)
+
+
+def _breakout_reset_funnel_rows(funnel: Dict[str, int]) -> List[Dict[str, Any]]:
+    labels = {
+        "router_allowed_attempts": "Símbolos permitidos por router",
+        "router_risk_off_overrides": "Override risk-off moderado",
+        "router_symbol_continuation_overrides": "Override por continuación local",
+        "router_sweep_fallbacks": "Fallback después de sweep",
+        "blocked_risk_off_severe": "Bloqueado por risk-off severo",
+        "blocked_symbol_regime": "Bloqueado por régimen local",
+        "symbol_continuation_clean": "Símbolo en continuación limpia",
+        "symbol_compression": "Símbolo en compresión",
+        "symbol_sweep_chop": "Símbolo en sweep/chop",
+        "symbol_exhaustion": "Símbolo exhausto",
+        "symbol_unknown": "Régimen local desconocido",
+        "setup_armed_waiting_reset": "Breakout armado esperando reset",
+        "setup_loaded_waiting_reset": "Setup stateful recuperado",
+        "reset_extension_wait": "Esperando reset por extensión",
+        "reset_touched_candidates": "Reset tocado / candidato",
+        "published_selected": "Publicado",
+        "expired_no_reset": "Expiró sin reset",
+        "invalidated": "Invalidado",
+        "soft_gate_hits": "Soft gates activados",
+        "score_floor_rejected": "Rechazado por piso de score",
+        "hard_gate_rejected": "Hard gates rechazados",
+    }
+    order = list(labels.keys())
+    return [
+        {"key": key, "label": labels[key], "count": int(funnel.get(key, 0) or 0)}
+        for key in order
+        if int(funnel.get(key, 0) or 0) > 0 or key in {"router_allowed_attempts", "setup_armed_waiting_reset", "reset_touched_candidates", "published_selected"}
+    ]
 
 
 def get_latest_scanner_cycle_snapshot() -> Dict[str, Any]:
@@ -838,6 +906,7 @@ def get_latest_scanner_cycle_snapshot() -> Dict[str, Any]:
     rejected_by_strategy = _normalize_count_dict(payload.get("rejected_by_strategy"))
     attempts_by_strategy = _normalize_count_dict(payload.get("attempts_by_strategy"))
     reject_reasons = _normalize_reason_count_dict(payload.get("reject_reasons"))
+    breakout_reset_funnel = _normalize_breakout_reset_funnel(payload.get("breakout_reset_funnel"))
 
     candidate_rows = [
         {
@@ -896,6 +965,8 @@ def get_latest_scanner_cycle_snapshot() -> Dict[str, Any]:
             for strategy_key, count in sorted(rejected_by_strategy.items(), key=lambda item: (_strategy_sort_key(item[0]), -item[1]))
         ],
         "top_reject_reasons": top_reject_reasons,
+        "breakout_reset_funnel": breakout_reset_funnel,
+        "breakout_reset_funnel_rows": _breakout_reset_funnel_rows(breakout_reset_funnel),
     }
 
 
@@ -916,6 +987,7 @@ def build_admin_strategy_observability(days: int = 30) -> Dict[str, Any]:
     regime_candidate_pool: Dict[str, int] = defaultdict(int)
     regime_strategy_selected: Dict[tuple[str, str], int] = defaultdict(int)
     regime_strategy_candidates: Dict[tuple[str, str], int] = defaultdict(int)
+    breakout_reset_funnel: Dict[str, int] = defaultdict(int)
 
     attempted_symbols_total = 0
     candidate_pool_total = 0
@@ -969,6 +1041,8 @@ def build_admin_strategy_observability(days: int = 30) -> Dict[str, Any]:
             normalized_strategy = _normalize_strategy_key(strategy_key)
             for reason, count in _normalize_reason_count_dict(reasons).items():
                 reject_reasons_by_strategy[normalized_strategy][reason] += count
+
+        _add_funnel_counts(breakout_reset_funnel, _normalize_breakout_reset_funnel(row.get("breakout_reset_funnel")))
 
     strategy_keys = set(attempts_by_strategy.keys()) | set(candidate_pool_by_strategy.keys()) | set(selected_by_strategy.keys()) | set(rejected_by_strategy.keys())
     strategy_pipeline = []
@@ -1055,6 +1129,8 @@ def build_admin_strategy_observability(days: int = 30) -> Dict[str, Any]:
         "reject_reasons_by_strategy": reject_rows,
         "regime_distribution": regime_distribution,
         "regime_strategy_matrix": matrix_rows,
+        "breakout_reset_funnel": dict(breakout_reset_funnel),
+        "breakout_reset_funnel_rows": _breakout_reset_funnel_rows(dict(breakout_reset_funnel)),
         "latest_cycle": get_latest_scanner_cycle_snapshot(),
     }
 
