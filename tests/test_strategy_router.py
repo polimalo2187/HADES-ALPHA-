@@ -48,3 +48,66 @@ def test_route_candidate_selects_liquidity_when_regime_is_sweep(monkeypatch):
     assert result is not None
     assert result["strategy_name"] == "liquidity_sweep_reversal"
     assert result["regime_state"] == "sweep_reversal"
+
+
+def test_route_candidate_allows_breakout_guarded_override_when_regime_is_risk_off(monkeypatch):
+    df_1h, df_15m, df_5m = _dummy_frames()
+    debug_counts = {}
+    monkeypatch.setattr(strategy_router.breakout_strategy, "mtf_strategy", lambda **kwargs: {"direction": "LONG", "entry_price": 1.0, "stop_loss": 0.9, "take_profits": [1.1, 1.2], "profiles": {"conservador": {"stop_loss": 0.9, "take_profits": [1.1, 1.2]}}, "score": 90.0, "raw_score": 90.0, "normalized_score": 90.0, "components": [], "raw_components": [], "normalized_components": [], "setup_group": "premium", "score_profile": "premium", "score_calibration": "v", "send_mode": "entry_zone_pending", "setup_stage": "pre_reset", "entry_model": "breakout", "entry_model_price": 1.0})
+
+    result = strategy_router.route_candidate(
+        symbol="SOLUSDT",
+        df_1h=df_1h,
+        df_15m=df_15m,
+        df_5m=df_5m,
+        market_regime={"state": "risk_off", "strategy_name": "risk_off", "bias": "up", "reason": "market_regime_cooldown_hold"},
+        reference_market_price=1.0,
+        debug_counts=debug_counts,
+    )
+
+    assert result is not None
+    assert result["strategy_name"] == "breakout_reset"
+    assert result["regime_state"] == "risk_off"
+    assert result["router_override"] == "risk_off_breakout_reset_guarded_override"
+    assert debug_counts["router_risk_off_breakout_reset_override"] == 1
+
+
+def test_route_candidate_blocks_risk_off_when_severity_is_severe(monkeypatch):
+    df_1h, df_15m, df_5m = _dummy_frames()
+    debug_counts = {}
+    monkeypatch.setattr(strategy_router.breakout_strategy, "mtf_strategy", lambda **kwargs: {"direction": "LONG"})
+
+    result = strategy_router.route_candidate(
+        symbol="SOLUSDT",
+        df_1h=df_1h,
+        df_15m=df_15m,
+        df_5m=df_5m,
+        market_regime={"state": "risk_off", "strategy_name": "risk_off", "risk_severity": "severe", "bias": "up", "reason": "market_regime_vol_shock"},
+        reference_market_price=1.0,
+        debug_counts=debug_counts,
+    )
+
+    assert result is None
+    assert debug_counts["market_regime_risk_off_hard_block"] == 1
+
+
+def test_route_candidate_falls_back_to_breakout_when_sweep_strategy_has_no_candidate(monkeypatch):
+    df_1h, df_15m, df_5m = _dummy_frames()
+    debug_counts = {}
+    monkeypatch.setattr(strategy_router.liquidity_strategy, "mtf_strategy", lambda **kwargs: None)
+    monkeypatch.setattr(strategy_router.breakout_strategy, "mtf_strategy", lambda **kwargs: {"direction": "LONG", "entry_price": 1.0, "stop_loss": 0.9, "take_profits": [1.1, 1.2], "profiles": {"conservador": {"stop_loss": 0.9, "take_profits": [1.1, 1.2]}}, "score": 78.0, "raw_score": 78.0, "normalized_score": 78.0, "components": [], "raw_components": [], "normalized_components": [], "setup_group": "plus", "score_profile": "plus", "score_calibration": "v", "send_mode": "entry_zone_pending", "setup_stage": "pre_reset", "entry_model": "breakout", "entry_model_price": 1.0})
+
+    result = strategy_router.route_candidate(
+        symbol="ETHUSDT",
+        df_1h=df_1h,
+        df_15m=df_15m,
+        df_5m=df_5m,
+        market_regime={"state": "sweep_reversal", "strategy_name": "liquidity_sweep_reversal", "bias": "neutral", "reason": "market_regime_sweep_reversal"},
+        reference_market_price=1.0,
+        debug_counts=debug_counts,
+    )
+
+    assert result is not None
+    assert result["strategy_name"] == "breakout_reset"
+    assert result["router_fallback_from"] == "liquidity_sweep_reversal"
+    assert debug_counts["strategy_router_try_breakout_reset_fallback"] == 1
