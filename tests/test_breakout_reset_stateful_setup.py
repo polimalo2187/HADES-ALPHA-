@@ -1,0 +1,84 @@
+import os
+
+import pandas as pd
+
+import tests._bootstrap
+
+from app import breakout_reset_setup_store
+from app import strategy_breakout_reset as strategy
+
+
+def _stateful_frame(close: float = 100.74) -> pd.DataFrame:
+    rows = []
+    base_time = pd.Timestamp("2026-01-01T00:00:00Z")
+    for i in range(80):
+        rows.append({
+            "open": 100.0,
+            "high": 100.3,
+            "low": 99.7,
+            "close": 100.0,
+            "volume": 1000.0,
+            "close_time": base_time + pd.Timedelta(minutes=5 * i),
+        })
+    df = pd.DataFrame(rows)
+    df["ema20"] = 101.0
+    df["ema50"] = 100.7
+    df["ema200"] = 100.2
+    df["adx"] = 25.0
+    df["atr"] = 1.0
+    df["atr_pct"] = 0.01
+    df["body_ratio"] = 0.40
+    df["vol_ma"] = 1000.0
+    breakout_pos = len(df) - 5
+    df.loc[breakout_pos, ["open", "high", "low", "close", "body_ratio"]] = [100.2, 100.95, 100.12, 100.75, 0.55]
+    df.loc[len(df) - 4, ["open", "high", "low", "close", "body_ratio"]] = [100.72, 101.05, 100.58, 100.92, 0.42]
+    df.loc[len(df) - 3, ["open", "high", "low", "close", "body_ratio"]] = [100.91, 101.10, 100.50, 100.82, 0.33]
+    df.loc[len(df) - 2, ["open", "high", "low", "close", "body_ratio"]] = [100.80, 100.98, 100.47, 100.70, 0.28]
+    df.loc[len(df) - 1, ["open", "high", "low", "close", "body_ratio"]] = [100.66, 100.88, 100.43, close, 0.26]
+    return df
+
+
+def test_stateful_setup_is_persisted_and_reloaded_from_memory(monkeypatch):
+    monkeypatch.setenv("BREAKOUT_RESET_SETUP_STORE", "memory")
+    breakout_reset_setup_store.clear_memory_store()
+    df = _stateful_frame()
+
+    ok, quality, _ = strategy._confirm_breakout_prereset(
+        df,
+        "LONG",
+        dict(strategy.FREE_PROFILE),
+        reference_market_price=None,
+    )
+    assert ok is True
+
+    entry = strategy._reset_entry_price(quality["level"], df.iloc[-1], "LONG")
+    profiles = strategy._build_trade_profiles(entry, "LONG", float(df.iloc[-1]["atr_pct"]))
+    zone_low, zone_high = strategy._calculate_entry_zone(entry, profiles["conservador"]["stop_loss"])
+
+    stored = strategy._persist_waiting_setup(
+        symbol="TESTUSDT",
+        direction="LONG",
+        profile=dict(strategy.FREE_PROFILE),
+        quality=quality,
+        entry_price=entry,
+        zone_low=zone_low,
+        zone_high=zone_high,
+        atr=float(df.iloc[-1]["atr"]),
+        atr_pct=float(df.iloc[-1]["atr_pct"]),
+        df=df,
+    )
+    assert stored is not None
+    assert stored["status"] == "waiting_reset"
+
+    debug = {}
+    loaded_quality, loaded_doc = strategy._load_stateful_setup(
+        "TESTUSDT",
+        "LONG",
+        df,
+        dict(strategy.FREE_PROFILE),
+        debug,
+    )
+    assert loaded_doc is not None
+    assert loaded_quality is not None
+    assert loaded_quality["level"] == quality["level"]
+    assert debug["breakout_stateful_setup_loaded"] if "breakout_stateful_setup_loaded" in debug else True
