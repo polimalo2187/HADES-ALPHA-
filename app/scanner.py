@@ -1435,10 +1435,14 @@ def _summarize_selected_by_strategy(signals: List[Dict[str, Any]]) -> Dict[str, 
 def _market_regime_summary(snapshot: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     payload = dict(snapshot or {})
     selected_strategy = _normalize_strategy_key(strategy_router.select_strategy_name(payload))
+    risk_severity = str(payload.get('risk_severity') or payload.get('severity') or 'none').strip().lower() or 'none'
     return {
         'state': str(payload.get('state') or 'unknown').strip().lower() or 'unknown',
         'bias': str(payload.get('bias') or 'neutral').strip().lower() or 'neutral',
         'reason': str(payload.get('reason') or 'market_regime_unknown').strip() or 'market_regime_unknown',
+        'raw_reason': str(payload.get('raw_reason') or payload.get('reason') or 'market_regime_unknown').strip() or 'market_regime_unknown',
+        'risk_severity': risk_severity,
+        'allow': bool(payload.get('allow', risk_severity != 'severe')),
         'strategy_name': selected_strategy,
     }
 
