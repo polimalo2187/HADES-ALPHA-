@@ -356,7 +356,7 @@ function formatStatusLabel(value) {
     paid_unconfirmed: 'Pago sin confirmar',
     completed: 'Completado',
     cancelled: 'Cancelado',
-    expired_order: 'Expirada',
+    expired_order: 'No Fill',
   };
   return map[normalized] || String(value || '—').toUpperCase();
 }
@@ -5452,7 +5452,7 @@ function renderAccount() {
           ${accountMetricCard('Config pago', billing.payment_config_ready ? 'Lista' : 'Incompleta', billing.payment_config_ready ? 'is-positive' : 'is-warning')}
           ${accountMetricCard('Abiertas', billingSummary.open ?? 0)}
           ${accountMetricCard('Completadas', billingSummary.completed ?? 0, 'is-positive')}
-          ${accountMetricCard('Expiradas', billingSummary.expired ?? 0, 'is-warning')}
+          ${accountMetricCard('No Fill', billingSummary.expired ?? 0, 'is-warning')}
           ${accountMetricCard('Canceladas', billingSummary.cancelled ?? 0)}
           ${accountMetricCard('Último cobro', formatDate(billing.latest_completed_at))}
         </div>
