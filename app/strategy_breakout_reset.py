@@ -73,8 +73,8 @@ BREAKOUT_LOOKBACK = 24
 
 MAX_SCORE = 100.0
 FREE_NORMALIZATION_PENALTY = 8.0
-SCORE_CALIBRATION_VERSION = "v19_preentry_pending_reset"
-ENTRY_MODEL_NAME = "breakout_reset_preentry_pending_v1"
+SCORE_CALIBRATION_VERSION = "v20_publish_pending_from_armed_setup"
+ENTRY_MODEL_NAME = "breakout_reset_preentry_pending_v2"
 SETUP_STAGE_PRE_RESET_WAITING_RETEST = "pre_reset_waiting_retest"
 SETUP_STAGE_RESET_TOUCH_LIVE = "reset_touch_live"
 SETUP_STAGE_RESET_REBOUNDED_BEFORE_PUBLISH = "reset_rebounded_before_publish"
@@ -115,6 +115,8 @@ BREAKOUT_RESET_MAX_ENTRY_SLIPPAGE_ATR = float(os.getenv("BREAKOUT_RESET_MAX_ENTR
 BREAKOUT_RESET_MAX_TP1_PROGRESS_BEFORE_PUBLISH = float(os.getenv("BREAKOUT_RESET_MAX_TP1_PROGRESS_BEFORE_PUBLISH", "0.30"))
 BREAKOUT_RESET_MAX_LIVE_RANGE_ATR = float(os.getenv("BREAKOUT_RESET_MAX_LIVE_RANGE_ATR", "1.35"))
 BREAKOUT_RESET_PUBLISH_BEFORE_TOUCH_ENABLED = str(os.getenv("BREAKOUT_RESET_PUBLISH_BEFORE_TOUCH_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
+BREAKOUT_RESET_FORCE_CLASSIC_PREENTRY_ON_ARM = str(os.getenv("BREAKOUT_RESET_FORCE_CLASSIC_PREENTRY_ON_ARM", "true")).strip().lower() in {"1", "true", "yes", "on"}
+BREAKOUT_RESET_PREENTRY_MAX_DISTANCE_ATR = float(os.getenv("BREAKOUT_RESET_PREENTRY_MAX_DISTANCE_ATR", "1.80"))
 
 
 def _env_float(name: str, default: float) -> float:
@@ -620,6 +622,70 @@ def _select_pending_reset_model(
         _record_reject(debug_counts, "breakout_preentry_pending_candidate")
         _record_reject(debug_counts, f"breakout_preentry_model_{best['reset_model']}")
     return best
+
+
+def _classic_pending_reset_model(
+    quality: Dict[str, float],
+    last: pd.Series,
+    direction: str,
+    atr: float,
+    atr_pct: float,
+    live_price: float,
+    live_high: float,
+    live_low: float,
+    debug_counts: Optional[Dict[str, int]],
+) -> Optional[Dict[str, Any]]:
+    """Build the original broken-level pending entry when multi-model selection misses.
+
+    A valid Breakout + Reset signal is supposed to be sent before the entry is
+    touched. The multi-reset selector can miss the pending state when dynamic
+    models are filtered out, but the structural level retest is still the safe
+    baseline anchor. This fallback only publishes if price is still on the
+    pre-entry side and the live candle has not already touched the zone.
+    """
+    if not BREAKOUT_RESET_PUBLISH_BEFORE_TOUCH_ENABLED or not BREAKOUT_RESET_FORCE_CLASSIC_PREENTRY_ON_ARM:
+        return None
+    try:
+        level = float(quality.get("level") or 0.0)
+        atr_value = max(float(atr or 0.0), 1e-9)
+        model_entry_price = float(_reset_entry_price(level, last, direction))
+    except Exception:
+        _record_reject(debug_counts, "breakout_preentry_invalid_anchor")
+        return None
+    if model_entry_price <= 0:
+        _record_reject(debug_counts, "breakout_preentry_invalid_anchor")
+        return None
+    zone = _model_zone(model_entry_price, direction, atr_pct, atr_value)
+    if not zone:
+        _record_reject(debug_counts, "breakout_preentry_trade_profile")
+        return None
+    stage = _classify_live_reset_state(
+        direction,
+        live_price,
+        float(zone["zone_low"]),
+        float(zone["zone_high"]),
+        candle_high=live_high,
+        candle_low=live_low,
+    )
+    if stage != SETUP_STAGE_PRE_RESET_WAITING_RETEST:
+        _record_reject(debug_counts, f"breakout_preentry_rejected_{stage}")
+        return None
+    if str(direction).upper() == "LONG":
+        distance = max(0.0, float(live_price) - float(zone["zone_high"]))
+    else:
+        distance = max(0.0, float(zone["zone_low"]) - float(live_price))
+    distance_atr = distance / atr_value
+    if distance_atr > max(float(BREAKOUT_RESET_PREENTRY_MAX_DISTANCE_ATR), 0.0):
+        _record_reject(debug_counts, "breakout_preentry_rejected_entry_too_far")
+        return None
+    payload = dict(zone)
+    payload["reset_model"] = "level"
+    payload["stage"] = SETUP_STAGE_PRE_RESET_WAITING_RETEST
+    payload["pre_entry_distance_atr"] = round(distance_atr, 4)
+    _record_reject(debug_counts, "breakout_preentry_pending_candidate")
+    _record_reject(debug_counts, "breakout_preentry_model_level")
+    _record_reject(debug_counts, "breakout_preentry_classic_fallback")
+    return payload
 
 
 def _tp1_progress(direction: str, entry_price: float, current_price: float, tp1: float) -> float:
@@ -1793,17 +1859,31 @@ def _evaluate_profile(
         reject_reason = "breakout_waiting_live_reset" if live_stage == SETUP_STAGE_PRE_RESET_WAITING_RETEST else (
             "breakout_reset_rebounded_before_publish" if live_stage == SETUP_STAGE_RESET_REBOUNDED_BEFORE_PUBLISH else "breakout_reset_late"
         )
-        pending_reset = _select_pending_reset_model(
-            quality=quality,
-            last=last,
-            direction=direction,
-            atr=float(last["atr"]),
-            atr_pct=atr_pct,
-            live_price=live_price,
-            live_high=live_high,
-            live_low=live_low,
-            debug_counts=debug_counts,
-        ) if live_stage == SETUP_STAGE_PRE_RESET_WAITING_RETEST else None
+        pending_reset = None
+        if live_stage == SETUP_STAGE_PRE_RESET_WAITING_RETEST:
+            pending_reset = _select_pending_reset_model(
+                quality=quality,
+                last=last,
+                direction=direction,
+                atr=float(last["atr"]),
+                atr_pct=atr_pct,
+                live_price=live_price,
+                live_high=live_high,
+                live_low=live_low,
+                debug_counts=debug_counts,
+            )
+            if pending_reset is None:
+                pending_reset = _classic_pending_reset_model(
+                    quality=quality,
+                    last=last,
+                    direction=direction,
+                    atr=float(last["atr"]),
+                    atr_pct=atr_pct,
+                    live_price=live_price,
+                    live_high=live_high,
+                    live_low=live_low,
+                    debug_counts=debug_counts,
+                )
 
         if pending_reset is not None:
             model_entry_price = float(pending_reset["entry_model_price"])

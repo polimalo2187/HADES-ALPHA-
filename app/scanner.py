@@ -1480,6 +1480,8 @@ _BREAKOUT_RESET_FUNNEL_FIELDS = (
     "preentry_model_ema20",
     "preentry_model_midpoint",
     "preentry_model_shallow",
+    "preentry_classic_fallback",
+    "preentry_rejected_entry_too_far",
     "reset_extension_wait",
     "waiting_live_reset",
     "reset_rebounded_before_publish",
@@ -1589,6 +1591,8 @@ def _build_breakout_reset_funnel(
     funnel["preentry_model_ema20"] = int(debug.get("breakout_preentry_model_ema20", 0) or 0)
     funnel["preentry_model_midpoint"] = int(debug.get("breakout_preentry_model_midpoint", 0) or 0)
     funnel["preentry_model_shallow"] = int(debug.get("breakout_preentry_model_shallow", 0) or 0)
+    funnel["preentry_classic_fallback"] = int(debug.get("breakout_preentry_classic_fallback", 0) or 0)
+    funnel["preentry_rejected_entry_too_far"] = int(debug.get("breakout_preentry_rejected_entry_too_far", 0) or 0)
     funnel["reset_extension_wait"] = int(debug.get("breakout_stateful_extension_wait", 0) or 0)
     funnel["waiting_live_reset"] = int(debug.get("breakout_waiting_live_reset", 0) or 0)
     funnel["reset_rebounded_before_publish"] = int(debug.get("breakout_reset_rebounded_before_publish", 0) or 0)
