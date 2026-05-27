@@ -2,7 +2,7 @@
 // Versión: 1.0.1
 // Estrategia: Cache-first para assets estáticos, Network-first para API
 
-const CACHE_NAME = 'hades-v_ecosystem_1'; // FIX: bump para desalojar caché vieja que guardó manifest roto
+const CACHE_NAME = 'hades-account-command-v2'; // FIX: bump para desalojar caché vieja que guardó manifest roto
 const STATIC_ASSETS = [
   '/miniapp/static/index.html',
   '/miniapp/static/app.css',
@@ -131,3 +131,5 @@ self.addEventListener('notificationclick', event => {
 // ecosystem-bridge-fetch-fix-v2
 
 // ecosystem-auth-flow-fix-v3
+
+// account-command-center-v2

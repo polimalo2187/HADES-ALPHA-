@@ -5619,3 +5619,299 @@ html, body, .app-shell, .section-grid, .card {
     min-width: 0;
   }
 }
+
+
+/* ============================================================
+   HADES ACCOUNT COMMAND CENTER — VISUAL UPGRADE V2
+   Solo visual: no modifica pagos, premium, señales, scanner ni auth.
+   ============================================================ */
+
+.account-command-hero {
+  position: relative;
+  overflow: hidden;
+  padding: 0;
+  border-color: rgba(251, 191, 36, .34);
+  background:
+    radial-gradient(circle at 10% 0%, rgba(251, 191, 36, .20), transparent 32%),
+    radial-gradient(circle at 92% 8%, rgba(56, 189, 248, .14), transparent 32%),
+    linear-gradient(145deg, rgba(18, 13, 3, .96), rgba(5, 10, 20, .96));
+  box-shadow: 0 28px 80px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.09);
+}
+.account-command-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, transparent, rgba(255,255,255,.055), transparent), repeating-linear-gradient(90deg, rgba(255,255,255,.025) 0 1px, transparent 1px 44px);
+  opacity: .72;
+  pointer-events: none;
+}
+.account-hero-bg-orb {
+  position: absolute;
+  width: 260px;
+  height: 260px;
+  border-radius: 999px;
+  filter: blur(18px);
+  pointer-events: none;
+  opacity: .34;
+}
+.account-hero-bg-orb-a {
+  left: -90px;
+  top: -110px;
+  background: rgba(251, 191, 36, .36);
+  animation: accountFloatA 10s ease-in-out infinite;
+}
+.account-hero-bg-orb-b {
+  right: -120px;
+  bottom: -120px;
+  background: rgba(56, 189, 248, .30);
+  animation: accountFloatB 12s ease-in-out infinite;
+}
+@keyframes accountFloatA {
+  0%, 100% { transform: translate3d(0,0,0) scale(1); }
+  50% { transform: translate3d(24px,18px,0) scale(1.05); }
+}
+@keyframes accountFloatB {
+  0%, 100% { transform: translate3d(0,0,0) scale(1); }
+  50% { transform: translate3d(-18px,-22px,0) scale(1.06); }
+}
+.account-command-hero-inner {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(135px, auto);
+  gap: 16px;
+  padding: 18px;
+  align-items: center;
+}
+.account-avatar-orb {
+  width: 76px;
+  height: 76px;
+  border-radius: 26px;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 35% 20%, rgba(255,255,255,.28), transparent 30%), linear-gradient(135deg, rgba(251,191,36,.95), rgba(245,158,11,.78));
+  border: 1px solid rgba(251,191,36,.42);
+  box-shadow: 0 0 36px rgba(251,191,36,.28), inset 0 1px 0 rgba(255,255,255,.22);
+  color: #1a1202;
+  font-size: 32px;
+  font-weight: 950;
+}
+.account-kicker {
+  color: var(--accent-2);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: .24em;
+  text-transform: uppercase;
+  margin-bottom: 7px;
+}
+.account-command-copy h2 {
+  margin: 0;
+  font-size: clamp(30px, 7vw, 48px);
+  line-height: .92;
+  letter-spacing: -.065em;
+}
+.account-command-copy p {
+  max-width: 620px;
+  margin: 9px 0 0;
+  color: rgba(245,247,251,.68);
+  line-height: 1.45;
+}
+.account-status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 13px;
+}
+.account-status-pill {
+  border-radius: 999px;
+  padding: 7px 10px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.055);
+  color: rgba(245,247,251,.78);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .035em;
+}
+.account-status-pill.is-live {
+  color: #bbf7d0;
+  border-color: rgba(34,197,94,.34);
+  background: rgba(34,197,94,.13);
+  box-shadow: 0 0 28px rgba(34,197,94,.12);
+}
+.account-status-pill.is-muted {
+  color: #fcd34d;
+  border-color: rgba(251,191,36,.30);
+  background: rgba(251,191,36,.12);
+}
+.account-command-side {
+  border: 1px solid rgba(251,191,36,.22);
+  background: rgba(0,0,0,.20);
+  border-radius: 22px;
+  padding: 13px;
+  min-width: 136px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06);
+}
+.account-side-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+}
+.account-side-code {
+  margin: 5px 0 10px;
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 900;
+  word-break: break-all;
+}
+.account-copy-mini {
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: 12px;
+}
+.account-command-metrics {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0 18px 18px;
+}
+.account-command-metrics .account-metric-card,
+.account-metric-card.account-metric-glow {
+  border-color: rgba(251,191,36,.20);
+  background: radial-gradient(circle at 100% 0%, rgba(251,191,36,.10), transparent 34%), rgba(15,23,42,.48);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.07), 0 12px 34px rgba(0,0,0,.18);
+}
+.account-command-metrics .account-metric-value {
+  font-size: 20px;
+}
+.account-premium-card,
+.account-ecosystem-card {
+  position: relative;
+  overflow: hidden;
+  border-color: rgba(255,255,255,.13);
+  background: radial-gradient(circle at 100% 0%, rgba(251,191,36,.10), transparent 30%), linear-gradient(180deg, rgba(255,255,255,.065), rgba(255,255,255,.025));
+  box-shadow: 0 18px 48px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.06);
+}
+.account-premium-card::before,
+.account-ecosystem-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(120deg, transparent, rgba(255,255,255,.045), transparent);
+}
+.account-card-topline {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 10px;
+  color: var(--accent-2);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+}
+.account-card-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 15px;
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  background: rgba(251,191,36,.11);
+  border: 1px solid rgba(251,191,36,.22);
+  box-shadow: 0 0 24px rgba(251,191,36,.13);
+}
+.account-premium-card > *:not(.account-card-topline),
+.account-ecosystem-card > * {
+  position: relative;
+  z-index: 1;
+}
+.account-subscription-card { border-color: rgba(251,191,36,.24); }
+.account-risk-card {
+  border-color: rgba(56,189,248,.22);
+  background: radial-gradient(circle at 100% 0%, rgba(56,189,248,.12), transparent 30%), linear-gradient(180deg, rgba(255,255,255,.065), rgba(255,255,255,.025));
+}
+.account-performance-card {
+  border-color: rgba(34,197,94,.21);
+  background: radial-gradient(circle at 100% 0%, rgba(34,197,94,.12), transparent 30%), linear-gradient(180deg, rgba(255,255,255,.065), rgba(255,255,255,.025));
+}
+.account-settings-card {
+  border-color: rgba(168,85,247,.24);
+  background: radial-gradient(circle at 100% 0%, rgba(168,85,247,.13), transparent 30%), linear-gradient(180deg, rgba(255,255,255,.065), rgba(255,255,255,.025));
+}
+.account-referral-card,
+.account-rewards-card {
+  border-color: rgba(236,72,153,.24);
+  background: radial-gradient(circle at 100% 0%, rgba(236,72,153,.13), transparent 30%), linear-gradient(180deg, rgba(255,255,255,.065), rgba(255,255,255,.025));
+}
+.account-billing-card {
+  border-color: rgba(245,158,11,.26);
+  background: radial-gradient(circle at 100% 0%, rgba(245,158,11,.16), transparent 28%), linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.025));
+}
+.account-orders-card,
+.account-timeline-card,
+.account-support-card,
+.account-app-card {
+  border-color: rgba(148,163,184,.18);
+}
+.account-admin-card {
+  border-color: rgba(239,68,68,.26);
+  background: radial-gradient(circle at 100% 0%, rgba(239,68,68,.13), transparent 28%), linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.025));
+}
+.account-ecosystem-card {
+  min-height: 220px;
+}
+.account-ecosystem-card.oraculum-bridge-card,
+.account-oraculum-card {
+  border-color: rgba(168,85,247,.36);
+  background: radial-gradient(circle at 0% 0%, rgba(168,85,247,.17), transparent 36%), radial-gradient(circle at 100% 0%, rgba(251,191,36,.10), transparent 30%), linear-gradient(180deg, rgba(17, 9, 38, .94), rgba(7, 9, 18, .96));
+}
+.account-ecosystem-card.sentinel-bridge-card,
+.account-sentinel-card {
+  border-color: rgba(56,189,248,.34);
+  background: radial-gradient(circle at 0% 0%, rgba(56,189,248,.16), transparent 36%), radial-gradient(circle at 100% 0%, rgba(251,191,36,.10), transparent 30%), linear-gradient(180deg, rgba(5, 22, 34, .94), rgba(7, 9, 18, .96));
+}
+.account-premium-card h2,
+.account-ecosystem-card h2 {
+  letter-spacing: -.035em;
+}
+.account-premium-card p,
+.account-ecosystem-card p {
+  color: rgba(245,247,251,.66);
+  line-height: 1.48;
+}
+.account-premium-card .pill,
+.account-ecosystem-card .pill {
+  background: rgba(255,255,255,.045);
+  border-color: rgba(255,255,255,.12);
+}
+.account-premium-card .button,
+.account-ecosystem-card .button {
+  box-shadow: 0 12px 32px rgba(0,0,0,.22);
+}
+@media (max-width: 760px) {
+  .account-command-hero-inner {
+    grid-template-columns: 1fr;
+  }
+  .account-avatar-orb {
+    width: 66px;
+    height: 66px;
+    border-radius: 22px;
+  }
+  .account-command-side {
+    min-width: 0;
+  }
+  .account-command-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 460px) {
+  .account-command-metrics {
+    grid-template-columns: 1fr;
+  }
+}

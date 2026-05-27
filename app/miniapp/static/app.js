@@ -5324,30 +5324,40 @@ function renderAccount() {
   els.account.innerHTML = `
     <div class="section-grid">
       ${accountNoticeCard(state.accountNotice)}
-      <div class="card card-span-12">
-        <div class="item-header">
-          <div>
-            <h2 style="margin:0;">Centro de cuenta</h2>
-            <div class="item-subtitle">Estado comercial, suscripción, billing y referidos desde la MiniApp.</div>
+      <div class="card card-span-12 account-command-hero">
+        <div class="account-hero-bg-orb account-hero-bg-orb-a"></div>
+        <div class="account-hero-bg-orb account-hero-bg-orb-b"></div>
+        <div class="account-command-hero-inner">
+          <div class="account-avatar-orb">
+            <span>${escapeHtml(String(me.username || me.first_name || me.plan_name || 'H').slice(0, 1).toUpperCase())}</span>
           </div>
-          <span class="plan-tag">${escapeHtml(me.plan_name || 'FREE')}</span>
+          <div class="account-command-copy">
+            <div class="account-kicker">HADES COMMAND CENTER</div>
+            <h2>Centro de cuenta</h2>
+            <p>Control premium, billing, riesgo, rendimiento, referidos y acceso al ecosistema desde una sola consola.</p>
+            <div class="account-status-strip">
+              <span class="account-status-pill ${isPremiumActive ? 'is-live' : 'is-muted'}">${isPremiumActive ? 'PREMIUM ACTIVO' : 'ACCESO LIMITADO'}</span>
+              <span class="account-status-pill">Plan: ${escapeHtml(me.plan_name || 'FREE')}</span>
+              <span class="account-status-pill">Días: ${escapeHtml(me.days_left || 0)}</span>
+              <span class="account-status-pill">Vence: ${escapeHtml(expiresText)}</span>
+            </div>
+          </div>
+          <div class="account-command-side">
+            <div class="account-side-label">Código</div>
+            <div class="account-side-code">${escapeHtml(me.ref_code || '—')}</div>
+            <button class="button button-secondary account-copy-mini" data-copy-value="${escapeHtml(me.ref_code || '')}">Copiar</button>
+          </div>
         </div>
-        <div class="pill-row">
-          <span class="pill">Estado: ${escapeHtml(me.subscription_status_label || me.subscription_status || 'free')}</span>
-          <span class="pill">Vence: ${escapeHtml(expiresText)}</span>
-          <span class="pill">Días restantes: ${escapeHtml(me.days_left || 0)}</span>
-          <span class="pill">Idioma: ${escapeHtml(me.language || 'es')}</span>
-          <span class="pill">Código: ${escapeHtml(me.ref_code || '—')}</span>
-        </div>
-        <div class="account-metric-grid">
-          ${accountMetricCard('Watchlist', `${watchlistMeta.symbols_count ?? me.watchlist_symbols ?? 0}/${watchlistMeta.max_symbols ?? me.watchlist_limit ?? '∞'}`)}
-          ${accountMetricCard('Referidos válidos', referrals.valid_referrals_total ?? me.valid_referrals_total ?? 0)}
-          ${accountMetricCard('Días ganados', referrals.reward_days_total ?? me.reward_days_total ?? 0)}
-          ${accountMetricCard('Órdenes', billingSummary.total ?? 0)}
+        <div class="account-command-metrics">
+          ${accountMetricCard('Watchlist', `${watchlistMeta.symbols_count ?? me.watchlist_symbols ?? 0}/${watchlistMeta.max_symbols ?? me.watchlist_limit ?? '∞'}`, 'account-metric-glow')}
+          ${accountMetricCard('Referidos válidos', referrals.valid_referrals_total ?? me.valid_referrals_total ?? 0, 'account-metric-glow')}
+          ${accountMetricCard('Días ganados', referrals.reward_days_total ?? me.reward_days_total ?? 0, 'account-metric-glow is-positive')}
+          ${accountMetricCard('Órdenes', billingSummary.total ?? 0, 'account-metric-glow')}
         </div>
       </div>
 
-      <div class="card card-span-6">
+      <div class="card card-span-6 account-premium-card account-subscription-card">
+        <div class="account-card-topline"><div class="account-card-icon">💎</div><span>PLAN</span></div>
         <h2>Suscripción</h2>
         <p>${escapeHtml(subscription.plan_name || me.plan_name || 'FREE')} · ${escapeHtml(subscription.status_label || me.subscription_status_label || me.subscription_status || 'free')} · ${escapeHtml(expiresText)}</p>
         <div class="inline-meta">
@@ -5359,7 +5369,8 @@ function renderAccount() {
         ${subscription.features?.length ? `<div class="feature-list" style="margin-top:12px;">${subscription.features.map(feature => `<div class="feature-item">• ${escapeHtml(feature)}</div>`).join('')}</div>` : '<div class="empty-state">Sin beneficios listados por ahora.</div>'}
       </div>
 
-      <div class="card card-span-6">
+      <div class="card card-span-6 account-premium-card account-risk-card">
+        <div class="account-card-topline"><div class="account-card-icon">⚖️</div><span>RISK ENGINE</span></div>
         <h2>Gestión de riesgo</h2>
         <p>Configura capital, riesgo por trade, fees, slippage y calcula sizing real desde señales vivas e históricas.</p>
         <div class="pill-row compact-pill-row">
@@ -5372,7 +5383,8 @@ function renderAccount() {
         </div>
       </div>
 
-      <div class="card card-span-6">
+      <div class="card card-span-6 account-premium-card account-performance-card">
+        <div class="account-card-topline"><div class="account-card-icon">🏆</div><span>PERFORMANCE</span></div>
         <h2>Rendimiento</h2>
         <p>Módulo dedicado para revisar 7D / 30D / total, PF por R, expectancy, score buckets y breakdown por plan.</p>
         <div class="pill-row compact-pill-row">
@@ -5385,7 +5397,8 @@ function renderAccount() {
         </div>
       </div>
 
-      <div class="card card-span-6">
+      <div class="card card-span-6 account-premium-card account-settings-card">
+        <div class="account-card-topline"><div class="account-card-icon">⚙️</div><span>SETTINGS</span></div>
         <h2>Ajustes y alertas push</h2>
         <p>Configura idioma y qué niveles de señal quieres recibir como aviso push en Telegram.</p>
         <div class="pill-row compact-pill-row">
@@ -5398,7 +5411,8 @@ function renderAccount() {
         </div>
       </div>
 
-      <div class="card card-span-6">
+      <div class="card card-span-6 account-premium-card account-referral-card">
+        <div class="account-card-topline"><div class="account-card-icon">🧬</div><span>GROWTH</span></div>
         <h2>Referidos</h2>
         <div class="pill-row">
           <span class="pill">Totales: ${escapeHtml(referrals.total_referred || 0)}</span>
@@ -5414,9 +5428,10 @@ function renderAccount() {
       </div>
 
       ${me.is_admin ? `
-      <div class="card card-span-12">
+      <div class="card card-span-12 account-premium-card account-admin-card">
         <div class="item-header">
           <div>
+            <div class="account-card-topline"><div class="account-card-icon">🛡️</div><span>ADMIN</span></div>
             <h2 style="margin:0;">Administración</h2>
             <div class="item-subtitle">Acceso exclusivo para admins. Aquí vive el panel operativo y el reset con confirmación.</div>
           </div>
@@ -5430,7 +5445,8 @@ function renderAccount() {
       ${billingFocusCard(billingFocus, billing)}
       ${paymentConfigDiagnosticsCard(billing)}
 
-      <div class="card card-span-12">
+      <div class="card card-span-12 account-premium-card account-billing-card">
+        <div class="account-card-topline"><div class="account-card-icon">💳</div><span>BILLING</span></div>
         <h2>Billing</h2>
         <div class="account-metric-grid">
           ${accountMetricCard('Config pago', billing.payment_config_ready ? 'Lista' : 'Incompleta', billing.payment_config_ready ? 'is-positive' : 'is-warning')}
@@ -5446,28 +5462,31 @@ function renderAccount() {
       ${planBlock('plus', plans.plus || [], me.plan, billing, { hidden: isPremiumActive })}
       ${planBlock('premium', plans.premium || [], me.plan, billing)}
 
-      <div class="card card-span-6">
+      <div class="card card-span-6 account-premium-card account-orders-card">
+        <div class="account-card-topline"><div class="account-card-icon">🧾</div><span>ORDERS</span></div>
         <h2>Órdenes recientes</h2>
         <div class="list">
           ${recentOrders.length ? recentOrders.map(recentOrderItem).join('') : '<div class="empty-state">Todavía no hay órdenes registradas.</div>'}
         </div>
       </div>
 
-      <div class="card card-span-6">
+      <div class="card card-span-6 account-premium-card account-rewards-card">
+        <div class="account-card-topline"><div class="account-card-icon">🎁</div><span>REWARDS</span></div>
         <h2>Recompensas recientes</h2>
         <div class="list">
           ${recentRewards.length ? recentRewards.map(referralRewardItem).join('') : '<div class="empty-state">Todavía no tienes recompensas aplicadas.</div>'}
         </div>
       </div>
 
-      <div class="card card-span-12">
+      <div class="card card-span-12 account-premium-card account-timeline-card">
+        <div class="account-card-topline"><div class="account-card-icon">🕒</div><span>TIMELINE</span></div>
         <h2>Timeline comercial</h2>
         <div class="list">
           ${timeline.length ? timeline.map(accountTimelineItem).join('') : '<div class="empty-state">Sin eventos comerciales recientes.</div>'}
         </div>
       </div>
 
-      <div class="card card-span-12 oraculum-bridge-card ${isPremiumActive ? 'is-active' : 'is-locked'}">
+      <div class="card card-span-12 account-ecosystem-card account-oraculum-card oraculum-bridge-card ${isPremiumActive ? 'is-active' : 'is-locked'}">
         <div class="item-header">
           <div>
             <h2 style="margin:0;">Oraculum AI Terminal</h2>
@@ -5490,7 +5509,7 @@ function renderAccount() {
       </div>
 
 
-      <div class="card card-span-12 sentinel-bridge-card ${isPremiumActive ? 'is-active' : 'is-locked'}">
+      <div class="card card-span-12 account-ecosystem-card account-sentinel-card sentinel-bridge-card ${isPremiumActive ? 'is-active' : 'is-locked'}">
         <div class="item-header">
           <div>
             <h2 style="margin:0;">HADES Sentinel</h2>
@@ -5512,14 +5531,16 @@ function renderAccount() {
         </div>
       </div>
 
-      <div class="card card-span-12">
+      <div class="card card-span-12 account-premium-card account-support-card">
+        <div class="account-card-topline"><div class="account-card-icon">🛟</div><span>SUPPORT</span></div>
         <h2>Soporte</h2>
         <div class="action-row">
           <a class="button button-secondary" target="_blank" rel="noopener" href="${escapeHtml(support.url || state.payload.support_url || '#')}">Abrir grupo de soporte</a>
         </div>
       </div>
 
-      <div class="card card-span-12">
+      <div class="card card-span-12 account-premium-card account-app-card">
+        <div class="account-card-topline"><div class="account-card-icon">📲</div><span>PWA SESSION</span></div>
         <h2>App instalada</h2>
         <p style="font-size:0.85rem;color:var(--text-muted,#8899aa);margin-bottom:12px">
           Si instalaste HADES como app, toca este botón para conectar tu sesión.
