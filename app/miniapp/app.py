@@ -11,7 +11,6 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 
 from app.config import (
@@ -72,32 +71,6 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 INDEX_FILE = STATIC_DIR / "index.html"
-
-
-class StaticAndApiCacheHeadersMiddleware(BaseHTTPMiddleware):
-    """Reduce Network Egress without changing business logic."""
-
-    async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
-        path = request.url.path
-
-        if path.startswith("/api/"):
-            response.headers.setdefault("Cache-Control", "no-store")
-            response.headers.setdefault("Pragma", "no-cache")
-            return response
-
-        if path.startswith("/miniapp/static/"):
-            if path.endswith((".png", ".jpg", ".jpeg", ".webp", ".svg", ".ico", ".woff2")):
-                response.headers["Cache-Control"] = "public, max-age=604800, immutable"
-            elif path.endswith((".js", ".css")):
-                response.headers["Cache-Control"] = "public, max-age=3600, must-revalidate"
-            else:
-                response.headers["Cache-Control"] = "public, max-age=86400"
-        elif path in {"/manifest.json", "/sw.js"}:
-            response.headers["Cache-Control"] = "public, max-age=300, must-revalidate"
-
-        return response
-
 
 
 def _build_static_asset_version() -> str:
@@ -216,7 +189,6 @@ def _sanitize_json_payload(value: Any) -> Any:
 
 def create_mini_app() -> FastAPI:
     app = FastAPI(title="HADES Mini App", version="1.0.1")
-    app.add_middleware(StaticAndApiCacheHeadersMiddleware)
     cors_origins = get_mini_app_cors_origins()
     app.add_middleware(GZipMiddleware, minimum_size=1024)
     app.add_middleware(

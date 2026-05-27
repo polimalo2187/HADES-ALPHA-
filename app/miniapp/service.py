@@ -2844,17 +2844,6 @@ def _serialize_admin_regime_strategy_row(row: Optional[Dict[str, Any]]) -> Dict[
 
 
 
-
-
-def _serialize_breakout_reset_funnel_row(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    item = row if isinstance(row, dict) else {}
-    return {
-        "key": str(item.get("key") or "unknown"),
-        "label": str(item.get("label") or item.get("key") or "Sin clasificar"),
-        "count": int(item.get("count") or 0),
-    }
-
-
 def _serialize_admin_strategy_observability(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     base = payload if isinstance(payload, dict) else {}
     overview = base.get("overview") if isinstance(base.get("overview"), dict) else {}
@@ -2877,11 +2866,6 @@ def _serialize_admin_strategy_observability(payload: Optional[Dict[str, Any]]) -
         "reject_reasons_by_strategy": [_serialize_admin_strategy_reject_row(row) for row in (base.get("reject_reasons_by_strategy") or [])],
         "regime_distribution": [_serialize_admin_regime_distribution_row(row) for row in (base.get("regime_distribution") or [])],
         "regime_strategy_matrix": [_serialize_admin_regime_strategy_row(row) for row in (base.get("regime_strategy_matrix") or [])],
-        "breakout_reset_funnel": {
-            key: int(value or 0)
-            for key, value in ((base.get("breakout_reset_funnel") if isinstance(base.get("breakout_reset_funnel"), dict) else {}) or {}).items()
-        },
-        "breakout_reset_funnel_rows": [_serialize_breakout_reset_funnel_row(row) for row in (base.get("breakout_reset_funnel_rows") or [])],
         "latest_cycle": {
             "available": bool(latest_cycle_raw.get("available")),
             "generated_at": _iso(latest_cycle_raw.get("generated_at")),
@@ -2939,11 +2923,6 @@ def _serialize_admin_strategy_observability(payload: Optional[Dict[str, Any]]) -
                 }
                 for row in (latest_cycle_raw.get("top_reject_reasons") or []) if isinstance(row, dict)
             ],
-            "breakout_reset_funnel": {
-                key: int(value or 0)
-                for key, value in ((latest_cycle_raw.get("breakout_reset_funnel") if isinstance(latest_cycle_raw.get("breakout_reset_funnel"), dict) else {}) or {}).items()
-            },
-            "breakout_reset_funnel_rows": [_serialize_breakout_reset_funnel_row(row) for row in (latest_cycle_raw.get("breakout_reset_funnel_rows") or [])],
         },
     }
 
