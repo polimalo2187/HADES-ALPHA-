@@ -155,3 +155,39 @@ def test_publication_timing_guard_blocks_late_entry_near_tp1():
     assert reason == "publication_timing_tp1_progress"
     assert debug["publication_timing_tp1_progress"] == 1
     assert diag["tp1_progress"] > 0.30
+
+
+def test_classic_preentry_fallback_publishes_before_touch(monkeypatch):
+    monkeypatch.setattr(strategy, "BREAKOUT_RESET_PUBLISH_BEFORE_TOUCH_ENABLED", True)
+    monkeypatch.setattr(strategy, "BREAKOUT_RESET_FORCE_CLASSIC_PREENTRY_ON_ARM", True)
+    monkeypatch.setattr(strategy, "BREAKOUT_RESET_PREENTRY_MAX_DISTANCE_ATR", 2.0)
+    df = _stateful_frame(close=101.05)
+    last = df.iloc[-1].copy()
+    quality = {
+        "level": 100.30,
+        "reference_price": 101.05,
+        "extension_atr": 0.75,
+        "current_extension_atr": 0.75,
+        "breakout_candle_open": 100.20,
+        "breakout_candle_close": 100.75,
+    }
+    debug = {}
+
+    pending = strategy._classic_pending_reset_model(
+        quality=quality,
+        last=last,
+        direction="LONG",
+        atr=1.0,
+        atr_pct=0.01,
+        live_price=101.05,
+        live_high=101.10,
+        live_low=100.90,
+        debug_counts=debug,
+    )
+
+    assert pending is not None
+    assert pending["reset_model"] == "level"
+    assert pending["stage"] == strategy.SETUP_STAGE_PRE_RESET_WAITING_RETEST
+    assert pending["entry_model_price"] == 100.30
+    assert debug["breakout_preentry_classic_fallback"] == 1
+    assert debug["breakout_preentry_pending_candidate"] == 1
