@@ -5,6 +5,7 @@ from typing import Optional, Dict, Tuple, List, Any
 import hashlib
 import math
 import os
+import warnings
 from datetime import datetime, timedelta, timezone
 import pandas as pd
 
@@ -239,6 +240,35 @@ TRADING_PROFILES = {
 # =======================================
 
 
+def _safe_adx_series(high: pd.Series, low: pd.Series, close: pd.Series, window: int) -> pd.Series:
+    """Compute ADX without polluting production logs with ta RuntimeWarnings.
+
+    The upstream ``ta`` package can divide by zero internally on flat/illiquid
+    candles. That warning does not mean the scanner is broken, but it does make
+    Railway logs noisy and can leak NaN/inf into strategy gates. We treat invalid
+    ADX as 0: conservative, deterministic, and equivalent to "no trend strength".
+    """
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=".*invalid value encountered in scalar divide.*",
+                category=RuntimeWarning,
+            )
+            warnings.filterwarnings(
+                "ignore",
+                message=".*divide by zero encountered.*",
+                category=RuntimeWarning,
+            )
+            values = ta.trend.adx(high, low, close, window)
+    except Exception:
+        return pd.Series(0.0, index=close.index, dtype="float64")
+
+    series = pd.to_numeric(values, errors="coerce")
+    series = series.replace([float("inf"), float("-inf")], 0.0).fillna(0.0)
+    return series.clip(lower=0.0, upper=100.0).astype(float)
+
+
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
@@ -246,7 +276,7 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["ema50"] = ta.trend.ema_indicator(df["close"], EMA_MID)
     df["ema200"] = ta.trend.ema_indicator(df["close"], EMA_SLOW)
 
-    df["adx"] = ta.trend.adx(df["high"], df["low"], df["close"], ADX_PERIOD)
+    df["adx"] = _safe_adx_series(df["high"], df["low"], df["close"], ADX_PERIOD)
 
     atr = ta.volatility.average_true_range(
         df["high"], df["low"], df["close"], ATR_PERIOD

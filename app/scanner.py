@@ -1383,10 +1383,61 @@ def _merge_debug_counts(total: Dict[str, int], local: Dict[str, int]) -> None:
         total[key] = int(total.get(key, 0)) + int(value)
 
 
-def _compact_rejects(rejects: Dict[str, int], limit: int = 10) -> Dict[str, int]:
-    items = sorted((rejects or {}).items(), key=lambda kv: kv[1], reverse=True)
-    compact = {k: int(v) for k, v in items[: max(1, int(limit))]}
-    other = sum(int(v) for _k, v in items[max(1, int(limit)) :])
+_REJECT_LOG_PRIORITY_KEYS = (
+    # Pre-entry publication path. These must never disappear into __other__,
+    # because they tell us whether Breakout + Reset is publishing before touch.
+    "breakout_signal_pending_entry_candidate",
+    "breakout_preentry_classic_fallback",
+    "breakout_preentry_rejected_entry_too_far",
+    "breakout_preentry_invalid_anchor",
+    "breakout_preentry_trade_profile",
+    "breakout_preentry_model_level",
+    "breakout_preentry_model_ema20",
+    "breakout_preentry_model_midpoint",
+    "breakout_preentry_model_shallow",
+    "breakout_setup_armed_waiting_reset",
+    "breakout_stateful_setup_loaded",
+    "breakout_waiting_live_reset",
+    "breakout_reset_rebounded_before_publish",
+    "breakout_reset_near_miss",
+    "breakout_reset_touch_live",
+    "publication_timing_rejected",
+    "publication_timing_entry_slippage",
+    "score_floor_premium",
+    "score_floor_plus",
+    "score_floor_free",
+    # Router and hard-gate context.
+    "router_allowed_breakout_total",
+    "router_allowed_breakout_direct",
+    "router_allowed_breakout_override",
+    "router_allowed_breakout_fallback",
+    "strategy_router_no_candidate_breakout_reset",
+    "breakout_shape",
+    "trend_structure",
+    "atr_pct_hard",
+    "adx_strength_hard",
+)
+
+
+def _compact_rejects(rejects: Dict[str, int], limit: int = 18) -> Dict[str, int]:
+    """Return a compact but actionable reject summary for production logs.
+
+    The old top-10 summary hid low-frequency-but-critical Breakout + Reset
+    counters inside ``__other__``. That made it impossible to know from Railway
+    logs whether the new pre-entry path was running. We still cap noise, but
+    force critical lifecycle counters to be visible whenever they are non-zero.
+    """
+    cleaned = {str(k): int(v) for k, v in (rejects or {}).items() if int(v or 0) != 0}
+    items = sorted(cleaned.items(), key=lambda kv: kv[1], reverse=True)
+    max_top = max(1, int(limit))
+    compact = {k: int(v) for k, v in items[:max_top]}
+
+    for key in _REJECT_LOG_PRIORITY_KEYS:
+        value = cleaned.get(key)
+        if value:
+            compact[key] = int(value)
+
+    other = sum(int(v) for k, v in cleaned.items() if k not in compact)
     if other:
         compact["__other__"] = other
     return compact
