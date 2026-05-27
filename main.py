@@ -13,16 +13,7 @@ def _run_role() -> None:
         import uvicorn
 
         port = int(os.getenv("PORT", "8000"))
-        access_log = os.getenv("UVICORN_ACCESS_LOG", "false").strip().lower() in {"1", "true", "yes", "on"}
-        log_level = os.getenv("UVICORN_LOG_LEVEL", "warning").strip().lower() or "warning"
-        uvicorn.run(
-            "main:app",
-            host="0.0.0.0",
-            port=port,
-            reload=False,
-            access_log=access_log,
-            log_level=log_level,
-        )
+        uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
         return
 
     if _RUNTIME_ROLE == "signal_worker":
