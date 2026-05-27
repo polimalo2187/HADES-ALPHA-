@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 from typing import Dict, Optional
 
 import pandas as pd
@@ -8,12 +9,14 @@ import pandas as pd
 from app import strategy_breakout_reset as breakout_strategy
 from app import strategy_liquidity_sweep as liquidity_strategy
 
-ROUTER_VERSION = "v1_regime_strategy_router"
+ROUTER_VERSION = "v2_operational_fail_open_router"
 
 _STRATEGY_MAP = {
     "breakout_reset": breakout_strategy,
     "liquidity_sweep_reversal": liquidity_strategy,
 }
+
+ROUTER_TERMINAL_RISK_OFF = str(os.getenv("MARKET_REGIME_TERMINAL_RISK_OFF", "false")).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _strategy_call_kwargs(
@@ -56,14 +59,14 @@ def select_strategy_name(market_regime: Optional[Dict]) -> str:
     snapshot = dict(market_regime or {})
     state = str(snapshot.get("state") or "unknown").strip().lower()
     explicit_strategy = str(snapshot.get("strategy_name") or "").strip().lower()
-    if explicit_strategy in _STRATEGY_MAP or explicit_strategy == "risk_off":
+    if explicit_strategy in _STRATEGY_MAP:
         return explicit_strategy
+    if explicit_strategy == "risk_off":
+        return "risk_off" if ROUTER_TERMINAL_RISK_OFF else "liquidity_sweep_reversal"
     if state == "continuation_clean":
         return "breakout_reset"
-    if state == "sweep_reversal":
-        return "liquidity_sweep_reversal"
-    if state == "risk_off":
-        return "risk_off"
+    if state in {"sweep_reversal", "risk_off", "vol_shock", "cooldown"}:
+        return "risk_off" if (state == "risk_off" and ROUTER_TERMINAL_RISK_OFF) else "liquidity_sweep_reversal"
     return "breakout_reset"
 
 
@@ -84,9 +87,13 @@ def route_candidate(
     reason = str(snapshot.get("reason") or "market_regime_unknown")
     strategy_name = select_strategy_name(snapshot)
 
-    if strategy_name == "risk_off" or state == "risk_off":
-        _record_reject(debug_counts, "market_regime_risk_off")
+    if strategy_name == "risk_off" or (state == "risk_off" and ROUTER_TERMINAL_RISK_OFF):
+        _record_reject(debug_counts, "market_regime_terminal_risk_off")
         return None
+
+    if state == "risk_off" and strategy_name != "liquidity_sweep_reversal":
+        strategy_name = "liquidity_sweep_reversal"
+        _record_reject(debug_counts, "market_regime_risk_off_rerouted_to_liquidity")
 
     strategy_module = _STRATEGY_MAP.get(strategy_name, breakout_strategy)
     strategy_kwargs = _strategy_call_kwargs(

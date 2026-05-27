@@ -22,7 +22,14 @@ MARKET_REGIME_STRONG_SWEEP_MIN_SCORE = max(MARKET_REGIME_SWEEP_MIN_SCORE, int(os
 MARKET_REGIME_MIN_HOLD_SECONDS = max(60, int(os.getenv("MARKET_REGIME_MIN_HOLD_SECONDS", "900")))
 MARKET_REGIME_SNAPSHOT_TTL_SECONDS = max(15.0, float(os.getenv("MARKET_REGIME_SNAPSHOT_TTL_SECONDS", "180")))
 MARKET_REGIME_FAIL_OPEN = str(os.getenv("MARKET_REGIME_FAIL_OPEN", "true")).strip().lower() in {"1", "true", "yes", "on"}
-MARKET_REGIME_ROUTER_VERSION = "v2_btc_regime_router_balanced"
+
+# HADES must stay operational. Risk-off is no longer a broad terminal state by default:
+# - continuation_clean -> Breakout + Reset
+# - sweep/chop/trampa/risk-off normal -> Liquidity Sweep Reversal
+# - only if explicitly enabled, terminal risk-off can block the scanner.
+MARKET_REGIME_TERMINAL_RISK_OFF = str(os.getenv("MARKET_REGIME_TERMINAL_RISK_OFF", "false")).strip().lower() in {"1", "true", "yes", "on"}
+MARKET_REGIME_RISK_OFF_ROUTE_TO_LIQUIDITY = str(os.getenv("MARKET_REGIME_RISK_OFF_ROUTE_TO_LIQUIDITY", "true")).strip().lower() in {"1", "true", "yes", "on"}
+MARKET_REGIME_ROUTER_VERSION = "v3_fail_open_operational_router"
 
 _state_lock = threading.Lock()
 _state: Dict[str, Any] = {
@@ -226,13 +233,25 @@ def _classify_raw_market_regime(df_5m: pd.DataFrame, df_15m: pd.DataFrame) -> Di
     )
 
     if shock_now:
-        raw_state = "risk_off"
-        reason = "market_regime_vol_shock"
-        allow = False
+        # Antes esto bloqueaba todo como risk_off. En modo operacional HADES,
+        # el shock/mercado tramposo debe pasar a Liquidity Sweep, no matar el scanner.
+        if MARKET_REGIME_TERMINAL_RISK_OFF:
+            raw_state = "risk_off"
+            reason = "market_regime_vol_shock_terminal"
+            allow = False
+        else:
+            raw_state = "sweep_reversal"
+            reason = "market_regime_vol_shock_routed_to_liquidity"
+            allow = True
     elif recent_shock:
-        raw_state = "risk_off"
-        reason = "market_regime_cooldown"
-        allow = False
+        if MARKET_REGIME_TERMINAL_RISK_OFF:
+            raw_state = "risk_off"
+            reason = "market_regime_cooldown_terminal"
+            allow = False
+        else:
+            raw_state = "sweep_reversal"
+            reason = "market_regime_cooldown_routed_to_liquidity"
+            allow = True
     elif continuation_score >= 4 and continuation_score >= (sweep_score + 1) and directional_bias in {"up", "down"}:
         raw_state = "continuation_clean"
         reason = "market_regime_continuation_clean"
@@ -279,17 +298,34 @@ def classify_market_regime(df_5m: pd.DataFrame, df_15m: pd.DataFrame, *, now_ts:
         cooldown_until_ts = float(_state.get("cooldown_until_ts") or 0.0)
 
         if raw["raw_state"] == "risk_off":
-            stable_state = "risk_off"
-            entered_at_ts = current_ts
-            cooldown_until_ts = max(cooldown_until_ts, current_ts + (BTC_REGIME_COOLDOWN_BARS * 5 * 60))
-            candidate_state = None
-            candidate_count = 0
-            reason = raw["reason"]
+            if MARKET_REGIME_TERMINAL_RISK_OFF:
+                stable_state = "risk_off"
+                entered_at_ts = current_ts
+                cooldown_until_ts = max(cooldown_until_ts, current_ts + (BTC_REGIME_COOLDOWN_BARS * 5 * 60))
+                candidate_state = None
+                candidate_count = 0
+                reason = raw["reason"]
+            else:
+                stable_state = "sweep_reversal"
+                entered_at_ts = current_ts
+                cooldown_until_ts = 0.0
+                candidate_state = None
+                candidate_count = 0
+                raw["allow"] = True
+                raw["raw_state"] = "sweep_reversal"
+                reason = "market_regime_risk_off_fail_open_to_liquidity"
         elif cooldown_until_ts > current_ts:
-            stable_state = "risk_off"
-            reason = "market_regime_cooldown_hold"
-            raw["allow"] = False
-            raw["raw_state"] = "risk_off"
+            if MARKET_REGIME_TERMINAL_RISK_OFF:
+                stable_state = "risk_off"
+                reason = "market_regime_cooldown_hold"
+                raw["allow"] = False
+                raw["raw_state"] = "risk_off"
+            else:
+                stable_state = "sweep_reversal"
+                reason = "market_regime_cooldown_hold_routed_to_liquidity"
+                cooldown_until_ts = 0.0
+                raw["allow"] = True
+                raw["raw_state"] = "sweep_reversal"
         else:
             raw_state = str(raw.get("raw_state") or "unknown")
             if stable_state in {"unknown", "uninitialized"}:
@@ -319,12 +355,12 @@ def classify_market_regime(df_5m: pd.DataFrame, df_15m: pd.DataFrame, *, now_ts:
                 else:
                     reason = "market_regime_switch_pending"
 
-        allow = stable_state != "risk_off"
+        allow = stable_state != "risk_off" or not MARKET_REGIME_TERMINAL_RISK_OFF
         strategy_name = {
             "continuation_clean": "breakout_reset",
             "sweep_reversal": "liquidity_sweep_reversal",
-            "risk_off": "risk_off",
-            "unknown": "breakout_reset" if MARKET_REGIME_FAIL_OPEN else "risk_off",
+            "risk_off": "risk_off" if MARKET_REGIME_TERMINAL_RISK_OFF else "liquidity_sweep_reversal",
+            "unknown": "breakout_reset" if MARKET_REGIME_FAIL_OPEN else ("risk_off" if MARKET_REGIME_TERMINAL_RISK_OFF else "liquidity_sweep_reversal"),
         }.get(stable_state, "breakout_reset")
 
         snapshot = {
