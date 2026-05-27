@@ -59,9 +59,9 @@ def test_select_dispatchable_signal_skips_duplicate_and_uses_next_candidate(monk
     assert base_signal["symbol"] == "BBBUSDT"
 
 
-def test_scanner_interval_default_is_20_seconds():
+def test_scanner_interval_default_is_45_seconds():
     scanner = _load_scanner()
-    assert scanner.SCAN_INTERVAL_SECONDS == 20
+    assert scanner.SCAN_INTERVAL_SECONDS == 45
 
 
 def test_build_symbol_candidate_omits_reference_market_price_when_strategy_does_not_support_it(monkeypatch):
