@@ -822,154 +822,10 @@ def _fetch_scanner_cycle_stats(from_date: datetime) -> List[Dict[str, Any]]:
         "rejected_by_strategy": 1,
         "reject_reasons": 1,
         "reject_reasons_by_strategy": 1,
-        "breakout_reset_funnel": 1,
         "created_at": 1,
     }
     return list(scanner_cycle_stats_collection().find(query, projection))
 
-
-
-
-
-def _normalize_breakout_reset_funnel(value: Any) -> Dict[str, int]:
-    raw = value if isinstance(value, dict) else {}
-    keys = [
-        "router_allowed_attempts",
-        "router_allowed_direct",
-        "router_allowed_override",
-        "router_allowed_fallback",
-        "router_risk_off_overrides",
-        "router_symbol_continuation_overrides",
-        "router_sweep_fallbacks",
-        "blocked_risk_off_severe",
-        "blocked_symbol_regime",
-        "symbol_continuation_clean",
-        "symbol_compression",
-        "symbol_sweep_chop",
-        "symbol_exhaustion",
-        "symbol_unknown",
-        "setup_armed_waiting_reset",
-        "setup_loaded_waiting_reset",
-        "signal_pending_entry_candidates",
-        "preentry_model_level",
-        "preentry_model_ema20",
-        "preentry_model_midpoint",
-        "preentry_model_shallow",
-        "preentry_classic_fallback",
-        "preentry_rejected_entry_too_far",
-        "reset_extension_wait",
-        "waiting_live_reset",
-        "reset_rebounded_before_publish",
-        "reset_late_or_lost",
-        "reset_near_miss",
-        "reset_touch_live",
-        "reset_model_level",
-        "reset_model_ema20",
-        "reset_model_midpoint",
-        "reset_model_shallow",
-        "publication_timing_rejected",
-        "publication_timing_entry_slippage",
-        "publication_timing_tp1_progress",
-        "publication_timing_tp1_already_touched",
-        "publication_timing_sl_already_touched",
-        "publication_timing_live_range_extended",
-        "reset_touched_candidates",
-        "published_selected",
-        "expired_no_reset",
-        "invalidated",
-        "invalidated_back_inside",
-        "invalidated_breakout_invalidated",
-        "invalidated_breakout_back_inside",
-        "invalidated_invalid_price",
-        "soft_gate_hits",
-        "score_floor_rejected",
-        "hard_gate_rejected",
-        "hard_gate_indicator_warmup",
-        "hard_gate_insufficient_history",
-        "hard_gate_trend_structure",
-        "hard_gate_adx_strength",
-        "hard_gate_atr_pct",
-        "hard_gate_continuation_candle",
-        "hard_gate_breakout_invalidated",
-        "hard_gate_breakout_back_inside",
-        "hard_gate_trade_profile",
-    ]
-    return {key: _safe_int(raw.get(key)) for key in keys}
-
-
-def _add_funnel_counts(target: Dict[str, int], source: Dict[str, int]) -> None:
-    for key, value in (source or {}).items():
-        target[key] = int(target.get(key, 0)) + int(value or 0)
-
-
-def _breakout_reset_funnel_rows(funnel: Dict[str, int]) -> List[Dict[str, Any]]:
-    labels = {
-        "router_allowed_attempts": "Permitidos por router total",
-        "router_allowed_direct": "Permitidos directos",
-        "router_allowed_override": "Permitidos por override",
-        "router_allowed_fallback": "Permitidos por fallback",
-        "router_risk_off_overrides": "Override risk-off moderado",
-        "router_symbol_continuation_overrides": "Override por continuación local",
-        "router_sweep_fallbacks": "Fallback después de sweep",
-        "blocked_risk_off_severe": "Bloqueado por risk-off severo",
-        "blocked_symbol_regime": "Bloqueado por régimen local",
-        "symbol_continuation_clean": "Símbolo en continuación limpia",
-        "symbol_compression": "Símbolo en compresión",
-        "symbol_sweep_chop": "Símbolo en sweep/chop",
-        "symbol_exhaustion": "Símbolo exhausto",
-        "symbol_unknown": "Régimen local desconocido",
-        "setup_armed_waiting_reset": "Breakout armado esperando reset",
-        "setup_loaded_waiting_reset": "Setup stateful recuperado",
-        "signal_pending_entry_candidates": "Publicado esperando entry",
-        "preentry_model_level": "Pre-entry modelo: nivel",
-        "preentry_model_ema20": "Pre-entry modelo: EMA20",
-        "preentry_model_midpoint": "Pre-entry modelo: midpoint",
-        "preentry_model_shallow": "Pre-entry modelo: shallow",
-        "preentry_classic_fallback": "Pre-entry fallback: nivel",
-        "preentry_rejected_entry_too_far": "Pre-entry rechazado: entry lejos",
-        "reset_extension_wait": "Esperando reset por extensión",
-        "waiting_live_reset": "Setup vivo esperando reset",
-        "reset_rebounded_before_publish": "Reset rebotó antes de publicar",
-        "reset_late_or_lost": "Reset tarde o perdido",
-        "reset_near_miss": "Reset cerca sin tocar",
-        "reset_touch_live": "Reset tocado en vivo",
-        "reset_model_level": "Reset modelo: nivel",
-        "reset_model_ema20": "Reset modelo: EMA20",
-        "reset_model_midpoint": "Reset modelo: midpoint",
-        "reset_model_shallow": "Reset modelo: shallow",
-        "publication_timing_rejected": "Bloqueado por timing",
-        "publication_timing_entry_slippage": "Timing: lejos del entry",
-        "publication_timing_tp1_progress": "Timing: avance hacia TP1",
-        "publication_timing_tp1_already_touched": "Timing: TP1 ya tocado",
-        "publication_timing_sl_already_touched": "Timing: SL ya tocado",
-        "publication_timing_live_range_extended": "Timing: vela extendida",
-        "reset_touched_candidates": "Reset tocado / candidato",
-        "published_selected": "Publicado",
-        "expired_no_reset": "Expiró sin reset",
-        "invalidated": "Invalidado",
-        "invalidated_back_inside": "Invalidado: volvió dentro del rango",
-        "invalidated_breakout_invalidated": "Invalidado: breakout falló",
-        "invalidated_breakout_back_inside": "Invalidado: regreso al rango",
-        "invalidated_invalid_price": "Invalidado: precio inválido",
-        "soft_gate_hits": "Soft gates activados",
-        "score_floor_rejected": "Rechazado por piso de score",
-        "hard_gate_rejected": "Hard gates reales rechazados",
-        "hard_gate_indicator_warmup": "Hard: indicadores calentando",
-        "hard_gate_insufficient_history": "Hard: histórico insuficiente",
-        "hard_gate_trend_structure": "Hard: estructura de tendencia",
-        "hard_gate_adx_strength": "Hard: ADX muerto",
-        "hard_gate_atr_pct": "Hard: ATR extremo",
-        "hard_gate_continuation_candle": "Hard: continuación inválida",
-        "hard_gate_breakout_invalidated": "Hard: breakout invalidado",
-        "hard_gate_breakout_back_inside": "Hard: volvió al rango",
-        "hard_gate_trade_profile": "Hard: perfil de trade inválido",
-    }
-    order = list(labels.keys())
-    return [
-        {"key": key, "label": labels[key], "count": int(funnel.get(key, 0) or 0)}
-        for key in order
-        if int(funnel.get(key, 0) or 0) > 0 or key in {"router_allowed_attempts", "setup_armed_waiting_reset", "reset_touched_candidates", "published_selected"}
-    ]
 
 
 def get_latest_scanner_cycle_snapshot() -> Dict[str, Any]:
@@ -982,7 +838,6 @@ def get_latest_scanner_cycle_snapshot() -> Dict[str, Any]:
     rejected_by_strategy = _normalize_count_dict(payload.get("rejected_by_strategy"))
     attempts_by_strategy = _normalize_count_dict(payload.get("attempts_by_strategy"))
     reject_reasons = _normalize_reason_count_dict(payload.get("reject_reasons"))
-    breakout_reset_funnel = _normalize_breakout_reset_funnel(payload.get("breakout_reset_funnel"))
 
     candidate_rows = [
         {
@@ -1041,8 +896,6 @@ def get_latest_scanner_cycle_snapshot() -> Dict[str, Any]:
             for strategy_key, count in sorted(rejected_by_strategy.items(), key=lambda item: (_strategy_sort_key(item[0]), -item[1]))
         ],
         "top_reject_reasons": top_reject_reasons,
-        "breakout_reset_funnel": breakout_reset_funnel,
-        "breakout_reset_funnel_rows": _breakout_reset_funnel_rows(breakout_reset_funnel),
     }
 
 
@@ -1063,7 +916,6 @@ def build_admin_strategy_observability(days: int = 30) -> Dict[str, Any]:
     regime_candidate_pool: Dict[str, int] = defaultdict(int)
     regime_strategy_selected: Dict[tuple[str, str], int] = defaultdict(int)
     regime_strategy_candidates: Dict[tuple[str, str], int] = defaultdict(int)
-    breakout_reset_funnel: Dict[str, int] = defaultdict(int)
 
     attempted_symbols_total = 0
     candidate_pool_total = 0
@@ -1117,8 +969,6 @@ def build_admin_strategy_observability(days: int = 30) -> Dict[str, Any]:
             normalized_strategy = _normalize_strategy_key(strategy_key)
             for reason, count in _normalize_reason_count_dict(reasons).items():
                 reject_reasons_by_strategy[normalized_strategy][reason] += count
-
-        _add_funnel_counts(breakout_reset_funnel, _normalize_breakout_reset_funnel(row.get("breakout_reset_funnel")))
 
     strategy_keys = set(attempts_by_strategy.keys()) | set(candidate_pool_by_strategy.keys()) | set(selected_by_strategy.keys()) | set(rejected_by_strategy.keys())
     strategy_pipeline = []
@@ -1205,8 +1055,6 @@ def build_admin_strategy_observability(days: int = 30) -> Dict[str, Any]:
         "reject_reasons_by_strategy": reject_rows,
         "regime_distribution": regime_distribution,
         "regime_strategy_matrix": matrix_rows,
-        "breakout_reset_funnel": dict(breakout_reset_funnel),
-        "breakout_reset_funnel_rows": _breakout_reset_funnel_rows(dict(breakout_reset_funnel)),
         "latest_cycle": get_latest_scanner_cycle_snapshot(),
     }
 

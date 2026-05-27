@@ -21,7 +21,7 @@ from app.plans import PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM
 from app.signals import create_base_signal
 from app.observability import heartbeat
 from app.models import new_scanner_cycle_stat
-from app import regime_engine, strategy_router, symbol_regime as symbol_regime_engine
+from app import regime_engine, strategy_router
 from app import strategy as strategy_engine
 
 logger = logging.getLogger(__name__)
@@ -32,19 +32,18 @@ BINANCE_FUTURES_API = "https://fapi.binance.com"
 # Scanner runtime config
 # ==============================
 
-SCAN_INTERVAL_SECONDS = int(os.getenv("SCAN_INTERVAL_SECONDS", "45"))
+SCAN_INTERVAL_SECONDS = int(os.getenv("SCAN_INTERVAL_SECONDS", "20"))
 MIN_QUOTE_VOLUME = int(os.getenv("MIN_QUOTE_VOLUME", "20000000"))
-SCANNER_MAX_SYMBOLS = max(1, int(os.getenv("SCANNER_MAX_SYMBOLS", "50")))
 DEDUP_MINUTES = int(os.getenv("DEDUP_MINUTES", "10"))
 
 # Networking / rate limiting
 REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "0.2"))
-REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "8"))
-REQUEST_MAX_RETRIES = max(1, int(os.getenv("REQUEST_MAX_RETRIES", "2")))
+REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "15"))
+REQUEST_MAX_RETRIES = max(1, int(os.getenv("REQUEST_MAX_RETRIES", "4")))
 REQUEST_RETRY_BASE_SLEEP = float(os.getenv("REQUEST_RETRY_BASE_SLEEP", "0.6"))
 
 # Concurrency: how many symbols we process in parallel.
-SCANNER_SYMBOL_CONCURRENCY = max(1, int(os.getenv("SCANNER_SYMBOL_CONCURRENCY", "8")))
+SCANNER_SYMBOL_CONCURRENCY = max(1, int(os.getenv("SCANNER_SYMBOL_CONCURRENCY", "24")))
 
 # Force a global inter-request delay (serializes requests); keep false by default.
 SCANNER_FORCE_REQUEST_DELAY = str(os.getenv("SCANNER_FORCE_REQUEST_DELAY", "false")).strip().lower() in {"1", "true", "yes", "on"}
@@ -52,16 +51,16 @@ SCANNER_FORCE_REQUEST_DELAY = str(os.getenv("SCANNER_FORCE_REQUEST_DELAY", "fals
 # MTF cache: 15M/1H only refresh when a new candle bucket opens.
 # 5M remains uncached by default because the live breakout/reset setup is decided there.
 SCANNER_ENABLE_HTF_CACHE = str(os.getenv("SCANNER_ENABLE_HTF_CACHE", "true")).strip().lower() in {"1", "true", "yes", "on"}
-SCANNER_5M_CACHE_SECONDS = max(0.0, float(os.getenv("SCANNER_5M_CACHE_SECONDS", "45")))
+SCANNER_5M_CACHE_SECONDS = max(0.0, float(os.getenv("SCANNER_5M_CACHE_SECONDS", "0")))
 SCANNER_HTF_STALE_GRACE_SECONDS = max(0.0, float(os.getenv("SCANNER_HTF_STALE_GRACE_SECONDS", "900")))
-ACTIVE_SYMBOLS_CACHE_SECONDS = max(10.0, float(os.getenv("ACTIVE_SYMBOLS_CACHE_SECONDS", "900")))
+ACTIVE_SYMBOLS_CACHE_SECONDS = max(10.0, float(os.getenv("ACTIVE_SYMBOLS_CACHE_SECONDS", "300")))
 SCANNER_BOOTSTRAP_BATCH_SIZE = max(0, int(os.getenv("SCANNER_BOOTSTRAP_BATCH_SIZE", "48")))
 SCANNER_15M_REFRESH_BATCH_SIZE = max(0, int(os.getenv("SCANNER_15M_REFRESH_BATCH_SIZE", "20")))
 SCANNER_1H_REFRESH_BATCH_SIZE = max(0, int(os.getenv("SCANNER_1H_REFRESH_BATCH_SIZE", "8")))
 
 # Optional: soft QPS limiter (token-bucket). Defaults are conservative to avoid Binance bans.
-SCANNER_MAX_REQUESTS_PER_SECOND = float(os.getenv("SCANNER_MAX_REQUESTS_PER_SECOND", "4"))
-SCANNER_MAX_BURST = int(os.getenv("SCANNER_MAX_BURST", "8"))
+SCANNER_MAX_REQUESTS_PER_SECOND = float(os.getenv("SCANNER_MAX_REQUESTS_PER_SECOND", "8"))
+SCANNER_MAX_BURST = int(os.getenv("SCANNER_MAX_BURST", "16"))
 
 # 5m fetching.
 # La estrategia actual es 5M-nativa, así que el default permanece activado.
@@ -154,7 +153,6 @@ def _strategy_call_kwargs(
     *,
     reference_market_price: Optional[float],
     debug_counts: Optional[Dict[str, int]],
-    symbol: Optional[str] = None,
 ) -> Dict:
     kwargs: Dict = {
         "df_1h": df_1h,
@@ -172,8 +170,6 @@ def _strategy_call_kwargs(
 
     if "debug_counts" in parameters:
         kwargs["debug_counts"] = debug_counts if debug_counts is not None else {}
-    if "symbol" in parameters:
-        kwargs["symbol"] = symbol
 
     return kwargs
 
@@ -549,7 +545,6 @@ def build_symbol_candidate(symbol: str, df_1h: pd.DataFrame, df_15m: pd.DataFram
         df_5m=df_5m,
         reference_market_price=reference_price,
         debug_counts=debug_counts,
-        symbol=symbol,
     )
     result = strategy_engine.mtf_strategy(**strategy_kwargs)
     if not result:
@@ -583,17 +578,12 @@ def route_symbol_candidate(
     except Exception:
         reference_price = None
 
-    symbol_regime = symbol_regime_engine.classify_symbol_regime(df_5m, closed_15m, symbol=symbol)
-    if debug_counts is not None:
-        debug_counts[f"symbol_regime_{symbol_regime.get('state', 'symbol_unknown')}"] = int(debug_counts.get(f"symbol_regime_{symbol_regime.get('state', 'symbol_unknown')}", 0)) + 1
-
     result = strategy_router.route_candidate(
         symbol=symbol,
         df_1h=closed_1h,
         df_15m=closed_15m,
         df_5m=df_5m,
         market_regime=market_regime,
-        symbol_regime=symbol_regime,
         reference_market_price=reference_price,
         debug_counts=debug_counts,
     )
@@ -1034,29 +1024,14 @@ def get_active_futures_symbols(*, allow_stale_on_error: bool = True) -> List[str
                 return stale
         raise
 
-    candidates = []
-    for item in payload:
-        symbol = str(item.get("symbol", "")).upper()
-        if not symbol.endswith("USDT"):
-            continue
-        try:
-            quote_volume = float(item.get("quoteVolume", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            quote_volume = 0.0
-        if quote_volume < MIN_QUOTE_VOLUME:
-            continue
-        candidates.append((symbol, quote_volume))
-
-    candidates.sort(key=lambda row: row[1], reverse=True)
-    symbols = [symbol for symbol, _ in candidates[:SCANNER_MAX_SYMBOLS]]
-
+    symbols = [
+        item["symbol"]
+        for item in payload
+        if str(item.get("symbol", "")).endswith("USDT")
+        and float(item.get("quoteVolume", 0.0) or 0.0) >= MIN_QUOTE_VOLUME
+    ]
     _active_symbols_cache.set(symbols)
-    logger.info(
-        "📊 Scanner universe: top %s/%s símbolos USDT por volumen 24h (min_quote_volume=%s)",
-        len(symbols),
-        len(candidates),
-        MIN_QUOTE_VOLUME,
-    )
+    logger.info("📊 %s símbolos activos con volumen suficiente", len(symbols))
     return symbols
 
 
@@ -1383,61 +1358,10 @@ def _merge_debug_counts(total: Dict[str, int], local: Dict[str, int]) -> None:
         total[key] = int(total.get(key, 0)) + int(value)
 
 
-_REJECT_LOG_PRIORITY_KEYS = (
-    # Pre-entry publication path. These must never disappear into __other__,
-    # because they tell us whether Breakout + Reset is publishing before touch.
-    "breakout_signal_pending_entry_candidate",
-    "breakout_preentry_classic_fallback",
-    "breakout_preentry_rejected_entry_too_far",
-    "breakout_preentry_invalid_anchor",
-    "breakout_preentry_trade_profile",
-    "breakout_preentry_model_level",
-    "breakout_preentry_model_ema20",
-    "breakout_preentry_model_midpoint",
-    "breakout_preentry_model_shallow",
-    "breakout_setup_armed_waiting_reset",
-    "breakout_stateful_setup_loaded",
-    "breakout_waiting_live_reset",
-    "breakout_reset_rebounded_before_publish",
-    "breakout_reset_near_miss",
-    "breakout_reset_touch_live",
-    "publication_timing_rejected",
-    "publication_timing_entry_slippage",
-    "score_floor_premium",
-    "score_floor_plus",
-    "score_floor_free",
-    # Router and hard-gate context.
-    "router_allowed_breakout_total",
-    "router_allowed_breakout_direct",
-    "router_allowed_breakout_override",
-    "router_allowed_breakout_fallback",
-    "strategy_router_no_candidate_breakout_reset",
-    "breakout_shape",
-    "trend_structure",
-    "atr_pct_hard",
-    "adx_strength_hard",
-)
-
-
-def _compact_rejects(rejects: Dict[str, int], limit: int = 18) -> Dict[str, int]:
-    """Return a compact but actionable reject summary for production logs.
-
-    The old top-10 summary hid low-frequency-but-critical Breakout + Reset
-    counters inside ``__other__``. That made it impossible to know from Railway
-    logs whether the new pre-entry path was running. We still cap noise, but
-    force critical lifecycle counters to be visible whenever they are non-zero.
-    """
-    cleaned = {str(k): int(v) for k, v in (rejects or {}).items() if int(v or 0) != 0}
-    items = sorted(cleaned.items(), key=lambda kv: kv[1], reverse=True)
-    max_top = max(1, int(limit))
-    compact = {k: int(v) for k, v in items[:max_top]}
-
-    for key in _REJECT_LOG_PRIORITY_KEYS:
-        value = cleaned.get(key)
-        if value:
-            compact[key] = int(value)
-
-    other = sum(int(v) for k, v in cleaned.items() if k not in compact)
+def _compact_rejects(rejects: Dict[str, int], limit: int = 10) -> Dict[str, int]:
+    items = sorted((rejects or {}).items(), key=lambda kv: kv[1], reverse=True)
+    compact = {k: int(v) for k, v in items[: max(1, int(limit))]}
+    other = sum(int(v) for _k, v in items[max(1, int(limit)) :])
     if other:
         compact["__other__"] = other
     return compact
@@ -1495,204 +1419,12 @@ def _summarize_selected_by_strategy(signals: List[Dict[str, Any]]) -> Dict[str, 
 def _market_regime_summary(snapshot: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     payload = dict(snapshot or {})
     selected_strategy = _normalize_strategy_key(strategy_router.select_strategy_name(payload))
-    risk_severity = str(payload.get('risk_severity') or payload.get('severity') or 'none').strip().lower() or 'none'
     return {
         'state': str(payload.get('state') or 'unknown').strip().lower() or 'unknown',
         'bias': str(payload.get('bias') or 'neutral').strip().lower() or 'neutral',
         'reason': str(payload.get('reason') or 'market_regime_unknown').strip() or 'market_regime_unknown',
-        'raw_reason': str(payload.get('raw_reason') or payload.get('reason') or 'market_regime_unknown').strip() or 'market_regime_unknown',
-        'risk_severity': risk_severity,
-        'allow': bool(payload.get('allow', risk_severity != 'severe')),
         'strategy_name': selected_strategy,
     }
-
-
-
-
-_BREAKOUT_RESET_FUNNEL_FIELDS = (
-    "router_allowed_attempts",
-    "router_allowed_direct",
-    "router_allowed_override",
-    "router_allowed_fallback",
-    "router_risk_off_overrides",
-    "router_symbol_continuation_overrides",
-    "router_sweep_fallbacks",
-    "blocked_risk_off_severe",
-    "blocked_symbol_regime",
-    "symbol_continuation_clean",
-    "symbol_compression",
-    "symbol_sweep_chop",
-    "symbol_exhaustion",
-    "symbol_unknown",
-    "setup_armed_waiting_reset",
-    "setup_loaded_waiting_reset",
-    "signal_pending_entry_candidates",
-    "preentry_model_level",
-    "preentry_model_ema20",
-    "preentry_model_midpoint",
-    "preentry_model_shallow",
-    "preentry_classic_fallback",
-    "preentry_rejected_entry_too_far",
-    "reset_extension_wait",
-    "waiting_live_reset",
-    "reset_rebounded_before_publish",
-    "reset_late_or_lost",
-    "reset_near_miss",
-    "reset_touch_live",
-    "reset_model_level",
-    "reset_model_ema20",
-    "reset_model_midpoint",
-    "reset_model_shallow",
-    "publication_timing_rejected",
-    "publication_timing_entry_slippage",
-    "publication_timing_tp1_progress",
-    "publication_timing_tp1_already_touched",
-    "publication_timing_sl_already_touched",
-    "publication_timing_live_range_extended",
-    "reset_touched_candidates",
-    "published_selected",
-    "expired_no_reset",
-    "invalidated",
-    "invalidated_back_inside",
-    "invalidated_breakout_invalidated",
-    "invalidated_breakout_back_inside",
-    "invalidated_invalid_price",
-    "soft_gate_hits",
-    "score_floor_rejected",
-    "hard_gate_rejected",
-    "hard_gate_indicator_warmup",
-    "hard_gate_insufficient_history",
-    "hard_gate_trend_structure",
-    "hard_gate_adx_strength",
-    "hard_gate_atr_pct",
-    "hard_gate_continuation_candle",
-    "hard_gate_breakout_invalidated",
-    "hard_gate_breakout_back_inside",
-    "hard_gate_trade_profile",
-)
-
-_BREAKOUT_RESET_HARD_REJECT_PREFIXES = (
-    "adx_strength_hard",
-    "atr_pct_hard",
-    "continuation_candle_hard",
-    "breakout_invalidated",
-    "breakout_drifted_back_inside",
-    "breakout_trade_profile",
-    "indicator_warmup",
-    "insufficient_history",
-    "trend_structure",
-)
-
-
-def _zero_breakout_reset_funnel() -> Dict[str, int]:
-    return {field: 0 for field in _BREAKOUT_RESET_FUNNEL_FIELDS}
-
-
-def _count_debug_prefix(debug_counts: Dict[str, int], *prefixes: str) -> int:
-    total = 0
-    for key, value in (debug_counts or {}).items():
-        key_s = str(key or "")
-        if any(key_s == prefix or key_s.startswith(prefix) for prefix in prefixes):
-            total += int(value or 0)
-    return total
-
-
-def _build_breakout_reset_funnel(
-    *,
-    reject_totals: Dict[str, int],
-    candidate_pool_by_strategy: Dict[str, int],
-    selected_by_strategy: Dict[str, int],
-    rejected_by_strategy: Dict[str, int],
-    attempts_by_strategy: Dict[str, int],
-) -> Dict[str, int]:
-    """Compact lifecycle metrics for Breakout + Reset.
-
-    These counters intentionally separate lifecycle events from terminal reject
-    reasons. A setup that is armed and waiting for reset is not a bad reject;
-    it is a useful intermediate state that explains why the strategy may not
-    have published yet.
-    """
-    funnel = _zero_breakout_reset_funnel()
-    debug = reject_totals or {}
-    router_allowed_total = int(debug.get("router_allowed_breakout_total", 0) or 0)
-    router_allowed_direct = int(debug.get("router_allowed_breakout_direct", 0) or 0)
-    router_allowed_override = int(debug.get("router_allowed_breakout_override", 0) or 0)
-    router_allowed_fallback = int(debug.get("router_allowed_breakout_fallback", 0) or 0)
-    legacy_attempts = int(attempts_by_strategy.get("breakout_reset", 0) or 0)
-    # Backward compatible fallback for cycles generated before the router emitted
-    # granular allow counters. New cycles should use router_allowed_breakout_total.
-    funnel["router_allowed_attempts"] = max(router_allowed_total, legacy_attempts)
-    funnel["router_allowed_direct"] = router_allowed_direct
-    funnel["router_allowed_override"] = router_allowed_override
-    funnel["router_allowed_fallback"] = router_allowed_fallback
-    funnel["router_risk_off_overrides"] = int(debug.get("router_risk_off_breakout_reset_override", 0) or 0)
-    funnel["router_symbol_continuation_overrides"] = int(debug.get("router_symbol_continuation_breakout_override", 0) or 0)
-    funnel["router_sweep_fallbacks"] = int(debug.get("strategy_router_try_breakout_reset_fallback", 0) or 0)
-    funnel["blocked_risk_off_severe"] = int(debug.get("market_regime_risk_off_hard_block", 0) or 0)
-    funnel["blocked_symbol_regime"] = _count_debug_prefix(debug, "symbol_regime_block_")
-    funnel["symbol_continuation_clean"] = int(debug.get("symbol_regime_symbol_continuation_clean", 0) or 0)
-    funnel["symbol_compression"] = int(debug.get("symbol_regime_symbol_compression", 0) or 0)
-    funnel["symbol_sweep_chop"] = int(debug.get("symbol_regime_symbol_sweep_chop", 0) or 0)
-    funnel["symbol_exhaustion"] = int(debug.get("symbol_regime_symbol_exhaustion", 0) or 0)
-    funnel["symbol_unknown"] = int(debug.get("symbol_regime_symbol_unknown", 0) or 0)
-    funnel["setup_armed_waiting_reset"] = int(debug.get("breakout_setup_armed_waiting_reset", 0) or 0)
-    funnel["setup_loaded_waiting_reset"] = int(debug.get("breakout_stateful_setup_loaded", 0) or 0)
-    funnel["signal_pending_entry_candidates"] = int(debug.get("breakout_signal_pending_entry_candidate", 0) or 0)
-    funnel["preentry_model_level"] = int(debug.get("breakout_preentry_model_level", 0) or 0)
-    funnel["preentry_model_ema20"] = int(debug.get("breakout_preentry_model_ema20", 0) or 0)
-    funnel["preentry_model_midpoint"] = int(debug.get("breakout_preentry_model_midpoint", 0) or 0)
-    funnel["preentry_model_shallow"] = int(debug.get("breakout_preentry_model_shallow", 0) or 0)
-    funnel["preentry_classic_fallback"] = int(debug.get("breakout_preentry_classic_fallback", 0) or 0)
-    funnel["preentry_rejected_entry_too_far"] = int(debug.get("breakout_preentry_rejected_entry_too_far", 0) or 0)
-    funnel["reset_extension_wait"] = int(debug.get("breakout_stateful_extension_wait", 0) or 0)
-    funnel["waiting_live_reset"] = int(debug.get("breakout_waiting_live_reset", 0) or 0)
-    funnel["reset_rebounded_before_publish"] = int(debug.get("breakout_reset_rebounded_before_publish", 0) or 0)
-    funnel["reset_late_or_lost"] = int(debug.get("breakout_reset_late", 0) or 0)
-    funnel["reset_near_miss"] = int(debug.get("breakout_reset_near_miss", 0) or 0)
-    funnel["reset_touch_live"] = int(debug.get("breakout_reset_touch_live", 0) or 0)
-    funnel["reset_model_level"] = int(debug.get("breakout_reset_model_level", 0) or 0)
-    funnel["reset_model_ema20"] = int(debug.get("breakout_reset_model_ema20", 0) or 0)
-    funnel["reset_model_midpoint"] = int(debug.get("breakout_reset_model_midpoint", 0) or 0)
-    funnel["reset_model_shallow"] = int(debug.get("breakout_reset_model_shallow", 0) or 0)
-    funnel["publication_timing_rejected"] = int(debug.get("publication_timing_rejected", 0) or 0)
-    funnel["publication_timing_entry_slippage"] = int(debug.get("publication_timing_entry_slippage", 0) or 0)
-    funnel["publication_timing_tp1_progress"] = int(debug.get("publication_timing_tp1_progress", 0) or 0)
-    funnel["publication_timing_tp1_already_touched"] = int(debug.get("publication_timing_tp1_already_touched", 0) or 0)
-    funnel["publication_timing_sl_already_touched"] = int(debug.get("publication_timing_sl_already_touched", 0) or 0)
-    funnel["publication_timing_live_range_extended"] = int(debug.get("publication_timing_live_range_extended", 0) or 0)
-    funnel["reset_touched_candidates"] = int(candidate_pool_by_strategy.get("breakout_reset", 0) or 0)
-    funnel["published_selected"] = int(selected_by_strategy.get("breakout_reset", 0) or 0)
-    funnel["expired_no_reset"] = int(debug.get("breakout_setup_expired", 0) or 0) + int(debug.get("expired_no_reset", 0) or 0)
-    funnel["invalidated_back_inside"] = int(debug.get("stateful_setup_back_inside_range", 0) or 0)
-    funnel["invalidated_breakout_invalidated"] = _count_debug_prefix(debug, "breakout_invalidated")
-    funnel["invalidated_breakout_back_inside"] = _count_debug_prefix(debug, "breakout_drifted_back_inside")
-    funnel["invalidated_invalid_price"] = int(debug.get("stateful_setup_invalid_price", 0) or 0)
-    funnel["invalidated"] = (
-        int(funnel["invalidated_back_inside"])
-        + int(funnel["invalidated_breakout_invalidated"])
-        + int(funnel["invalidated_breakout_back_inside"])
-        + int(funnel["invalidated_invalid_price"])
-        + int(debug.get("breakout_setup_invalidated", 0) or 0)
-    )
-    funnel["soft_gate_hits"] = _count_debug_prefix(debug, "soft_gate_")
-    funnel["score_floor_rejected"] = _count_debug_prefix(debug, "score_floor_")
-    funnel["hard_gate_rejected"] = _count_debug_prefix(debug, *_BREAKOUT_RESET_HARD_REJECT_PREFIXES)
-    funnel["hard_gate_indicator_warmup"] = int(debug.get("indicator_warmup", 0) or 0)
-    funnel["hard_gate_insufficient_history"] = int(debug.get("insufficient_history", 0) or 0)
-    funnel["hard_gate_trend_structure"] = int(debug.get("trend_structure", 0) or 0)
-    funnel["hard_gate_adx_strength"] = int(debug.get("adx_strength_hard", 0) or 0)
-    funnel["hard_gate_atr_pct"] = int(debug.get("atr_pct_hard", 0) or 0)
-    funnel["hard_gate_continuation_candle"] = int(debug.get("continuation_candle_hard", 0) or 0)
-    funnel["hard_gate_breakout_invalidated"] = _count_debug_prefix(debug, "breakout_invalidated")
-    funnel["hard_gate_breakout_back_inside"] = _count_debug_prefix(debug, "breakout_drifted_back_inside")
-    funnel["hard_gate_trade_profile"] = int(debug.get("breakout_trade_profile", 0) or 0)
-    # Ensure candidate/selected never disappear from the funnel even when there
-    # were no rejections in the cycle.
-    if funnel["reset_touched_candidates"] < 0:
-        funnel["reset_touched_candidates"] = 0
-    if funnel["published_selected"] < 0:
-        funnel["published_selected"] = 0
-    return funnel
 
 
 def _persist_scanner_cycle_stat(payload: Dict[str, Any]) -> None:
@@ -1806,8 +1538,6 @@ async def scan_market_async(bot: Bot):
                         failure_samples.append(failure)
                     continue
 
-                _merge_debug_counts(reject_totals, local_debug)
-
                 if candidate:
                     candidates.append(candidate)
                     continue
@@ -1817,6 +1547,7 @@ async def scan_market_async(bot: Bot):
                     risk_off_symbols_total += 1
                 elif regime_strategy_key:
                     rejected_by_strategy[regime_strategy_key] = int(rejected_by_strategy.get(regime_strategy_key, 0)) + 1
+                _merge_debug_counts(reject_totals, local_debug)
                 terminal_reason = _extract_failure_reason(local_debug) or "unknown"
                 if regime_strategy_key and regime_strategy_key != "risk_off":
                     _increment_reason_bucket(reject_reasons_by_strategy, regime_strategy_key, terminal_reason)
@@ -1928,18 +1659,6 @@ async def scan_market_async(bot: Bot):
 
             selected_by_strategy = _summarize_selected_by_strategy(selected_signals)
             attempts_by_strategy = {regime_strategy_key: attempted_symbols_total} if regime_strategy_key and regime_strategy_key != "risk_off" else {}
-            breakout_reset_funnel = _build_breakout_reset_funnel(
-                reject_totals=reject_totals,
-                candidate_pool_by_strategy=candidate_pool_by_strategy,
-                selected_by_strategy=selected_by_strategy,
-                rejected_by_strategy=rejected_by_strategy,
-                attempts_by_strategy=attempts_by_strategy,
-            )
-            if int(breakout_reset_funnel.get("router_allowed_attempts", 0) or 0) > 0:
-                attempts_by_strategy["breakout_reset"] = max(
-                    int(attempts_by_strategy.get("breakout_reset", 0) or 0),
-                    int(breakout_reset_funnel.get("router_allowed_attempts", 0) or 0),
-                )
             overall_terminal_reasons: Dict[str, int] = {}
             for bucket in reject_reasons_by_strategy.values():
                 for reason, count in bucket.items():
@@ -1967,7 +1686,6 @@ async def scan_market_async(bot: Bot):
                 "rejected_by_strategy": rejected_by_strategy,
                 "reject_reasons": overall_terminal_reasons,
                 "reject_reasons_by_strategy": reject_reasons_by_strategy,
-                "breakout_reset_funnel": breakout_reset_funnel,
                 "kline_cache": cache_stats,
             }
 
@@ -1995,7 +1713,6 @@ async def scan_market_async(bot: Bot):
                     rejected_by_strategy=rejected_by_strategy,
                     reject_reasons=overall_terminal_reasons,
                     reject_reasons_by_strategy=reject_reasons_by_strategy,
-                    breakout_reset_funnel=breakout_reset_funnel,
                     cache_stats=cache_stats,
                 )
             )

@@ -15,21 +15,6 @@ BTC_REGIME_FAST_MOVE_PCT = max(0.08, float(os.getenv("BTC_REGIME_FAST_MOVE_PCT",
 BTC_REGIME_SHOCK_MOVE_PCT = max(0.20, float(os.getenv("BTC_REGIME_SHOCK_MOVE_PCT", "0.90")))
 BTC_REGIME_SHOCK_RANGE_ATR = max(1.0, float(os.getenv("BTC_REGIME_SHOCK_RANGE_ATR", "2.20")))
 BTC_REGIME_SHOCK_BODY_ATR = max(0.8, float(os.getenv("BTC_REGIME_SHOCK_BODY_ATR", "1.20")))
-# Phase 2: risk-off is no longer binary. Moderate shocks should penalize routing,
-# not hard-disable all strategies. Severe shocks remain a true circuit breaker.
-BTC_REGIME_SEVERE_SHOCK_MOVE_PCT = max(
-    BTC_REGIME_SHOCK_MOVE_PCT,
-    float(os.getenv("BTC_REGIME_SEVERE_SHOCK_MOVE_PCT", "1.60")),
-)
-BTC_REGIME_SEVERE_SHOCK_RANGE_ATR = max(
-    BTC_REGIME_SHOCK_RANGE_ATR,
-    float(os.getenv("BTC_REGIME_SEVERE_SHOCK_RANGE_ATR", "3.40")),
-)
-BTC_REGIME_SEVERE_SHOCK_BODY_ATR = max(
-    BTC_REGIME_SHOCK_BODY_ATR,
-    float(os.getenv("BTC_REGIME_SEVERE_SHOCK_BODY_ATR", "2.10")),
-)
-BTC_REGIME_SEVERE_MIN_TRIGGERS = max(1, int(os.getenv("BTC_REGIME_SEVERE_MIN_TRIGGERS", "2")))
 BTC_REGIME_COOLDOWN_BARS = max(1, int(os.getenv("BTC_REGIME_COOLDOWN_BARS", "3")))
 MARKET_REGIME_CONFIRM_BARS = max(1, int(os.getenv("MARKET_REGIME_CONFIRM_BARS", "2")))
 MARKET_REGIME_SWEEP_MIN_SCORE = max(2, int(os.getenv("MARKET_REGIME_SWEEP_MIN_SCORE", "3")))
@@ -47,7 +32,6 @@ _state: Dict[str, Any] = {
     "bias": "neutral",
     "allow": True,
     "reason": "uninitialized",
-    "risk_severity": "none",
     "entered_at_ts": 0.0,
     "candidate_state": None,
     "candidate_count": 0,
@@ -104,53 +88,6 @@ def _direction_from_move(move: float, tolerance: float = 1e-9) -> str:
     return "neutral"
 
 
-def _normalize_risk_severity(value: Any) -> str:
-    normalized = str(value or "none").strip().lower()
-    if normalized in {"critical", "hard", "blocked"}:
-        return "severe"
-    if normalized in {"medium", "moderate", "soft", "cooldown"}:
-        return "moderate"
-    if normalized == "severe":
-        return "severe"
-    return "none"
-
-
-def _is_severe_risk(severity: Any) -> bool:
-    return _normalize_risk_severity(severity) == "severe"
-
-
-def _shock_trigger_counts(*, last_range_atr: float, last_body_atr: float, last_move_pct: float) -> Dict[str, Any]:
-    standard_triggers = {
-        "range_atr": bool(last_range_atr >= BTC_REGIME_SHOCK_RANGE_ATR),
-        "body_atr": bool(last_body_atr >= BTC_REGIME_SHOCK_BODY_ATR),
-        "move_pct": bool(last_move_pct >= BTC_REGIME_SHOCK_MOVE_PCT),
-    }
-    severe_triggers = {
-        "range_atr": bool(last_range_atr >= BTC_REGIME_SEVERE_SHOCK_RANGE_ATR),
-        "body_atr": bool(last_body_atr >= BTC_REGIME_SEVERE_SHOCK_BODY_ATR),
-        "move_pct": bool(last_move_pct >= BTC_REGIME_SEVERE_SHOCK_MOVE_PCT),
-    }
-    return {
-        "standard": standard_triggers,
-        "severe": severe_triggers,
-        "standard_count": sum(1 for triggered in standard_triggers.values() if triggered),
-        "severe_count": sum(1 for triggered in severe_triggers.values() if triggered),
-    }
-
-
-def _risk_severity_from_shock(*, last_range_atr: float, last_body_atr: float, last_move_pct: float, recent_shock: bool) -> str:
-    trigger_counts = _shock_trigger_counts(
-        last_range_atr=last_range_atr,
-        last_body_atr=last_body_atr,
-        last_move_pct=last_move_pct,
-    )
-    if int(trigger_counts["severe_count"]) >= 1 or int(trigger_counts["standard_count"]) >= BTC_REGIME_SEVERE_MIN_TRIGGERS:
-        return "severe"
-    if int(trigger_counts["standard_count"]) >= 1 or recent_shock:
-        return "moderate"
-    return "none"
-
-
 def _body_ratio_series(df: pd.DataFrame) -> pd.Series:
     rng = (df["high"].astype(float) - df["low"].astype(float)).replace(0, 1e-9)
     body = (df["close"].astype(float) - df["open"].astype(float)).abs()
@@ -197,7 +134,6 @@ def _classify_raw_market_regime(df_5m: pd.DataFrame, df_15m: pd.DataFrame) -> Di
             "bias": "neutral",
             "allow": MARKET_REGIME_FAIL_OPEN,
             "reason": "market_regime_insufficient_btc_history",
-            "risk_severity": "none",
             "metrics": {},
         }
 
@@ -208,7 +144,6 @@ def _classify_raw_market_regime(df_5m: pd.DataFrame, df_15m: pd.DataFrame) -> Di
             "bias": "neutral",
             "allow": MARKET_REGIME_FAIL_OPEN,
             "reason": "market_regime_btc_atr_unavailable",
-            "risk_severity": "none",
             "metrics": {},
         }
 
@@ -273,17 +208,10 @@ def _classify_raw_market_regime(df_5m: pd.DataFrame, df_15m: pd.DataFrame) -> Di
     if abs(move_15m_pct) < BTC_REGIME_DIRECTIONAL_MOVE_PCT or abs(move_fast_pct) < BTC_REGIME_FAST_MOVE_PCT:
         sweep_score += 1
 
-    shock_counts = _shock_trigger_counts(
-        last_range_atr=last_range_atr,
-        last_body_atr=last_body_atr,
-        last_move_pct=last_move_pct,
-    )
-    shock_now = int(shock_counts["standard_count"]) >= 1
-    risk_severity = _risk_severity_from_shock(
-        last_range_atr=last_range_atr,
-        last_body_atr=last_body_atr,
-        last_move_pct=last_move_pct,
-        recent_shock=recent_shock,
+    shock_now = bool(
+        last_range_atr >= BTC_REGIME_SHOCK_RANGE_ATR
+        or last_body_atr >= BTC_REGIME_SHOCK_BODY_ATR
+        or last_move_pct >= BTC_REGIME_SHOCK_MOVE_PCT
     )
 
     raw_state = "continuation_clean"
@@ -299,13 +227,12 @@ def _classify_raw_market_regime(df_5m: pd.DataFrame, df_15m: pd.DataFrame) -> Di
 
     if shock_now:
         raw_state = "risk_off"
-        reason = "market_regime_vol_shock_severe" if risk_severity == "severe" else "market_regime_vol_shock_moderate"
-        allow = not _is_severe_risk(risk_severity)
+        reason = "market_regime_vol_shock"
+        allow = False
     elif recent_shock:
         raw_state = "risk_off"
-        risk_severity = "moderate"
         reason = "market_regime_cooldown"
-        allow = True
+        allow = False
     elif continuation_score >= 4 and continuation_score >= (sweep_score + 1) and directional_bias in {"up", "down"}:
         raw_state = "continuation_clean"
         reason = "market_regime_continuation_clean"
@@ -336,12 +263,7 @@ def _classify_raw_market_regime(df_5m: pd.DataFrame, df_15m: pd.DataFrame) -> Di
             "avg_wickiness_15m": round(float(wickiness_15m.mean()), 4),
             "continuation_score": continuation_score,
             "sweep_score": sweep_score,
-            "shock_trigger_count": int(shock_counts["standard_count"]),
-            "severe_shock_trigger_count": int(shock_counts["severe_count"]),
-            "shock_triggers": dict(shock_counts["standard"]),
-            "severe_shock_triggers": dict(shock_counts["severe"]),
         },
-        "risk_severity": risk_severity,
     }
 
 
@@ -355,11 +277,9 @@ def classify_market_regime(df_5m: pd.DataFrame, df_15m: pd.DataFrame, *, now_ts:
         candidate_state = _state.get("candidate_state")
         candidate_count = int(_state.get("candidate_count") or 0)
         cooldown_until_ts = float(_state.get("cooldown_until_ts") or 0.0)
-        risk_severity = _normalize_risk_severity(_state.get("risk_severity"))
 
         if raw["raw_state"] == "risk_off":
             stable_state = "risk_off"
-            risk_severity = _normalize_risk_severity(raw.get("risk_severity"))
             entered_at_ts = current_ts
             cooldown_until_ts = max(cooldown_until_ts, current_ts + (BTC_REGIME_COOLDOWN_BARS * 5 * 60))
             candidate_state = None
@@ -367,13 +287,10 @@ def classify_market_regime(df_5m: pd.DataFrame, df_15m: pd.DataFrame, *, now_ts:
             reason = raw["reason"]
         elif cooldown_until_ts > current_ts:
             stable_state = "risk_off"
-            risk_severity = "moderate"
             reason = "market_regime_cooldown_hold"
-            raw["allow"] = True
-            raw["risk_severity"] = risk_severity
+            raw["allow"] = False
             raw["raw_state"] = "risk_off"
         else:
-            risk_severity = _normalize_risk_severity(raw.get("risk_severity"))
             raw_state = str(raw.get("raw_state") or "unknown")
             if stable_state in {"unknown", "uninitialized"}:
                 stable_state = raw_state
@@ -402,14 +319,11 @@ def classify_market_regime(df_5m: pd.DataFrame, df_15m: pd.DataFrame, *, now_ts:
                 else:
                     reason = "market_regime_switch_pending"
 
-        if stable_state != "risk_off":
-            risk_severity = "none"
-
-        allow = stable_state != "risk_off" or not _is_severe_risk(risk_severity)
+        allow = stable_state != "risk_off"
         strategy_name = {
             "continuation_clean": "breakout_reset",
             "sweep_reversal": "liquidity_sweep_reversal",
-            "risk_off": "risk_off" if _is_severe_risk(risk_severity) else "breakout_reset",
+            "risk_off": "risk_off",
             "unknown": "breakout_reset" if MARKET_REGIME_FAIL_OPEN else "risk_off",
         }.get(stable_state, "breakout_reset")
 
@@ -421,8 +335,7 @@ def classify_market_regime(df_5m: pd.DataFrame, df_15m: pd.DataFrame, *, now_ts:
             "allow": allow,
             "reason": reason,
             "raw_reason": raw.get("reason"),
-            "risk_severity": risk_severity,
-            "metrics": {**dict(raw.get("metrics") or {}), "risk_severity": risk_severity},
+            "metrics": dict(raw.get("metrics") or {}),
             "entered_at_ts": entered_at_ts,
             "stable_for_seconds": round(max(0.0, current_ts - entered_at_ts), 2) if entered_at_ts else 0.0,
             "candidate_state": candidate_state,
@@ -476,8 +389,7 @@ def fetch_market_regime_snapshot(
             "allow": MARKET_REGIME_FAIL_OPEN,
             "reason": "market_regime_fetch_failed_fail_open" if MARKET_REGIME_FAIL_OPEN else "market_regime_fetch_failed_fail_closed",
             "raw_reason": "market_regime_fetch_failed",
-            "risk_severity": "none" if MARKET_REGIME_FAIL_OPEN else "severe",
-            "metrics": {"risk_severity": "none" if MARKET_REGIME_FAIL_OPEN else "severe"},
+            "metrics": {},
             "entered_at_ts": 0.0,
             "stable_for_seconds": 0.0,
             "candidate_state": None,
