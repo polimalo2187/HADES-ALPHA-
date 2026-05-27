@@ -90,9 +90,9 @@ const state = {
   },
 };
 
-const LIVE_SIGNALS_HOME_POLL_INTERVAL_MS = 45000;
-const LIVE_SIGNALS_VIEW_POLL_INTERVAL_MS = 20000;
-const LIVE_SIGNALS_FOCUS_DEBOUNCE_MS = 8000;
+const LIVE_SIGNALS_HOME_POLL_INTERVAL_MS = 15000;
+const LIVE_SIGNALS_VIEW_POLL_INTERVAL_MS = 8000;
+const LIVE_SIGNALS_FOCUS_DEBOUNCE_MS = 2500;
 const PAYLOAD_CACHE_TTL_MS = 10 * 60 * 1000;
 const PAYLOAD_CACHE_PREFIX = 'hades-miniapp-payload-v3';
 
@@ -891,16 +891,6 @@ function applyLiveSignalsPayload(payload = {}) {
   state.lazy.signals.loaded = true;
 }
 
-
-function liveSignalsRecentlySynced(maxAgeMs = 12000) {
-  const raw = state.liveSignals.lastSyncedAt;
-  if (!raw) return false;
-  const t = Date.parse(raw);
-  if (!Number.isFinite(t)) return false;
-  return (Date.now() - t) >= 0 && (Date.now() - t) < maxAgeMs;
-}
-
-
 function shouldPollLiveSignals() {
   return Boolean(state.token) && !document.hidden && ['home', 'signals'].includes(String(state.currentView || 'home'));
 }
@@ -942,12 +932,7 @@ async function refreshLiveSignalsState(force = false, reason = 'manual') {
       : '/api/miniapp/live-signals';
     const headers = {};
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
-    const response = await fetch(apiUrl ? apiUrl(url) : url, {
-      headers,
-      credentials: 'include',
-      cache: 'no-store',
-      mode: 'same-origin',
-    });
+    const response = await fetch(url, { headers });
 
     if (response.status === 204) {
       state.liveSignals.feedVersion = response.headers.get('X-Live-Signals-Version') || currentVersion;
@@ -991,11 +976,6 @@ function queueLiveSignalsRefresh(reason = 'focus') {
     return;
   }
   scheduleLiveSignalsTick(getLiveSignalsPollIntervalMs());
-
-  if (liveSignalsRecentlySynced(12000) && !['manual', 'startup-focus', 'startup-cached-focus'].includes(String(reason))) {
-    return;
-  }
-
   Promise.resolve(refreshLiveSignalsState(true, reason)).catch(error => {
     console.warn(`MiniApp live signals ${reason} refresh failed`, error);
   });
@@ -1680,32 +1660,6 @@ function adminRegimeStrategyItem(item = {}) {
           <div class="item-subtitle">Pool ${escapeHtml(item.candidate_pool ?? 0)} · Publicadas ${escapeHtml(item.selected_signals ?? 0)}</div>
         </div>
         <span class="plan-tag">${escapeHtml(formatNumber(item.publish_rate || 0))}%</span>
-      </div>
-    </div>
-  `;
-}
-
-
-function adminBreakoutResetFunnelCard(rows = [], latestRows = []) {
-  const historical = Array.isArray(rows) ? rows : [];
-  const latest = Array.isArray(latestRows) ? latestRows : [];
-  const renderRows = historical.length ? historical : latest;
-  return `
-    <div class="card card-span-12">
-      <div class="item-header">
-        <div>
-          <h2 style="margin:0;">Funnel Breakout + Reset</h2>
-          <div class="item-subtitle">Ciclo de vida interno: router, régimen local, setups armados, reset, publicación, expiración, invalidación y score.</div>
-        </div>
-        <span class="plan-tag">STATEFUL</span>
-      </div>
-      <div class="section-grid" style="margin-top:12px;">
-        ${renderRows.length ? renderRows.map(row => `
-          <div class="card card-span-3 compact-card">
-            <div class="metric-label">${escapeHtml(row.label || row.key || '—')}</div>
-            <div class="metric-value">${escapeHtml(row.count ?? 0)}</div>
-          </div>
-        `).join('') : '<div class="empty-state">Todavía no hay datos del funnel stateful. Aparecerán después del próximo ciclo del scanner.</div>'}
       </div>
     </div>
   `;
@@ -2627,7 +2581,6 @@ function renderAdmin() {
   const strategyRejects = Array.isArray(strategyObservability.reject_reasons_by_strategy) ? strategyObservability.reject_reasons_by_strategy : [];
   const regimeDistribution = Array.isArray(strategyObservability.regime_distribution) ? strategyObservability.regime_distribution : [];
   const regimeStrategyMatrix = Array.isArray(strategyObservability.regime_strategy_matrix) ? strategyObservability.regime_strategy_matrix : [];
-  const breakoutResetFunnelRows = Array.isArray(strategyObservability.breakout_reset_funnel_rows) ? strategyObservability.breakout_reset_funnel_rows : [];
   const latestCycle = strategyObservability.latest_cycle || {};
   const manualActivation = state.adminPanel.manualActivation || {};
   const activationDraft = manualActivation.draft || { userId: '', plan: 'plus', days: '30' };
@@ -2788,8 +2741,6 @@ function renderAdmin() {
       </div>
 
       ${adminLatestCycleCard(latestCycle)}
-
-      ${adminBreakoutResetFunnelCard(breakoutResetFunnelRows, latestCycle.breakout_reset_funnel_rows || [])}
 
       <div class="card card-span-12">
         <h2>Embudo por estrategia (30D)</h2>
@@ -5373,17 +5324,15 @@ function renderAccount() {
   els.account.innerHTML = `
     <div class="section-grid">
       ${accountNoticeCard(state.accountNotice)}
-      <div class="card card-span-12 account-hero-card">
-        <div class="account-hero-glow"></div>
-        <div class="item-header account-hero-header">
+      <div class="card card-span-12">
+        <div class="item-header">
           <div>
-            <div class="account-hero-kicker">CENTRO DE CONTROL PREMIUM</div>
             <h2 style="margin:0;">Centro de cuenta</h2>
             <div class="item-subtitle">Estado comercial, suscripción, billing y referidos desde la MiniApp.</div>
           </div>
           <span class="plan-tag">${escapeHtml(me.plan_name || 'FREE')}</span>
         </div>
-        <div class="pill-row account-hero-pills">
+        <div class="pill-row">
           <span class="pill">Estado: ${escapeHtml(me.subscription_status_label || me.subscription_status || 'free')}</span>
           <span class="pill">Vence: ${escapeHtml(expiresText)}</span>
           <span class="pill">Días restantes: ${escapeHtml(me.days_left || 0)}</span>
@@ -5398,8 +5347,7 @@ function renderAccount() {
         </div>
       </div>
 
-      <div class="card card-span-6 account-pro-card subscription-pro-card">
-        <div class="account-card-icon">💎</div>
+      <div class="card card-span-6">
         <h2>Suscripción</h2>
         <p>${escapeHtml(subscription.plan_name || me.plan_name || 'FREE')} · ${escapeHtml(subscription.status_label || me.subscription_status_label || me.subscription_status || 'free')} · ${escapeHtml(expiresText)}</p>
         <div class="inline-meta">
@@ -5411,8 +5359,7 @@ function renderAccount() {
         ${subscription.features?.length ? `<div class="feature-list" style="margin-top:12px;">${subscription.features.map(feature => `<div class="feature-item">• ${escapeHtml(feature)}</div>`).join('')}</div>` : '<div class="empty-state">Sin beneficios listados por ahora.</div>'}
       </div>
 
-      <div class="card card-span-6 account-pro-card risk-pro-card">
-        <div class="account-card-icon">⚖️</div>
+      <div class="card card-span-6">
         <h2>Gestión de riesgo</h2>
         <p>Configura capital, riesgo por trade, fees, slippage y calcula sizing real desde señales vivas e históricas.</p>
         <div class="pill-row compact-pill-row">
@@ -5425,8 +5372,7 @@ function renderAccount() {
         </div>
       </div>
 
-      <div class="card card-span-6 account-pro-card performance-pro-card">
-        <div class="account-card-icon">🏆</div>
+      <div class="card card-span-6">
         <h2>Rendimiento</h2>
         <p>Módulo dedicado para revisar 7D / 30D / total, PF por R, expectancy, score buckets y breakdown por plan.</p>
         <div class="pill-row compact-pill-row">
@@ -5439,8 +5385,7 @@ function renderAccount() {
         </div>
       </div>
 
-      <div class="card card-span-6 account-pro-card settings-pro-card">
-        <div class="account-card-icon">⚙️</div>
+      <div class="card card-span-6">
         <h2>Ajustes y alertas push</h2>
         <p>Configura idioma y qué niveles de señal quieres recibir como aviso push en Telegram.</p>
         <div class="pill-row compact-pill-row">
@@ -5453,8 +5398,7 @@ function renderAccount() {
         </div>
       </div>
 
-      <div class="card card-span-6 account-pro-card referral-pro-card">
-        <div class="account-card-icon">🧬</div>
+      <div class="card card-span-6">
         <h2>Referidos</h2>
         <div class="pill-row">
           <span class="pill">Totales: ${escapeHtml(referrals.total_referred || 0)}</span>
@@ -5486,8 +5430,7 @@ function renderAccount() {
       ${billingFocusCard(billingFocus, billing)}
       ${paymentConfigDiagnosticsCard(billing)}
 
-      <div class="card card-span-12 account-billing-card">
-        <div class="account-card-icon">💳</div>
+      <div class="card card-span-12">
         <h2>Billing</h2>
         <div class="account-metric-grid">
           ${accountMetricCard('Config pago', billing.payment_config_ready ? 'Lista' : 'Incompleta', billing.payment_config_ready ? 'is-positive' : 'is-warning')}
@@ -5503,31 +5446,28 @@ function renderAccount() {
       ${planBlock('plus', plans.plus || [], me.plan, billing, { hidden: isPremiumActive })}
       ${planBlock('premium', plans.premium || [], me.plan, billing)}
 
-      <div class="card card-span-6 account-list-pro-card">
-        <div class="account-card-icon">🧾</div>
+      <div class="card card-span-6">
         <h2>Órdenes recientes</h2>
         <div class="list">
           ${recentOrders.length ? recentOrders.map(recentOrderItem).join('') : '<div class="empty-state">Todavía no hay órdenes registradas.</div>'}
         </div>
       </div>
 
-      <div class="card card-span-6 account-list-pro-card reward-list-pro-card">
-        <div class="account-card-icon">🎁</div>
+      <div class="card card-span-6">
         <h2>Recompensas recientes</h2>
         <div class="list">
           ${recentRewards.length ? recentRewards.map(referralRewardItem).join('') : '<div class="empty-state">Todavía no tienes recompensas aplicadas.</div>'}
         </div>
       </div>
 
-      <div class="card card-span-12 account-timeline-pro-card">
-        <div class="account-card-icon">🕒</div>
+      <div class="card card-span-12">
         <h2>Timeline comercial</h2>
         <div class="list">
           ${timeline.length ? timeline.map(accountTimelineItem).join('') : '<div class="empty-state">Sin eventos comerciales recientes.</div>'}
         </div>
       </div>
 
-      <div class="card card-span-12 ecosystem-bridge-premium-card oraculum-bridge-card ${isPremiumActive ? 'is-active' : 'is-locked'}">
+      <div class="card card-span-12 oraculum-bridge-card ${isPremiumActive ? 'is-active' : 'is-locked'}">
         <div class="item-header">
           <div>
             <h2 style="margin:0;">Oraculum AI Terminal</h2>
@@ -5550,7 +5490,7 @@ function renderAccount() {
       </div>
 
 
-      <div class="card card-span-12 ecosystem-bridge-premium-card sentinel-bridge-card ${isPremiumActive ? 'is-active' : 'is-locked'}">
+      <div class="card card-span-12 sentinel-bridge-card ${isPremiumActive ? 'is-active' : 'is-locked'}">
         <div class="item-header">
           <div>
             <h2 style="margin:0;">HADES Sentinel</h2>
@@ -5572,16 +5512,14 @@ function renderAccount() {
         </div>
       </div>
 
-      <div class="card card-span-12 account-support-pro-card">
-        <div class="account-card-icon">🛟</div>
+      <div class="card card-span-12">
         <h2>Soporte</h2>
         <div class="action-row">
           <a class="button button-secondary" target="_blank" rel="noopener" href="${escapeHtml(support.url || state.payload.support_url || '#')}">Abrir grupo de soporte</a>
         </div>
       </div>
 
-      <div class="card card-span-12 account-app-pro-card">
-        <div class="account-card-icon">📲</div>
+      <div class="card card-span-12">
         <h2>App instalada</h2>
         <p style="font-size:0.85rem;color:var(--text-muted,#8899aa);margin-bottom:12px">
           Si instalaste HADES como app, toca este botón para conectar tu sesión.
@@ -6501,12 +6439,6 @@ document.addEventListener('visibilitychange', () => {
   }
   syncLiveSignalsPolling();
   queueLiveSignalsRefresh('visibility');
-});
-
-window.addEventListener('pagehide', () => {
-  stopLiveSignalsPolling();
-  stopMarketStream();
-  stopSignalPriceTicker();
 });
 
 window.addEventListener('focus', () => {
