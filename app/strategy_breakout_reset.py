@@ -111,34 +111,34 @@ def _required_history_bars() -> int:
 
 SHARED_PROFILE = {
     "name": "shared",
-    "adx_min": _env_float("PLUS_ADX_MIN", 17.1),
-    "atr_pct_min": _env_float("PLUS_ATR_PCT_MIN", 0.0023),
-    "atr_pct_max": _env_float("PLUS_ATR_PCT_MAX", 0.0128),
-    "min_body_ratio_breakout": _env_float("PLUS_MIN_BODY_RATIO_BREAKOUT", 0.27),
-    "min_body_ratio_continuation": _env_float("PLUS_MIN_BODY_RATIO_CONTINUATION", 0.19),
-    "min_extension_atr": _env_float("PLUS_MIN_EXTENSION_ATR", 0.22),
-    "max_extension_atr": _env_float("PLUS_MAX_EXTENSION_ATR", 0.78),
-    "min_breakout_overshoot_atr": _env_float("PLUS_MIN_BREAKOUT_OVERSHOOT_ATR", 0.12),
-    "min_pre_reset_space_atr": _env_float("PLUS_MIN_PRE_RESET_SPACE_ATR", 0.10),
-    "min_rel_volume_continuation": _env_float("PLUS_MIN_REL_VOLUME_CONTINUATION", 1.05),
-    "min_close_position_continuation": _env_float("PLUS_MIN_CLOSE_POSITION_CONTINUATION", 0.61),
-    "min_post_breakout_progress_atr": _env_float("PLUS_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.06),
+    "adx_min": _env_float("PLUS_ADX_MIN", 15.8),
+    "atr_pct_min": _env_float("PLUS_ATR_PCT_MIN", 0.0018),
+    "atr_pct_max": _env_float("PLUS_ATR_PCT_MAX", 0.0148),
+    "min_body_ratio_breakout": _env_float("PLUS_MIN_BODY_RATIO_BREAKOUT", 0.23),
+    "min_body_ratio_continuation": _env_float("PLUS_MIN_BODY_RATIO_CONTINUATION", 0.15),
+    "min_extension_atr": _env_float("PLUS_MIN_EXTENSION_ATR", 0.16),
+    "max_extension_atr": _env_float("PLUS_MAX_EXTENSION_ATR", 0.94),
+    "min_breakout_overshoot_atr": _env_float("PLUS_MIN_BREAKOUT_OVERSHOOT_ATR", 0.07),
+    "min_pre_reset_space_atr": _env_float("PLUS_MIN_PRE_RESET_SPACE_ATR", 0.05),
+    "min_rel_volume_continuation": _env_float("PLUS_MIN_REL_VOLUME_CONTINUATION", 0.92),
+    "min_close_position_continuation": _env_float("PLUS_MIN_CLOSE_POSITION_CONTINUATION", 0.53),
+    "min_post_breakout_progress_atr": _env_float("PLUS_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.035),
 }
 
 FREE_PROFILE = {
     "name": "free",
-    "adx_min": _env_float("FREE_ADX_MIN", 15.8),
-    "atr_pct_min": _env_float("FREE_ATR_PCT_MIN", 0.0020),
-    "atr_pct_max": _env_float("FREE_ATR_PCT_MAX", 0.0142),
-    "min_body_ratio_breakout": _env_float("FREE_MIN_BODY_RATIO_BREAKOUT", 0.22),
-    "min_body_ratio_continuation": _env_float("FREE_MIN_BODY_RATIO_CONTINUATION", 0.16),
-    "min_extension_atr": _env_float("FREE_MIN_EXTENSION_ATR", 0.18),
-    "max_extension_atr": _env_float("FREE_MAX_EXTENSION_ATR", 0.86),
-    "min_breakout_overshoot_atr": _env_float("FREE_MIN_BREAKOUT_OVERSHOOT_ATR", 0.08),
-    "min_pre_reset_space_atr": _env_float("FREE_MIN_PRE_RESET_SPACE_ATR", 0.06),
-    "min_rel_volume_continuation": _env_float("FREE_MIN_REL_VOLUME_CONTINUATION", 0.98),
-    "min_close_position_continuation": _env_float("FREE_MIN_CLOSE_POSITION_CONTINUATION", 0.54),
-    "min_post_breakout_progress_atr": _env_float("FREE_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.04),
+    "adx_min": _env_float("FREE_ADX_MIN", 14.2),
+    "atr_pct_min": _env_float("FREE_ATR_PCT_MIN", 0.0015),
+    "atr_pct_max": _env_float("FREE_ATR_PCT_MAX", 0.0162),
+    "min_body_ratio_breakout": _env_float("FREE_MIN_BODY_RATIO_BREAKOUT", 0.18),
+    "min_body_ratio_continuation": _env_float("FREE_MIN_BODY_RATIO_CONTINUATION", 0.12),
+    "min_extension_atr": _env_float("FREE_MIN_EXTENSION_ATR", 0.12),
+    "max_extension_atr": _env_float("FREE_MAX_EXTENSION_ATR", 1.05),
+    "min_breakout_overshoot_atr": _env_float("FREE_MIN_BREAKOUT_OVERSHOOT_ATR", 0.04),
+    "min_pre_reset_space_atr": _env_float("FREE_MIN_PRE_RESET_SPACE_ATR", 0.025),
+    "min_rel_volume_continuation": _env_float("FREE_MIN_REL_VOLUME_CONTINUATION", 0.82),
+    "min_close_position_continuation": _env_float("FREE_MIN_CLOSE_POSITION_CONTINUATION", 0.46),
+    "min_post_breakout_progress_atr": _env_float("FREE_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.02),
     "score": 78.0,
 }
 
@@ -151,18 +151,18 @@ PLUS_PROFILE = {
 PREMIUM_PROFILE = {
     **SHARED_PROFILE,
     "name": "premium",
-    "adx_min": _env_float("PREMIUM_ADX_MIN", 17.8),
-    "atr_pct_min": _env_float("PREMIUM_ATR_PCT_MIN", 0.0025),
-    "atr_pct_max": _env_float("PREMIUM_ATR_PCT_MAX", 0.0122),
-    "min_body_ratio_breakout": _env_float("PREMIUM_MIN_BODY_RATIO_BREAKOUT", 0.30),
-    "min_body_ratio_continuation": _env_float("PREMIUM_MIN_BODY_RATIO_CONTINUATION", 0.21),
-    "min_extension_atr": _env_float("PREMIUM_MIN_EXTENSION_ATR", 0.26),
-    "max_extension_atr": _env_float("PREMIUM_MAX_EXTENSION_ATR", 0.70),
-    "min_breakout_overshoot_atr": _env_float("PREMIUM_MIN_BREAKOUT_OVERSHOOT_ATR", 0.16),
-    "min_pre_reset_space_atr": _env_float("PREMIUM_MIN_PRE_RESET_SPACE_ATR", 0.14),
-    "min_rel_volume_continuation": _env_float("PREMIUM_MIN_REL_VOLUME_CONTINUATION", 1.14),
-    "min_close_position_continuation": _env_float("PREMIUM_MIN_CLOSE_POSITION_CONTINUATION", 0.70),
-    "min_post_breakout_progress_atr": _env_float("PREMIUM_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.10),
+    "adx_min": _env_float("PREMIUM_ADX_MIN", 16.4),
+    "atr_pct_min": _env_float("PREMIUM_ATR_PCT_MIN", 0.0020),
+    "atr_pct_max": _env_float("PREMIUM_ATR_PCT_MAX", 0.0140),
+    "min_body_ratio_breakout": _env_float("PREMIUM_MIN_BODY_RATIO_BREAKOUT", 0.26),
+    "min_body_ratio_continuation": _env_float("PREMIUM_MIN_BODY_RATIO_CONTINUATION", 0.17),
+    "min_extension_atr": _env_float("PREMIUM_MIN_EXTENSION_ATR", 0.20),
+    "max_extension_atr": _env_float("PREMIUM_MAX_EXTENSION_ATR", 0.86),
+    "min_breakout_overshoot_atr": _env_float("PREMIUM_MIN_BREAKOUT_OVERSHOOT_ATR", 0.10),
+    "min_pre_reset_space_atr": _env_float("PREMIUM_MIN_PRE_RESET_SPACE_ATR", 0.08),
+    "min_rel_volume_continuation": _env_float("PREMIUM_MIN_REL_VOLUME_CONTINUATION", 1.00),
+    "min_close_position_continuation": _env_float("PREMIUM_MIN_CLOSE_POSITION_CONTINUATION", 0.61),
+    "min_post_breakout_progress_atr": _env_float("PREMIUM_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.055),
     "score": 90.0,
 }
 
@@ -371,14 +371,22 @@ def _trend_direction(last: pd.Series) -> Optional[str]:
     if ema20 < ema50 < ema200:
         return "SHORT"
 
-    # Relajación controlada: permitimos la transición donde EMA20 > EMA50
-    # pero EMA50 aún no superó EMA200, siempre que el precio esté claramente
-    # por encima de EMA200 (sesgo alcista confirmado en largo plazo).
-    # Las condiciones "near cross" (EMA20 ≈ EMA50) han sido eliminadas porque
-    # generaban señales en zonas de transición con win rate inferior al 35%.
-    if ema20 > ema50 and close > ema200 and (close - ema200) > tolerance * 2:
+    # Receptividad controlada sin tocar score:
+    # permitimos fases tempranas de continuación donde el 5M ya tiene sesgo
+    # claro, aunque EMA50/EMA200 todavía no hayan cruzado por completo.
+    # Esto ataca "trend_structure" sin aceptar chop: exigimos precio separado
+    # de EMA50 y EMA20 alineada con EMA50.
+    if ema20 > ema50 and close > ema50 and (close - ema50) > tolerance * 1.25:
         return "LONG"
-    if ema20 < ema50 and close < ema200 and (ema200 - close) > tolerance * 2:
+    if ema20 < ema50 and close < ema50 and (ema50 - close) > tolerance * 1.25:
+        return "SHORT"
+
+    # Fallback adicional solo si el precio está inequívocamente al lado correcto
+    # de EMA200 y EMA20/EMA50 no están invertidas en contra. Esto recupera
+    # breakouts válidos de transición, pero evita rango lateral pegado a medias.
+    if close > ema200 and ema20 >= ema50 * 0.999 and (close - ema200) > tolerance * 2.5:
+        return "LONG"
+    if close < ema200 and ema20 <= ema50 * 1.001 and (ema200 - close) > tolerance * 2.5:
         return "SHORT"
 
     return None
@@ -640,16 +648,28 @@ def _confirm_breakout_prereset(
     min_ext = float(profile.get("min_extension_atr", 0.15))
     max_ext = float(profile.get("max_extension_atr", 0.95))
 
+    min_breakout_body = float(profile["min_body_ratio_breakout"])
+    min_cont_body = float(profile["min_body_ratio_continuation"])
+    soft_cont_body = max(min_cont_body * 0.72, 0.08)
+
     if direction == "LONG":
         breakout_ok = (
             float(prev["close"]) > level
             and float(prev["high"]) > level
-            and float(prev["body_ratio"]) >= float(profile["min_body_ratio_breakout"])
+            and float(prev["body_ratio"]) >= min_breakout_body
         )
         continuation_ok = (
-            float(last["close"]) > float(last["open"])
-            and float(last["close"]) > level
-            and float(last["body_ratio"]) >= float(profile["min_body_ratio_continuation"])
+            float(last["close"]) > level
+            and (
+                (
+                    float(last["close"]) > float(last["open"])
+                    and float(last["body_ratio"]) >= min_cont_body
+                )
+                or (
+                    float(last["close"]) >= ((float(last["high"]) + float(last["low"])) / 2.0)
+                    and float(last["body_ratio"]) >= soft_cont_body
+                )
+            )
         )
         no_reset_yet = float(last["low"]) > level
         extension_atr = max(0.0, setup_reference_price - level) / atr
@@ -658,19 +678,31 @@ def _confirm_breakout_prereset(
         breakout_ok = (
             float(prev["close"]) < level
             and float(prev["low"]) < level
-            and float(prev["body_ratio"]) >= float(profile["min_body_ratio_breakout"])
+            and float(prev["body_ratio"]) >= min_breakout_body
         )
         continuation_ok = (
-            float(last["close"]) < float(last["open"])
-            and float(last["close"]) < level
-            and float(last["body_ratio"]) >= float(profile["min_body_ratio_continuation"])
+            float(last["close"]) < level
+            and (
+                (
+                    float(last["close"]) < float(last["open"])
+                    and float(last["body_ratio"]) >= min_cont_body
+                )
+                or (
+                    float(last["close"]) <= ((float(last["high"]) + float(last["low"])) / 2.0)
+                    and float(last["body_ratio"]) >= soft_cont_body
+                )
+            )
         )
         no_reset_yet = float(last["high"]) < level
         extension_atr = max(0.0, level - setup_reference_price) / atr
         overshoot_atr = max(0.0, level - float(prev["close"])) / atr
 
-    if not breakout_ok or not continuation_ok or not no_reset_yet:
+    if not breakout_ok:
         return False, {}, "breakout_shape"
+    if not continuation_ok:
+        return False, {}, "breakout_shape"
+    if not no_reset_yet:
+        return False, {}, "breakout_reset_already_touched"
 
     if extension_atr < min_ext or extension_atr > max_ext:
         return False, {}, "breakout_extension"
@@ -759,10 +791,12 @@ def _continuation_ok(last: pd.Series, direction: str, profile: Dict, quality: Op
     passed = sum(1 for ok in flags.values() if ok)
 
     if profile_name == PREMIUM_PROFILE["name"]:
-        return passed == len(flags)
+        # Antes exigía 3/3; demasiado terminal en mercado rápido. Mantenemos
+        # calidad exigiendo 2/3 y que al menos cierre fuerte o progrese desde el nivel.
+        return passed >= 2 and (flags["close_position"] or flags["progress_atr"])
 
     if profile_name == PLUS_PROFILE["name"]:
-        return passed >= 2 and (flags["close_position"] or flags["progress_atr"])
+        return passed >= 1 and (flags["close_position"] or flags["progress_atr"] or flags["relative_volume"])
 
     return passed >= 1
 
@@ -1109,6 +1143,7 @@ def _evaluate_profile(
         "atr_pct": round(atr_pct, 6),
         "score_profile": str(profile["name"]),
         "score_calibration": SCORE_CALIBRATION_VERSION,
+        "filter_calibration": BREAKOUT_RECEPTIVE_FILTERS_VERSION,
         "higher_tf_context": higher_tf_context,
         "send_mode": "market_on_close",
         "setup_stage": SETUP_STAGE_RESET_TOUCH_LIVE,
