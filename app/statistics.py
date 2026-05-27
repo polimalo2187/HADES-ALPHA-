@@ -276,16 +276,14 @@ def _expired_bucket(result_doc: Dict[str, Any]) -> Optional[str]:
     expiry_type = str(result_doc.get("expiry_type") or "").lower().strip()
     entry_touched = result_doc.get("entry_touched")
 
+    # Fill semantics v1:
+    # Expirada solo significa NO FILL. Si tocó entrada, no se cuenta como expirada.
     if resolution == "expired_no_fill":
         return "no_fill"
-    if resolution == "expired_after_entry":
-        return "after_entry"
     if resolution in {"expired", "expired_clean"}:
         if expiry_type == "no_fill" or entry_touched is False:
             return "no_fill"
-        if expiry_type == "after_entry_no_followthrough" or entry_touched is True:
-            return "after_entry"
-        return "clean"
+        return None
     return None
 
 
@@ -318,7 +316,7 @@ def _r_multiple_value(result_doc: Dict[str, Any]) -> Optional[float]:
         return 2.0
     if resolution == "sl":
         return -1.0
-    if resolution in {"expired", "expired_clean", "expired_no_fill", "expired_after_entry"}:
+    if resolution in {"expired", "expired_clean", "expired_no_fill", "expired_after_entry", "open_after_entry"}:
         return None
 
     outcome = str(result_doc.get("result") or "").lower().strip()

@@ -54,6 +54,7 @@ MAX_SIGNAL_VALIDITY_MINUTES = int(os.getenv("MAX_SIGNAL_VALIDITY_MINUTES", "45")
 MIN_ENTRY_WAIT_MINUTES = int(os.getenv("MIN_ENTRY_WAIT_MINUTES", str(TELEGRAM_SIGNAL_COOLDOWN_MINUTES)))
 MAX_ENTRY_WAIT_MINUTES = int(os.getenv("MAX_ENTRY_WAIT_MINUTES", "60"))
 ENTRY_WAIT_BUFFER_MINUTES = int(os.getenv("ENTRY_WAIT_BUFFER_MINUTES", "3"))
+FILL_EXPIRY_SEMANTICS_VERSION = "fill_semantics_v1_no_post_fill_expiry"
 MARKET_EVALUATION_VERSION = "v4_pending_entry_activation_window"
 ENTRY_ZONE_MIN_PCT = float(os.getenv("ENTRY_ZONE_MIN_PCT", "0.0015"))
 ENTRY_ZONE_MAX_PCT = float(os.getenv("ENTRY_ZONE_MAX_PCT", "0.0035"))
@@ -1009,6 +1010,7 @@ def _observe_live_signal_progress(signal_doc: Dict[str, Any], as_of: datetime) -
     created_at = signal_doc.get("created_at")
     valid_until = _get_evaluation_valid_until(signal_doc)
     telegram_valid_until = signal_doc.get("telegram_valid_until")
+    now_utc = datetime.utcnow()
     send_mode = str(signal_doc.get("send_mode") or "").strip().lower()
 
     snapshot: Dict[str, Any] = {
@@ -1033,9 +1035,11 @@ def _observe_live_signal_progress(signal_doc: Dict[str, Any], as_of: datetime) -
     if not symbol or not direction or stop_loss is None or tp1 is None or entry_price is None or not created_at:
         return snapshot
 
+    # Fill semantics v1:
+    # La señal solo expira por tiempo mientras NO ha tocado entrada.
+    # Después del fill se sigue evaluando hasta TP1/TP2/SL; por eso el seguimiento
+    # live no debe cortar en evaluation_valid_until.
     live_end = as_of
-    if isinstance(valid_until, datetime) and valid_until < live_end:
-        live_end = valid_until
     if not isinstance(live_end, datetime) or live_end <= created_at:
         return snapshot
 
@@ -1093,14 +1097,14 @@ def _observe_live_signal_progress(signal_doc: Dict[str, Any], as_of: datetime) -
                 candle_open_dt, candle_close_dt = _candle_time_bounds(row)
                 entry_touched_at = candle_close_dt or candle_open_dt
                 if isinstance(entry_touched_at, datetime):
-                    effective_valid_until = entry_touched_at + timedelta(minutes=market_validity_minutes)
-                    if isinstance(valid_until, datetime) and effective_valid_until > valid_until:
-                        effective_valid_until = valid_until
+                    # Después del fill no hay expiración por tiempo.
+                    effective_valid_until = live_end
 
         if not entry_touched:
             continue
 
-        if not _candle_within_window(row, effective_valid_until):
+        # Después del fill no se corta por tiempo; el cierre solo puede ser TP1/TP2/SL.
+        if not _candle_within_window(row, live_end):
             break
 
         excursions = _excursions_after_entry_r(direction, entry_price, stop_loss, high, low)
@@ -1951,6 +1955,7 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
     created_at = signal_doc.get("created_at")
     valid_until = _get_evaluation_valid_until(signal_doc)
     telegram_valid_until = signal_doc.get("telegram_valid_until")
+    now_utc = datetime.utcnow()
 
     expired_no_fill = {
         "result": "expired",
@@ -1969,7 +1974,7 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
         ),
     }
 
-    if not symbol or not direction or stop_loss is None or tp1 is None or entry_price is None or not created_at or not valid_until:
+    if not symbol or not direction or stop_loss is None or tp1 is None or entry_price is None or not created_at:
         return expired_no_fill
 
     try:
@@ -1980,8 +1985,11 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
     except Exception:
         return expired_no_fill
 
+    # Evaluamos hasta ahora. Si no hubo fill y venció la ventana de entrada,
+    # expira como NO FILL. Si hubo fill, no hay expiración por tiempo.
+    evaluation_end = now_utc
     try:
-        klines = _fetch_klines_between(symbol, created_at, valid_until, interval="1m")
+        klines = _fetch_klines_between(symbol, created_at, evaluation_end, interval="1m")
     except Exception as e:
         logger.error(f"❌ Error descargando velas para evaluar {symbol}: {e}")
         return expired_no_fill
@@ -2000,7 +2008,7 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
     if market_validity_minutes <= 0:
         market_validity_minutes = calculate_signal_validity(signal_doc.get("timeframes") or ["5M"])
 
-    effective_valid_until = valid_until
+    effective_valid_until = evaluation_end
     if send_mode == "market_on_close":
         entry_touched = True
         entry_touched_at: Optional[datetime] = created_at if isinstance(created_at, datetime) else None
@@ -2016,7 +2024,8 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
     tp1_progress_max_pct = 0.0
     max_favorable_excursion_r = 0.0
     max_adverse_excursion_r = 0.0
-    post_fill_invalidation = _post_fill_invalidation_config(signal_doc)
+    # Obsoleto con fill semantics v1: después de tocar entrada no se invalida por tiempo.
+    post_fill_invalidation = None
 
     def _merge_observability(payload: Dict[str, Any], *, expiry_type: Optional[str], expiry_reason: Optional[str]) -> Dict[str, Any]:
         payload.update(
@@ -2047,14 +2056,13 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
                 candle_open_dt, candle_close_dt = _candle_time_bounds(row)
                 entry_touched_at = candle_close_dt or candle_open_dt
                 if isinstance(entry_touched_at, datetime):
-                    effective_valid_until = entry_touched_at + timedelta(minutes=market_validity_minutes)
-                    if isinstance(valid_until, datetime) and effective_valid_until > valid_until:
-                        effective_valid_until = valid_until
+                    # Después del fill no hay expiración por tiempo.
+                    effective_valid_until = evaluation_end
 
         if not entry_touched:
             continue
 
-        if not _candle_within_window(row, effective_valid_until):
+        if not _candle_within_window(row, evaluation_end):
             break
 
         excursions = _excursions_after_entry_r(direction, entry_price, stop_loss, high, low)
@@ -2170,35 +2178,17 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
                     expiry_reason=None,
                 )
 
-        if entry_touched and entry_touched_at is not None and post_fill_invalidation is not None:
-            candle_open_dt, candle_close_dt = _candle_time_bounds(row)
-            candle_ts = candle_close_dt or candle_open_dt
-            if candle_ts is not None:
-                invalidation_deadline = entry_touched_at + timedelta(minutes=float(post_fill_invalidation["minutes"]))
-                if candle_ts >= invalidation_deadline and tp1_progress_max_pct < float(post_fill_invalidation["min_tp1_progress_pct"]):
-                    return _merge_observability(
-                        {
-                            "result": "expired",
-                            "resolution": "expired_after_entry",
-                            "completed": False,
-                            "tp_used": None,
-                            "sl_used": stop_loss,
-                        },
-                        expiry_type="after_entry_no_followthrough",
-                        expiry_reason=str(post_fill_invalidation.get("reason") or "no_followthrough"),
-                    )
-
     if entry_touched:
         return _merge_observability(
             {
-                "result": "expired",
-                "resolution": "expired_after_entry",
+                "result": "open",
+                "resolution": "open_after_entry",
                 "completed": False,
                 "tp_used": None,
                 "sl_used": stop_loss,
             },
-            expiry_type="after_entry_no_followthrough",
-            expiry_reason="touched_entry_no_followthrough",
+            expiry_type=None,
+            expiry_reason=None,
         )
 
     return expired_no_fill
@@ -2257,19 +2247,32 @@ def evaluate_expired_signals(limit: int = 100) -> int:
     - no se dupliquen resultados por usuario
     """
     now = datetime.utcnow()
+    # Fill semantics v1:
+    # - Antes del fill, una señal puede expirar si venció entry_valid_until.
+    # - Después del fill, NO expira por tiempo; se reevalúa hasta TP1/TP2/SL.
+    # Por eso el scheduler revisa señales cuya ventana de entrada ya venció o
+    # señales antiguas por evaluation_valid_until, pero solo cierra si el resultado
+    # es final. Si ya tocó entrada y sigue abierta, deja evaluated=false.
     pending = list(
         signals_collection()
         .find({
             "$or": [
-                {"evaluation_valid_until": {"$lte": now}},
+                {"entry_valid_until": {"$lte": now}},
+                {"send_mode": "market_on_close"},
                 {
-                    "evaluation_valid_until": {"$exists": False},
-                    "valid_until": {"$lte": now},
+                    "entry_valid_until": {"$exists": False},
+                    "$or": [
+                        {"evaluation_valid_until": {"$lte": now}},
+                        {
+                            "evaluation_valid_until": {"$exists": False},
+                            "valid_until": {"$lte": now},
+                        },
+                    ],
                 },
             ],
             "evaluated": {"$ne": True},
         })
-        .sort("valid_until", 1)
+        .sort("entry_valid_until", 1)
         .limit(limit)
     )
 
@@ -2279,7 +2282,25 @@ def evaluate_expired_signals(limit: int = 100) -> int:
         try:
             evaluation = _evaluate_signal_result(s)
             result = evaluation.get("result", "expired")
+            resolution = str(evaluation.get("resolution") or "").lower().strip()
             evaluated_at = datetime.utcnow()
+
+            if result == "open" or resolution == "open_after_entry":
+                update_payload = {
+                    "entry_touched": bool(evaluation.get("entry_touched")),
+                    "entry_touched_at": evaluation.get("entry_touched_at"),
+                    "tp1_progress_max_pct": evaluation.get("tp1_progress_max_pct"),
+                    "max_favorable_excursion_r": evaluation.get("max_favorable_excursion_r"),
+                    "max_adverse_excursion_r": evaluation.get("max_adverse_excursion_r"),
+                    "last_tracking_at": evaluated_at,
+                    "tracking_status": "open_after_entry",
+                    "fill_expiry_semantics": FILL_EXPIRY_SEMANTICS_VERSION,
+                    "updated_at": evaluated_at,
+                }
+                signals_collection().update_one({"_id": s["_id"]}, {"$set": update_payload})
+                user_signals_collection().update_many({"signal_id": str(s["_id"])}, {"$set": update_payload})
+                processed += 1
+                continue
 
             evaluation_valid_until = evaluation.get("effective_valid_until") or _get_evaluation_valid_until(s)
             entry_valid_until = evaluation.get("entry_valid_until") or s.get("entry_valid_until") or s.get("telegram_valid_until")
@@ -2330,6 +2351,7 @@ def evaluate_expired_signals(limit: int = 100) -> int:
                 max_favorable_excursion_r=evaluation.get("max_favorable_excursion_r"),
                 max_adverse_excursion_r=evaluation.get("max_adverse_excursion_r"),
             )
+            result_doc["fill_expiry_semantics"] = FILL_EXPIRY_SEMANTICS_VERSION
             result_doc["evaluated_at"] = evaluated_at
 
             insert_result = signal_results_collection().insert_one(result_doc)
