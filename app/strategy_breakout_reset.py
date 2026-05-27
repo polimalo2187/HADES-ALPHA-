@@ -4,7 +4,10 @@ from typing import Optional, Dict, Tuple, List
 
 import math
 import os
+import warnings
 import pandas as pd
+
+warnings.filterwarnings("ignore", category=RuntimeWarning, module="ta.trend")
 
 try:
     import ta  # type: ignore

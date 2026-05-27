@@ -12,7 +12,7 @@ LIQUIDITY_PIVOT_LEFT = max(1, int(os.getenv("LIQUIDITY_PIVOT_LEFT", "2")))
 LIQUIDITY_PIVOT_RIGHT = max(1, int(os.getenv("LIQUIDITY_PIVOT_RIGHT", "2")))
 SWEEP_SEARCH_BARS = max(2, int(os.getenv("LIQUIDITY_SWEEP_SEARCH_BARS", "4")))
 MIN_HISTORY_BARS = max(LIQUIDITY_LOOKBACK + 4, 36)
-SCORE_CALIBRATION_VERSION = "v4_1_liquidity_sweep_expiry_quality_tightening"
+SCORE_CALIBRATION_VERSION = "v4_2_liquidity_sweep_operational_receptive"
 ENTRY_MODEL_NAME = "liquidity_sweep_reversal_pullback_execution_v2"
 SETUP_STAGE_WAITING_PULLBACK = "confirmed_waiting_pullback"
 SEND_MODE_PENDING_ENTRY = breakout.SEND_MODE_PENDING_ENTRY
@@ -24,55 +24,55 @@ FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "69"))
 
 FREE_PROFILE = {
     "name": "free",
-    "atr_pct_min": breakout._env_float("LSR_FREE_ATR_PCT_MIN", 0.0018),
-    "atr_pct_max": breakout._env_float("LSR_FREE_ATR_PCT_MAX", 0.0220),
-    "liquidity_tolerance_atr": breakout._env_float("LSR_FREE_LIQUIDITY_TOLERANCE_ATR", 0.40),
-    "min_sweep_atr": breakout._env_float("LSR_FREE_MIN_SWEEP_ATR", 0.18),
-    "min_rel_volume": breakout._env_float("LSR_FREE_MIN_REL_VOLUME", 0.84),
-    "min_confirm_rel_volume": breakout._env_float("LSR_FREE_MIN_CONFIRM_REL_VOLUME", 0.93),
-    "min_body_ratio_recovery": breakout._env_float("LSR_FREE_MIN_BODY_RATIO_RECOVERY", 0.22),
-    "min_body_ratio_confirmation": breakout._env_float("LSR_FREE_MIN_BODY_RATIO_CONFIRMATION", 0.22),
-    "min_close_position": breakout._env_float("LSR_FREE_MIN_CLOSE_POSITION", 0.57),
-    "min_rr": breakout._env_float("LSR_FREE_MIN_RR", 0.96),
-    "htf_price_tolerance": breakout._env_float("LSR_FREE_HTF_PRICE_TOLERANCE", 0.0080),
-    "htf_trend_tolerance": breakout._env_float("LSR_FREE_HTF_TREND_TOLERANCE", 0.0140),
+    "atr_pct_min": breakout._env_float("LSR_FREE_ATR_PCT_MIN", 0.0012),
+    "atr_pct_max": breakout._env_float("LSR_FREE_ATR_PCT_MAX", 0.0260),
+    "liquidity_tolerance_atr": breakout._env_float("LSR_FREE_LIQUIDITY_TOLERANCE_ATR", 0.56),
+    "min_sweep_atr": breakout._env_float("LSR_FREE_MIN_SWEEP_ATR", 0.07),
+    "min_rel_volume": breakout._env_float("LSR_FREE_MIN_REL_VOLUME", 0.70),
+    "min_confirm_rel_volume": breakout._env_float("LSR_FREE_MIN_CONFIRM_REL_VOLUME", 0.72),
+    "min_body_ratio_recovery": breakout._env_float("LSR_FREE_MIN_BODY_RATIO_RECOVERY", 0.14),
+    "min_body_ratio_confirmation": breakout._env_float("LSR_FREE_MIN_BODY_RATIO_CONFIRMATION", 0.12),
+    "min_close_position": breakout._env_float("LSR_FREE_MIN_CLOSE_POSITION", 0.48),
+    "min_rr": breakout._env_float("LSR_FREE_MIN_RR", 0.82),
+    "htf_price_tolerance": breakout._env_float("LSR_FREE_HTF_PRICE_TOLERANCE", 0.0140),
+    "htf_trend_tolerance": breakout._env_float("LSR_FREE_HTF_TREND_TOLERANCE", 0.0240),
     "htf_required_score": max(1, int(os.getenv("LSR_FREE_HTF_REQUIRED_SCORE", "1"))),
     "score": 78.0,
 }
 
 PLUS_PROFILE = {
     "name": "plus",
-    "atr_pct_min": breakout._env_float("LSR_PLUS_ATR_PCT_MIN", 0.0021),
-    "atr_pct_max": breakout._env_float("LSR_PLUS_ATR_PCT_MAX", 0.0200),
-    "liquidity_tolerance_atr": breakout._env_float("LSR_PLUS_LIQUIDITY_TOLERANCE_ATR", 0.35),
-    "min_sweep_atr": breakout._env_float("LSR_PLUS_MIN_SWEEP_ATR", 0.24),
-    "min_rel_volume": breakout._env_float("LSR_PLUS_MIN_REL_VOLUME", 0.95),
-    "min_confirm_rel_volume": breakout._env_float("LSR_PLUS_MIN_CONFIRM_REL_VOLUME", 1.02),
-    "min_body_ratio_recovery": breakout._env_float("LSR_PLUS_MIN_BODY_RATIO_RECOVERY", 0.26),
-    "min_body_ratio_confirmation": breakout._env_float("LSR_PLUS_MIN_BODY_RATIO_CONFIRMATION", 0.26),
-    "min_close_position": breakout._env_float("LSR_PLUS_MIN_CLOSE_POSITION", 0.63),
-    "min_rr": breakout._env_float("LSR_PLUS_MIN_RR", 1.06),
-    "htf_price_tolerance": breakout._env_float("LSR_PLUS_HTF_PRICE_TOLERANCE", 0.0055),
-    "htf_trend_tolerance": breakout._env_float("LSR_PLUS_HTF_TREND_TOLERANCE", 0.0100),
-    "htf_required_score": max(1, int(os.getenv("LSR_PLUS_HTF_REQUIRED_SCORE", "2"))),
+    "atr_pct_min": breakout._env_float("LSR_PLUS_ATR_PCT_MIN", 0.0015),
+    "atr_pct_max": breakout._env_float("LSR_PLUS_ATR_PCT_MAX", 0.0240),
+    "liquidity_tolerance_atr": breakout._env_float("LSR_PLUS_LIQUIDITY_TOLERANCE_ATR", 0.50),
+    "min_sweep_atr": breakout._env_float("LSR_PLUS_MIN_SWEEP_ATR", 0.10),
+    "min_rel_volume": breakout._env_float("LSR_PLUS_MIN_REL_VOLUME", 0.76),
+    "min_confirm_rel_volume": breakout._env_float("LSR_PLUS_MIN_CONFIRM_REL_VOLUME", 0.82),
+    "min_body_ratio_recovery": breakout._env_float("LSR_PLUS_MIN_BODY_RATIO_RECOVERY", 0.17),
+    "min_body_ratio_confirmation": breakout._env_float("LSR_PLUS_MIN_BODY_RATIO_CONFIRMATION", 0.15),
+    "min_close_position": breakout._env_float("LSR_PLUS_MIN_CLOSE_POSITION", 0.53),
+    "min_rr": breakout._env_float("LSR_PLUS_MIN_RR", 0.90),
+    "htf_price_tolerance": breakout._env_float("LSR_PLUS_HTF_PRICE_TOLERANCE", 0.0110),
+    "htf_trend_tolerance": breakout._env_float("LSR_PLUS_HTF_TREND_TOLERANCE", 0.0200),
+    "htf_required_score": max(1, int(os.getenv("LSR_PLUS_HTF_REQUIRED_SCORE", "1"))),
     "score": 86.0,
 }
 
 PREMIUM_PROFILE = {
     "name": "premium",
-    "atr_pct_min": breakout._env_float("LSR_PREMIUM_ATR_PCT_MIN", 0.0024),
-    "atr_pct_max": breakout._env_float("LSR_PREMIUM_ATR_PCT_MAX", 0.0185),
-    "liquidity_tolerance_atr": breakout._env_float("LSR_PREMIUM_LIQUIDITY_TOLERANCE_ATR", 0.30),
-    "min_sweep_atr": breakout._env_float("LSR_PREMIUM_MIN_SWEEP_ATR", 0.30),
-    "min_rel_volume": breakout._env_float("LSR_PREMIUM_MIN_REL_VOLUME", 1.03),
-    "min_confirm_rel_volume": breakout._env_float("LSR_PREMIUM_MIN_CONFIRM_REL_VOLUME", 1.10),
-    "min_body_ratio_recovery": breakout._env_float("LSR_PREMIUM_MIN_BODY_RATIO_RECOVERY", 0.30),
-    "min_body_ratio_confirmation": breakout._env_float("LSR_PREMIUM_MIN_BODY_RATIO_CONFIRMATION", 0.30),
-    "min_close_position": breakout._env_float("LSR_PREMIUM_MIN_CLOSE_POSITION", 0.69),
-    "min_rr": breakout._env_float("LSR_PREMIUM_MIN_RR", 1.14),
-    "htf_price_tolerance": breakout._env_float("LSR_PREMIUM_HTF_PRICE_TOLERANCE", 0.0040),
-    "htf_trend_tolerance": breakout._env_float("LSR_PREMIUM_HTF_TREND_TOLERANCE", 0.0080),
-    "htf_required_score": max(1, int(os.getenv("LSR_PREMIUM_HTF_REQUIRED_SCORE", "2"))),
+    "atr_pct_min": breakout._env_float("LSR_PREMIUM_ATR_PCT_MIN", 0.0018),
+    "atr_pct_max": breakout._env_float("LSR_PREMIUM_ATR_PCT_MAX", 0.0225),
+    "liquidity_tolerance_atr": breakout._env_float("LSR_PREMIUM_LIQUIDITY_TOLERANCE_ATR", 0.44),
+    "min_sweep_atr": breakout._env_float("LSR_PREMIUM_MIN_SWEEP_ATR", 0.14),
+    "min_rel_volume": breakout._env_float("LSR_PREMIUM_MIN_REL_VOLUME", 0.84),
+    "min_confirm_rel_volume": breakout._env_float("LSR_PREMIUM_MIN_CONFIRM_REL_VOLUME", 0.90),
+    "min_body_ratio_recovery": breakout._env_float("LSR_PREMIUM_MIN_BODY_RATIO_RECOVERY", 0.20),
+    "min_body_ratio_confirmation": breakout._env_float("LSR_PREMIUM_MIN_BODY_RATIO_CONFIRMATION", 0.18),
+    "min_close_position": breakout._env_float("LSR_PREMIUM_MIN_CLOSE_POSITION", 0.58),
+    "min_rr": breakout._env_float("LSR_PREMIUM_MIN_RR", 0.98),
+    "htf_price_tolerance": breakout._env_float("LSR_PREMIUM_HTF_PRICE_TOLERANCE", 0.0090),
+    "htf_trend_tolerance": breakout._env_float("LSR_PREMIUM_HTF_TREND_TOLERANCE", 0.0160),
+    "htf_required_score": max(1, int(os.getenv("LSR_PREMIUM_HTF_REQUIRED_SCORE", "1"))),
     "score": 90.0,
 }
 
@@ -356,7 +356,7 @@ def _higher_timeframe_context_ok(df_1h: pd.DataFrame, direction: str, profile: D
         momentum_support = close >= prev_close or ema20 >= (prev_ema20 * 0.999)
         reclaim_support = bool((recent["close"].astype(float) >= (recent["ema20"].astype(float) * (1.0 - tolerance_price))).any())
         score = sum(bool(flag) for flag in (price_support, trend_support, momentum_support, reclaim_support))
-        if str(profile.get("name")) == "premium" and not price_support:
+        if str(profile.get("name")) == "premium" and not price_support and score < max(1, required_score):
             return False
         return score >= required_score
 
@@ -365,7 +365,7 @@ def _higher_timeframe_context_ok(df_1h: pd.DataFrame, direction: str, profile: D
     momentum_support = close <= prev_close or ema20 <= (prev_ema20 * 1.001)
     reclaim_support = bool((recent["close"].astype(float) <= (recent["ema20"].astype(float) * (1.0 + tolerance_price))).any())
     score = sum(bool(flag) for flag in (price_support, trend_support, momentum_support, reclaim_support))
-    if str(profile.get("name")) == "premium" and not price_support:
+    if str(profile.get("name")) == "premium" and not price_support and score < max(1, required_score):
         return False
     return score >= required_score
 
@@ -446,8 +446,20 @@ def _recovery_candle_ok(last: pd.Series, direction: str, level: float, profile: 
     close_position = float(last["close_position"])
     threshold = float(profile["min_close_position"])
     if direction == "LONG":
-        return close > level and body_ratio >= float(profile["min_body_ratio_recovery"]) and rel_volume >= float(profile["min_rel_volume"]) and close_position >= threshold
-    return close < level and body_ratio >= float(profile["min_body_ratio_recovery"]) and rel_volume >= float(profile["min_rel_volume"]) and (1.0 - close_position) >= threshold
+        reclaim_ok = close > level
+        score = sum([
+            body_ratio >= float(profile["min_body_ratio_recovery"]),
+            rel_volume >= float(profile["min_rel_volume"]),
+            close_position >= threshold,
+        ])
+    else:
+        reclaim_ok = close < level
+        score = sum([
+            body_ratio >= float(profile["min_body_ratio_recovery"]),
+            rel_volume >= float(profile["min_rel_volume"]),
+            (1.0 - close_position) >= threshold,
+        ])
+    return reclaim_ok and score >= 2
 
 
 
@@ -456,10 +468,22 @@ def _confirmation_candle_ok(last: pd.Series, direction: str, level: float, profi
     rel_volume = float(last.get("rel_volume") or 0.0)
     close = float(last["close"])
     close_position = float(last["close_position"])
-    threshold = max(0.50, float(profile["min_close_position"]) - 0.04)
+    threshold = max(0.46, float(profile["min_close_position"]) - 0.07)
     if direction == "LONG":
-        return close >= level and body_ratio >= float(profile["min_body_ratio_confirmation"]) and rel_volume >= float(profile["min_confirm_rel_volume"]) and close_position >= threshold
-    return close <= level and body_ratio >= float(profile["min_body_ratio_confirmation"]) and rel_volume >= float(profile["min_confirm_rel_volume"]) and (1.0 - close_position) >= threshold
+        reclaim_ok = close >= level
+        score = sum([
+            body_ratio >= float(profile["min_body_ratio_confirmation"]),
+            rel_volume >= float(profile["min_confirm_rel_volume"]),
+            close_position >= threshold,
+        ])
+    else:
+        reclaim_ok = close <= level
+        score = sum([
+            body_ratio >= float(profile["min_body_ratio_confirmation"]),
+            rel_volume >= float(profile["min_confirm_rel_volume"]),
+            (1.0 - close_position) >= threshold,
+        ])
+    return reclaim_ok and score >= 2
 
 
 
@@ -481,30 +505,38 @@ def _find_recent_sweep(df: pd.DataFrame, direction: str, level: float, profile: 
     min_sweep_distance = atr_now * float(profile["min_sweep_atr"])
     if direction == "LONG":
         low_price = float(tail["low"].min())
-        if low_price >= (level - min_sweep_distance):
-            return None
         idx = int(tail["low"].idxmin())
         candle = df.loc[idx]
-        if float(candle["close"]) <= level:
+        wick_ratio = float(candle.get("lower_wick") or 0.0)
+        swept_hard = low_price < (level - min_sweep_distance)
+        swept_soft = low_price <= (level + (atr_now * 0.025)) and wick_ratio >= 0.22
+        if not (swept_hard or swept_soft):
+            return None
+        if float(candle["close"]) <= (level - atr_now * 0.035):
             return None
         return {
             "index": idx,
             "extreme_price": breakout._round_price_dynamic(low_price),
             "sweep_distance_atr": round((level - low_price) / max(atr_now, 1e-9), 4),
-            "wick_ratio": round(float(candle.get("lower_wick") or 0.0), 4),
+            "wick_ratio": round(wick_ratio, 4),
+            "sweep_mode": "hard" if swept_hard else "soft",
         }
     high_price = float(tail["high"].max())
-    if high_price <= (level + min_sweep_distance):
-        return None
     idx = int(tail["high"].idxmax())
     candle = df.loc[idx]
-    if float(candle["close"]) >= level:
+    wick_ratio = float(candle.get("upper_wick") or 0.0)
+    swept_hard = high_price > (level + min_sweep_distance)
+    swept_soft = high_price >= (level - (atr_now * 0.025)) and wick_ratio >= 0.22
+    if not (swept_hard or swept_soft):
+        return None
+    if float(candle["close"]) >= (level + atr_now * 0.035):
         return None
     return {
         "index": idx,
         "extreme_price": breakout._round_price_dynamic(high_price),
         "sweep_distance_atr": round((high_price - level) / max(atr_now, 1e-9), 4),
-        "wick_ratio": round(float(candle.get("upper_wick") or 0.0), 4),
+        "wick_ratio": round(wick_ratio, 4),
+        "sweep_mode": "hard" if swept_hard else "soft",
     }
 
 

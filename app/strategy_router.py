@@ -17,6 +17,7 @@ _STRATEGY_MAP = {
 }
 
 ROUTER_TERMINAL_RISK_OFF = str(os.getenv("MARKET_REGIME_TERMINAL_RISK_OFF", "false")).strip().lower() in {"1", "true", "yes", "on"}
+ROUTER_TRY_ALTERNATE_STRATEGY = str(os.getenv("ROUTER_TRY_ALTERNATE_STRATEGY", "true")).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _strategy_call_kwargs(
@@ -105,11 +106,34 @@ def route_candidate(
         debug_counts=debug_counts,
     )
     result = strategy_module.mtf_strategy(**strategy_kwargs)
+    selected_strategy_name = strategy_name
+    selected_strategy_module = strategy_module
+
+    if not result and ROUTER_TRY_ALTERNATE_STRATEGY:
+        alternate_name = "liquidity_sweep_reversal" if strategy_name == "breakout_reset" else "breakout_reset"
+        alternate_module = _STRATEGY_MAP.get(alternate_name, breakout_strategy)
+        alternate_kwargs = _strategy_call_kwargs(
+            alternate_module,
+            df_1h=df_1h,
+            df_15m=df_15m,
+            df_5m=df_5m,
+            reference_market_price=reference_market_price,
+            debug_counts=debug_counts,
+        )
+        alternate_result = alternate_module.mtf_strategy(**alternate_kwargs)
+        if alternate_result:
+            _record_reject(debug_counts, f"strategy_router_fallback_from_{strategy_name}_to_{alternate_name}")
+            result = alternate_result
+            selected_strategy_name = alternate_name
+            selected_strategy_module = alternate_module
+
     if not result:
         _record_reject(debug_counts, f"strategy_router_no_candidate_{strategy_name}")
         return None
 
     enriched = dict(result)
+    strategy_name = selected_strategy_name
+    strategy_module = selected_strategy_module
     enriched["strategy_name"] = strategy_name
     enriched["strategy_version"] = str(getattr(strategy_module, "SCORE_CALIBRATION_VERSION", "unknown"))
     enriched["router_version"] = ROUTER_VERSION
