@@ -53,6 +53,7 @@ from app.miniapp.service import (
 from app.observability import build_runtime_health_report, heartbeat, record_audit_event, start_background_heartbeat
 from app.oraculum_bridge import OraculumBridgeError, create_oraculum_link
 from app.sentinel_bridge import SentinelBridgeError, create_sentinel_link
+from app.hades_guide_bridge import HadesGuideBridgeError, consume_hades_guide_code, create_hades_guide_link
 from app.services.admin_runtime_service import (
     get_admin_operational_overview,
     get_admin_runtime_health_matrix,
@@ -94,6 +95,10 @@ def _render_index_html() -> str:
 class MiniAppAuthRequest(BaseModel):
     init_data: Optional[str] = None
     dev_user_id: Optional[int] = None
+
+
+class HadesGuideConsumeRequest(BaseModel):
+    code: str
 
 
 class MiniAppPlanSelectionRequest(BaseModel):
@@ -502,6 +507,55 @@ def create_mini_app() -> FastAPI:
             },
         )
         return payload
+
+
+    @app.post("/api/miniapp/guide/link")
+    async def miniapp_hades_guide_link(request: Request, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
+        try:
+            payload = create_hades_guide_link(user, request_id=getattr(request.state, "request_id", None))
+        except HadesGuideBridgeError as exc:
+            record_audit_event(
+                event_type="hades_guide_link_failed",
+                status="warning",
+                module="miniapp",
+                user_id=int(user.get("user_id") or 0),
+                message=str(exc),
+            )
+            raise HTTPException(status_code=403 if str(exc) == "user_banned" else 400, detail=str(exc)) from exc
+
+        record_audit_event(
+            event_type="hades_guide_link_created",
+            status="ok",
+            module="miniapp",
+            user_id=int(user.get("user_id") or 0),
+            message="hades_guide_link_created",
+            metadata={
+                "expires_in_seconds": payload.get("expires_in_seconds"),
+            },
+        )
+        return payload
+
+    @app.post("/api/miniapp/guide/consume")
+    async def miniapp_hades_guide_consume(payload: HadesGuideConsumeRequest, request: Request) -> Dict[str, Any]:
+        try:
+            result = consume_hades_guide_code(payload.code, request_id=getattr(request.state, "request_id", None))
+        except HadesGuideBridgeError as exc:
+            record_audit_event(
+                event_type="hades_guide_code_rejected",
+                status="warning",
+                module="miniapp",
+                message=str(exc),
+            )
+            raise HTTPException(status_code=401 if str(exc) in {"invalid_or_expired_code", "code_required"} else 403, detail=str(exc)) from exc
+
+        record_audit_event(
+            event_type="hades_guide_code_consumed",
+            status="ok",
+            module="miniapp",
+            user_id=int(result.get("user", {}).get("userId") or 0),
+            message="hades_guide_code_consumed",
+        )
+        return result
 
     @app.get("/api/miniapp/dashboard")
     async def miniapp_dashboard(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
