@@ -2,7 +2,7 @@
 // Versión: 1.0.1
 // Estrategia: Cache-first para assets estáticos, Network-first para API
 
-const CACHE_NAME = 'hades-fill-semantics-v1'; // FIX: bump para desalojar caché vieja que guardó manifest roto
+const CACHE_NAME = 'hades-tp1-protected-v1'; // FIX: bump para desalojar caché vieja que guardó manifest roto
 const STATIC_ASSETS = [
   '/miniapp/static/index.html',
   '/miniapp/static/app.css',
@@ -135,3 +135,5 @@ self.addEventListener('notificationclick', event => {
 // account-command-center-v2
 
 // fill-expiry-semantics-v1
+
+// tp1-protected-runner-v1
