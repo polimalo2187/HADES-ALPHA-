@@ -55,6 +55,8 @@ MIN_ENTRY_WAIT_MINUTES = int(os.getenv("MIN_ENTRY_WAIT_MINUTES", str(TELEGRAM_SI
 MAX_ENTRY_WAIT_MINUTES = int(os.getenv("MAX_ENTRY_WAIT_MINUTES", "60"))
 ENTRY_WAIT_BUFFER_MINUTES = int(os.getenv("ENTRY_WAIT_BUFFER_MINUTES", "3"))
 FILL_EXPIRY_SEMANTICS_VERSION = "fill_semantics_v1_no_post_fill_expiry"
+TP1_PROTECTED_SEMANTICS_VERSION = "tp1_protected_runner_v1"
+TP1_PROTECTED_RETRACE_RATIO = float(os.getenv("TP1_PROTECTED_RETRACE_RATIO", "0.50"))
 MARKET_EVALUATION_VERSION = "v4_pending_entry_activation_window"
 ENTRY_ZONE_MIN_PCT = float(os.getenv("ENTRY_ZONE_MIN_PCT", "0.0015"))
 ENTRY_ZONE_MAX_PCT = float(os.getenv("ENTRY_ZONE_MAX_PCT", "0.0035"))
@@ -1936,6 +1938,19 @@ def _evaluation_observability_payload(
     }
 
 
+
+def _tp1_protection_price(direction: str, entry_price: float, tp1: float) -> float:
+    """Price where a TP1-hit runner is protected and closed as a winner.
+
+    LONG: entry + 50% of the entry->TP1 distance by default.
+    SHORT: entry - 50% of the entry->TP1 distance by default.
+    """
+    ratio = max(0.05, min(0.95, float(TP1_PROTECTED_RETRACE_RATIO)))
+    if str(direction).upper() == "LONG":
+        return float(entry_price) + ((float(tp1) - float(entry_price)) * ratio)
+    return float(entry_price) - ((float(entry_price) - float(tp1)) * ratio)
+
+
 def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
     direction = str(signal_doc.get("direction", "")).upper()
     symbol = signal_doc.get("symbol")
@@ -2024,6 +2039,9 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
     tp1_progress_max_pct = 0.0
     max_favorable_excursion_r = 0.0
     max_adverse_excursion_r = 0.0
+    tp1_hit_running = False
+    tp1_touched_at: Optional[datetime] = None
+    tp1_protection_price = _tp1_protection_price(direction, entry_price, tp1)
     # Obsoleto con fill semantics v1: después de tocar entrada no se invalida por tiempo.
     post_fill_invalidation = None
 
@@ -2076,43 +2094,11 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
             tp1_hit = high >= tp1
             tp2_hit = tp2 is not None and high >= tp2
             sl_hit = low <= stop_loss
-            if sl_hit and (tp2_hit or tp1_hit):
-                return _merge_observability(
-                    {
-                        "result": "lost",
-                        "resolution": "sl",
-                        "completed": True,
-                        "tp_used": None,
-                        "sl_used": stop_loss,
-                    },
-                    expiry_type=None,
-                    expiry_reason=None,
-                )
-            if tp2_hit:
-                return _merge_observability(
-                    {
-                        "result": "won",
-                        "resolution": "tp2",
-                        "completed": True,
-                        "tp_used": tp2,
-                        "sl_used": stop_loss,
-                    },
-                    expiry_type=None,
-                    expiry_reason=None,
-                )
-            if tp1_hit:
-                return _merge_observability(
-                    {
-                        "result": "won",
-                        "resolution": "tp1",
-                        "completed": True,
-                        "tp_used": tp1,
-                        "sl_used": stop_loss,
-                    },
-                    expiry_type=None,
-                    expiry_reason=None,
-                )
-            if sl_hit:
+            protected_retrace_hit = tp1_hit_running and low <= tp1_protection_price
+
+            # Sin TP1 previo, SL sigue siendo cierre perdedor. Si en la misma vela
+            # aparecen SL y TP, se conserva criterio conservador: SL primero.
+            if not tp1_hit_running and sl_hit:
                 return _merge_observability(
                     {
                         "result": "lost",
@@ -2125,22 +2111,6 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
                     expiry_reason=None,
                 )
 
-        elif direction == "SHORT":
-            tp1_hit = low <= tp1
-            tp2_hit = tp2 is not None and low <= tp2
-            sl_hit = high >= stop_loss
-            if sl_hit and (tp2_hit or tp1_hit):
-                return _merge_observability(
-                    {
-                        "result": "lost",
-                        "resolution": "sl",
-                        "completed": True,
-                        "tp_used": None,
-                        "sl_used": stop_loss,
-                    },
-                    expiry_type=None,
-                    expiry_reason=None,
-                )
             if tp2_hit:
                 return _merge_observability(
                     {
@@ -2149,23 +2119,43 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
                         "completed": True,
                         "tp_used": tp2,
                         "sl_used": stop_loss,
+                        "tp1_touched_at": tp1_touched_at,
+                        "tp1_protection_price": tp1_protection_price,
+                        "tp1_runner_completed": True,
                     },
                     expiry_type=None,
                     expiry_reason=None,
                 )
-            if tp1_hit:
+
+            if tp1_hit and not tp1_hit_running:
+                tp1_hit_running = True
+                candle_open_dt, candle_close_dt = _candle_time_bounds(row)
+                tp1_touched_at = candle_close_dt or candle_open_dt
+                continue
+
+            if tp1_hit_running and (protected_retrace_hit or sl_hit):
                 return _merge_observability(
                     {
                         "result": "won",
-                        "resolution": "tp1",
+                        "resolution": "tp1_protected_win",
                         "completed": True,
                         "tp_used": tp1,
                         "sl_used": stop_loss,
+                        "tp1_touched_at": tp1_touched_at,
+                        "tp1_protection_price": tp1_protection_price,
+                        "tp1_runner_completed": True,
                     },
                     expiry_type=None,
                     expiry_reason=None,
                 )
-            if sl_hit:
+
+        elif direction == "SHORT":
+            tp1_hit = low <= tp1
+            tp2_hit = tp2 is not None and low <= tp2
+            sl_hit = high >= stop_loss
+            protected_retrace_hit = tp1_hit_running and high >= tp1_protection_price
+
+            if not tp1_hit_running and sl_hit:
                 return _merge_observability(
                     {
                         "result": "lost",
@@ -2173,6 +2163,44 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
                         "completed": True,
                         "tp_used": None,
                         "sl_used": stop_loss,
+                    },
+                    expiry_type=None,
+                    expiry_reason=None,
+                )
+
+            if tp2_hit:
+                return _merge_observability(
+                    {
+                        "result": "won",
+                        "resolution": "tp2",
+                        "completed": True,
+                        "tp_used": tp2,
+                        "sl_used": stop_loss,
+                        "tp1_touched_at": tp1_touched_at,
+                        "tp1_protection_price": tp1_protection_price,
+                        "tp1_runner_completed": True,
+                    },
+                    expiry_type=None,
+                    expiry_reason=None,
+                )
+
+            if tp1_hit and not tp1_hit_running:
+                tp1_hit_running = True
+                candle_open_dt, candle_close_dt = _candle_time_bounds(row)
+                tp1_touched_at = candle_close_dt or candle_open_dt
+                continue
+
+            if tp1_hit_running and (protected_retrace_hit or sl_hit):
+                return _merge_observability(
+                    {
+                        "result": "won",
+                        "resolution": "tp1_protected_win",
+                        "completed": True,
+                        "tp_used": tp1,
+                        "sl_used": stop_loss,
+                        "tp1_touched_at": tp1_touched_at,
+                        "tp1_protection_price": tp1_protection_price,
+                        "tp1_runner_completed": True,
                     },
                     expiry_type=None,
                     expiry_reason=None,
@@ -2186,6 +2214,9 @@ def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
                 "completed": False,
                 "tp_used": None,
                 "sl_used": stop_loss,
+                "tp1_hit_running": tp1_hit_running,
+                "tp1_touched_at": tp1_touched_at,
+                "tp1_protection_price": tp1_protection_price if tp1_hit_running else None,
             },
             expiry_type=None,
             expiry_reason=None,
@@ -2225,7 +2256,7 @@ def _result_r_metrics(signal_doc: Dict, evaluation: Dict[str, Any]) -> Dict[str,
 
     resolution = str(evaluation.get("resolution") or "").lower()
     r_multiple = None
-    if resolution == "tp1":
+    if resolution in {"tp1", "tp1_protected_win"}:
         r_multiple = 1.0
     elif resolution == "tp2":
         r_multiple = 2.0
@@ -2294,7 +2325,11 @@ def evaluate_expired_signals(limit: int = 100) -> int:
                     "max_adverse_excursion_r": evaluation.get("max_adverse_excursion_r"),
                     "last_tracking_at": evaluated_at,
                     "tracking_status": "open_after_entry",
+                    "tp1_hit_running": bool(evaluation.get("tp1_hit_running")),
+                    "tp1_touched_at": evaluation.get("tp1_touched_at"),
+                    "tp1_protection_price": evaluation.get("tp1_protection_price"),
                     "fill_expiry_semantics": FILL_EXPIRY_SEMANTICS_VERSION,
+                    "tp1_protected_semantics": TP1_PROTECTED_SEMANTICS_VERSION,
                     "updated_at": evaluated_at,
                 }
                 signals_collection().update_one({"_id": s["_id"]}, {"$set": update_payload})
@@ -2352,6 +2387,10 @@ def evaluate_expired_signals(limit: int = 100) -> int:
                 max_adverse_excursion_r=evaluation.get("max_adverse_excursion_r"),
             )
             result_doc["fill_expiry_semantics"] = FILL_EXPIRY_SEMANTICS_VERSION
+            result_doc["tp1_protected_semantics"] = TP1_PROTECTED_SEMANTICS_VERSION
+            result_doc["tp1_touched_at"] = evaluation.get("tp1_touched_at")
+            result_doc["tp1_protection_price"] = evaluation.get("tp1_protection_price")
+            result_doc["tp1_runner_completed"] = bool(evaluation.get("tp1_runner_completed"))
             result_doc["evaluated_at"] = evaluated_at
 
             insert_result = signal_results_collection().insert_one(result_doc)

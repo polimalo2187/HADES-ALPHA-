@@ -262,7 +262,7 @@ def _resolution_key(result_doc: Dict[str, Any]) -> str:
 
 
 def _is_win_result(result_doc: Dict[str, Any]) -> bool:
-    return _resolution_key(result_doc) in {"tp1", "tp2", "won"}
+    return _resolution_key(result_doc) in {"tp1", "tp1_protected_win", "tp2", "won"}
 
 
 
@@ -295,8 +295,8 @@ def _is_expired_clean(result_doc: Dict[str, Any]) -> bool:
 
 def _resolved_r_bucket(result_doc: Dict[str, Any]) -> Optional[str]:
     resolution = _resolution_key(result_doc)
-    if resolution in {"tp1", "tp2", "sl"}:
-        return resolution
+    if resolution in {"tp1", "tp1_protected_win", "tp2", "sl"}:
+        return "tp1" if resolution == "tp1_protected_win" else resolution
     if resolution == "won":
         r_multiple = _r_multiple_value(result_doc)
         if r_multiple is None:
@@ -310,7 +310,7 @@ def _resolved_r_bucket(result_doc: Dict[str, Any]) -> Optional[str]:
 
 def _r_multiple_value(result_doc: Dict[str, Any]) -> Optional[float]:
     resolution = _resolution_key(result_doc)
-    if resolution == "tp1":
+    if resolution in {"tp1", "tp1_protected_win"}:
         return 1.0
     if resolution == "tp2":
         return 2.0
