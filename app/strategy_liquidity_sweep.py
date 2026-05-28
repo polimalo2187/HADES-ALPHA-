@@ -12,28 +12,28 @@ LIQUIDITY_PIVOT_LEFT = max(1, int(os.getenv("LIQUIDITY_PIVOT_LEFT", "2")))
 LIQUIDITY_PIVOT_RIGHT = max(1, int(os.getenv("LIQUIDITY_PIVOT_RIGHT", "2")))
 SWEEP_SEARCH_BARS = max(2, int(os.getenv("LIQUIDITY_SWEEP_SEARCH_BARS", "4")))
 MIN_HISTORY_BARS = max(LIQUIDITY_LOOKBACK + 4, 36)
-SCORE_CALIBRATION_VERSION = "v4_2_liquidity_sweep_operational_receptive"
+SCORE_CALIBRATION_VERSION = "v4_3_liquidity_sweep_quality_tightening"
 ENTRY_MODEL_NAME = "liquidity_sweep_reversal_pullback_execution_v2"
 SETUP_STAGE_WAITING_PULLBACK = "confirmed_waiting_pullback"
 SEND_MODE_PENDING_ENTRY = breakout.SEND_MODE_PENDING_ENTRY
 
-PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "83"))
-PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "76"))
-FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "69"))
+PREMIUM_RAW_SCORE_MIN = float(os.getenv("LSR_PREMIUM_RAW_SCORE_MIN", "85"))
+PLUS_RAW_SCORE_MIN = float(os.getenv("LSR_PLUS_RAW_SCORE_MIN", "78"))
+FREE_RAW_SCORE_MIN = float(os.getenv("LSR_FREE_RAW_SCORE_MIN", "71"))
 
 
 FREE_PROFILE = {
     "name": "free",
     "atr_pct_min": breakout._env_float("LSR_FREE_ATR_PCT_MIN", 0.0012),
     "atr_pct_max": breakout._env_float("LSR_FREE_ATR_PCT_MAX", 0.0260),
-    "liquidity_tolerance_atr": breakout._env_float("LSR_FREE_LIQUIDITY_TOLERANCE_ATR", 0.56),
-    "min_sweep_atr": breakout._env_float("LSR_FREE_MIN_SWEEP_ATR", 0.07),
-    "min_rel_volume": breakout._env_float("LSR_FREE_MIN_REL_VOLUME", 0.70),
-    "min_confirm_rel_volume": breakout._env_float("LSR_FREE_MIN_CONFIRM_REL_VOLUME", 0.72),
-    "min_body_ratio_recovery": breakout._env_float("LSR_FREE_MIN_BODY_RATIO_RECOVERY", 0.14),
-    "min_body_ratio_confirmation": breakout._env_float("LSR_FREE_MIN_BODY_RATIO_CONFIRMATION", 0.12),
-    "min_close_position": breakout._env_float("LSR_FREE_MIN_CLOSE_POSITION", 0.48),
-    "min_rr": breakout._env_float("LSR_FREE_MIN_RR", 0.82),
+    "liquidity_tolerance_atr": breakout._env_float("LSR_FREE_LIQUIDITY_TOLERANCE_ATR", 0.52),
+    "min_sweep_atr": breakout._env_float("LSR_FREE_MIN_SWEEP_ATR", 0.09),
+    "min_rel_volume": breakout._env_float("LSR_FREE_MIN_REL_VOLUME", 0.76),
+    "min_confirm_rel_volume": breakout._env_float("LSR_FREE_MIN_CONFIRM_REL_VOLUME", 0.80),
+    "min_body_ratio_recovery": breakout._env_float("LSR_FREE_MIN_BODY_RATIO_RECOVERY", 0.16),
+    "min_body_ratio_confirmation": breakout._env_float("LSR_FREE_MIN_BODY_RATIO_CONFIRMATION", 0.14),
+    "min_close_position": breakout._env_float("LSR_FREE_MIN_CLOSE_POSITION", 0.52),
+    "min_rr": breakout._env_float("LSR_FREE_MIN_RR", 0.90),
     "htf_price_tolerance": breakout._env_float("LSR_FREE_HTF_PRICE_TOLERANCE", 0.0140),
     "htf_trend_tolerance": breakout._env_float("LSR_FREE_HTF_TREND_TOLERANCE", 0.0240),
     "htf_required_score": max(1, int(os.getenv("LSR_FREE_HTF_REQUIRED_SCORE", "1"))),
@@ -44,14 +44,14 @@ PLUS_PROFILE = {
     "name": "plus",
     "atr_pct_min": breakout._env_float("LSR_PLUS_ATR_PCT_MIN", 0.0015),
     "atr_pct_max": breakout._env_float("LSR_PLUS_ATR_PCT_MAX", 0.0240),
-    "liquidity_tolerance_atr": breakout._env_float("LSR_PLUS_LIQUIDITY_TOLERANCE_ATR", 0.50),
-    "min_sweep_atr": breakout._env_float("LSR_PLUS_MIN_SWEEP_ATR", 0.10),
-    "min_rel_volume": breakout._env_float("LSR_PLUS_MIN_REL_VOLUME", 0.76),
-    "min_confirm_rel_volume": breakout._env_float("LSR_PLUS_MIN_CONFIRM_REL_VOLUME", 0.82),
-    "min_body_ratio_recovery": breakout._env_float("LSR_PLUS_MIN_BODY_RATIO_RECOVERY", 0.17),
-    "min_body_ratio_confirmation": breakout._env_float("LSR_PLUS_MIN_BODY_RATIO_CONFIRMATION", 0.15),
-    "min_close_position": breakout._env_float("LSR_PLUS_MIN_CLOSE_POSITION", 0.53),
-    "min_rr": breakout._env_float("LSR_PLUS_MIN_RR", 0.90),
+    "liquidity_tolerance_atr": breakout._env_float("LSR_PLUS_LIQUIDITY_TOLERANCE_ATR", 0.46),
+    "min_sweep_atr": breakout._env_float("LSR_PLUS_MIN_SWEEP_ATR", 0.13),
+    "min_rel_volume": breakout._env_float("LSR_PLUS_MIN_REL_VOLUME", 0.82),
+    "min_confirm_rel_volume": breakout._env_float("LSR_PLUS_MIN_CONFIRM_REL_VOLUME", 0.90),
+    "min_body_ratio_recovery": breakout._env_float("LSR_PLUS_MIN_BODY_RATIO_RECOVERY", 0.19),
+    "min_body_ratio_confirmation": breakout._env_float("LSR_PLUS_MIN_BODY_RATIO_CONFIRMATION", 0.17),
+    "min_close_position": breakout._env_float("LSR_PLUS_MIN_CLOSE_POSITION", 0.56),
+    "min_rr": breakout._env_float("LSR_PLUS_MIN_RR", 0.98),
     "htf_price_tolerance": breakout._env_float("LSR_PLUS_HTF_PRICE_TOLERANCE", 0.0110),
     "htf_trend_tolerance": breakout._env_float("LSR_PLUS_HTF_TREND_TOLERANCE", 0.0200),
     "htf_required_score": max(1, int(os.getenv("LSR_PLUS_HTF_REQUIRED_SCORE", "1"))),
@@ -62,15 +62,15 @@ PREMIUM_PROFILE = {
     "name": "premium",
     "atr_pct_min": breakout._env_float("LSR_PREMIUM_ATR_PCT_MIN", 0.0018),
     "atr_pct_max": breakout._env_float("LSR_PREMIUM_ATR_PCT_MAX", 0.0225),
-    "liquidity_tolerance_atr": breakout._env_float("LSR_PREMIUM_LIQUIDITY_TOLERANCE_ATR", 0.44),
-    "min_sweep_atr": breakout._env_float("LSR_PREMIUM_MIN_SWEEP_ATR", 0.14),
-    "min_rel_volume": breakout._env_float("LSR_PREMIUM_MIN_REL_VOLUME", 0.84),
-    "min_confirm_rel_volume": breakout._env_float("LSR_PREMIUM_MIN_CONFIRM_REL_VOLUME", 0.90),
-    "min_body_ratio_recovery": breakout._env_float("LSR_PREMIUM_MIN_BODY_RATIO_RECOVERY", 0.20),
-    "min_body_ratio_confirmation": breakout._env_float("LSR_PREMIUM_MIN_BODY_RATIO_CONFIRMATION", 0.18),
-    "min_close_position": breakout._env_float("LSR_PREMIUM_MIN_CLOSE_POSITION", 0.58),
-    "min_rr": breakout._env_float("LSR_PREMIUM_MIN_RR", 0.98),
-    "htf_price_tolerance": breakout._env_float("LSR_PREMIUM_HTF_PRICE_TOLERANCE", 0.0090),
+    "liquidity_tolerance_atr": breakout._env_float("LSR_PREMIUM_LIQUIDITY_TOLERANCE_ATR", 0.40),
+    "min_sweep_atr": breakout._env_float("LSR_PREMIUM_MIN_SWEEP_ATR", 0.17),
+    "min_rel_volume": breakout._env_float("LSR_PREMIUM_MIN_REL_VOLUME", 0.90),
+    "min_confirm_rel_volume": breakout._env_float("LSR_PREMIUM_MIN_CONFIRM_REL_VOLUME", 0.98),
+    "min_body_ratio_recovery": breakout._env_float("LSR_PREMIUM_MIN_BODY_RATIO_RECOVERY", 0.22),
+    "min_body_ratio_confirmation": breakout._env_float("LSR_PREMIUM_MIN_BODY_RATIO_CONFIRMATION", 0.20),
+    "min_close_position": breakout._env_float("LSR_PREMIUM_MIN_CLOSE_POSITION", 0.61),
+    "min_rr": breakout._env_float("LSR_PREMIUM_MIN_RR", 1.06),
+    "htf_price_tolerance": breakout._env_float("LSR_PREMIUM_HTF_PRICE_TOLERANCE", 0.0050),
     "htf_trend_tolerance": breakout._env_float("LSR_PREMIUM_HTF_TREND_TOLERANCE", 0.0160),
     "htf_required_score": max(1, int(os.getenv("LSR_PREMIUM_HTF_REQUIRED_SCORE", "1"))),
     "score": 90.0,
@@ -163,6 +163,15 @@ PULLBACK_LEVEL_BUFFER_ATR = breakout._env_float("LSR_PULLBACK_LEVEL_BUFFER_ATR",
 PULLBACK_MARKET_GAP_ATR = breakout._env_float("LSR_PULLBACK_MARKET_GAP_ATR", 0.03)
 POST_FILL_INVALIDATION_MINUTES = max(5, int(os.getenv("LSR_POST_FILL_INVALIDATION_MINUTES", "35")))
 POST_FILL_MIN_TP1_PROGRESS_PCT = breakout._env_float("LSR_POST_FILL_MIN_TP1_PROGRESS_PCT", 18.0)
+
+# Quality tightening v4.3: conservative gates to reduce weak/expired liquidity signals
+# without muting the strategy. All knobs are env-overridable for live calibration.
+LSR_SINGLE_TOUCH_SOFT_SWEEP_REJECT = str(os.getenv("LSR_SINGLE_TOUCH_SOFT_SWEEP_REJECT", "1")).strip().lower() not in {"0", "false", "no", "off"}
+LSR_MIN_SOFT_SWEEP_DISTANCE_ATR = breakout._env_float("LSR_MIN_SOFT_SWEEP_DISTANCE_ATR", 0.035)
+LSR_MIN_SOFT_SWEEP_WICK_RATIO = breakout._env_float("LSR_MIN_SOFT_SWEEP_WICK_RATIO", 0.30)
+LSR_MIN_RECLAIM_DISTANCE_ATR = breakout._env_float("LSR_MIN_RECLAIM_DISTANCE_ATR", 0.08)
+LSR_MAX_ENTRY_GAP_ATR = breakout._env_float("LSR_MAX_ENTRY_GAP_ATR", 0.62)
+LSR_FALLBACK_ZONE_MIN_SWEEP_BONUS_ATR = breakout._env_float("LSR_FALLBACK_ZONE_MIN_SWEEP_BONUS_ATR", 0.06)
 
 
 def _record_reject(debug_counts: Optional[Dict[str, int]], reason: str) -> None:
@@ -356,7 +365,7 @@ def _higher_timeframe_context_ok(df_1h: pd.DataFrame, direction: str, profile: D
         momentum_support = close >= prev_close or ema20 >= (prev_ema20 * 0.999)
         reclaim_support = bool((recent["close"].astype(float) >= (recent["ema20"].astype(float) * (1.0 - tolerance_price))).any())
         score = sum(bool(flag) for flag in (price_support, trend_support, momentum_support, reclaim_support))
-        if str(profile.get("name")) == "premium" and not price_support and score < max(1, required_score):
+        if str(profile.get("name")) == "premium" and not price_support:
             return False
         return score >= required_score
 
@@ -405,7 +414,7 @@ def _select_liquidity_zone(df: pd.DataFrame, direction: str, profile: Dict) -> O
             fallback_price = float(frame["low"].tail(12).min())
         else:
             fallback_price = float(frame["high"].tail(12).max())
-        return {"price": fallback_price, "count": 1, "latest_index": int(frame.index[-1]), "tolerance": tolerance}
+        return {"price": fallback_price, "count": 1, "latest_index": int(frame.index[-1]), "tolerance": tolerance, "fallback": True}
 
     pivot_rows.sort(key=lambda item: item["price"])
     clusters: List[Dict] = []
@@ -509,7 +518,7 @@ def _find_recent_sweep(df: pd.DataFrame, direction: str, level: float, profile: 
         candle = df.loc[idx]
         wick_ratio = float(candle.get("lower_wick") or 0.0)
         swept_hard = low_price < (level - min_sweep_distance)
-        swept_soft = low_price <= (level + (atr_now * 0.025)) and wick_ratio >= 0.22
+        swept_soft = low_price <= (level + (atr_now * 0.025)) and wick_ratio >= LSR_MIN_SOFT_SWEEP_WICK_RATIO
         if not (swept_hard or swept_soft):
             return None
         if float(candle["close"]) <= (level - atr_now * 0.035):
@@ -526,7 +535,7 @@ def _find_recent_sweep(df: pd.DataFrame, direction: str, level: float, profile: 
     candle = df.loc[idx]
     wick_ratio = float(candle.get("upper_wick") or 0.0)
     swept_hard = high_price > (level + min_sweep_distance)
-    swept_soft = high_price >= (level - (atr_now * 0.025)) and wick_ratio >= 0.22
+    swept_soft = high_price >= (level - (atr_now * 0.025)) and wick_ratio >= LSR_MIN_SOFT_SWEEP_WICK_RATIO
     if not (swept_hard or swept_soft):
         return None
     if float(candle["close"]) >= (level + atr_now * 0.035):
@@ -538,6 +547,42 @@ def _find_recent_sweep(df: pd.DataFrame, direction: str, level: float, profile: 
         "wick_ratio": round(wick_ratio, 4),
         "sweep_mode": "hard" if swept_hard else "soft",
     }
+
+
+
+def _quality_sweep_ok(zone: Dict, sweep: Dict, profile: Dict) -> bool:
+    """Rejects weak liquidity events that used to pass through the score floor.
+
+    The intent is not to make Liquid Sweep rare; it is to remove the noisy cases:
+    - single-touch liquidity + soft sweep,
+    - soft sweep without real penetration,
+    - fallback zone without extra sweep distance.
+    """
+    sweep_distance = float(sweep.get("sweep_distance_atr") or 0.0)
+    wick_ratio = float(sweep.get("wick_ratio") or 0.0)
+    sweep_mode = str(sweep.get("sweep_mode") or "").strip().lower()
+    zone_count = int(zone.get("count") or 0)
+
+    if sweep_mode == "soft":
+        if sweep_distance < float(LSR_MIN_SOFT_SWEEP_DISTANCE_ATR):
+            return False
+        if wick_ratio < float(LSR_MIN_SOFT_SWEEP_WICK_RATIO):
+            return False
+        if LSR_SINGLE_TOUCH_SOFT_SWEEP_REJECT and zone_count <= 1:
+            return False
+
+    if bool(zone.get("fallback")):
+        required = float(profile.get("min_sweep_atr", 0.0)) + float(LSR_FALLBACK_ZONE_MIN_SWEEP_BONUS_ATR)
+        if sweep_distance < required:
+            return False
+
+    return True
+
+
+
+def _entry_gap_ok(entry_price: float, reference_price: float, atr_now: float) -> bool:
+    atr_now = max(float(atr_now or 0.0), 1e-9)
+    return abs(float(reference_price) - float(entry_price)) <= (atr_now * float(LSR_MAX_ENTRY_GAP_ATR))
 
 
 
@@ -752,8 +797,17 @@ def _evaluate_direction(
         _record_reject(debug_counts, "liquidity_minimum_sweep")
         return None
 
+    if not _quality_sweep_ok(zone, sweep, tuned_profile):
+        _record_reject(debug_counts, "liquidity_sweep_quality")
+        return None
+
     if not _recovery_candle_ok(last, direction, level, tuned_profile):
         _record_reject(debug_counts, "liquidity_recovery_close")
+        return None
+
+    reclaim_distance_atr = abs(float(last["close"]) - level) / max(float(last["atr"]), 1e-9)
+    if reclaim_distance_atr < float(LSR_MIN_RECLAIM_DISTANCE_ATR):
+        _record_reject(debug_counts, "liquidity_reclaim_distance")
         return None
 
     if not _confirmation_candle_ok(last, direction, level, tuned_profile):
@@ -782,6 +836,9 @@ def _evaluate_direction(
     )
     if entry_price is None:
         _record_reject(debug_counts, "liquidity_pullback_geometry")
+        return None
+    if not _entry_gap_ok(entry_price, current_reference_price, atr_now):
+        _record_reject(debug_counts, "liquidity_entry_gap")
         return None
 
     barrier_price = _nearest_barrier_price(df, direction, entry_price)
