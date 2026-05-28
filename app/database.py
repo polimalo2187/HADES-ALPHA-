@@ -123,6 +123,10 @@ def sentinel_link_tokens_collection():
     return get_db()["sentinel_link_tokens"]
 
 
+def hades_guide_link_tokens_collection():
+    """Tokens temporales de vinculación HADES → Hades Guide."""
+    return get_db()["hades_guide_link_tokens"]
+
 
 def payment_orders_collection():
     """Órdenes de pago automáticas BEP-20"""
@@ -161,6 +165,7 @@ UNIQUE_INDEX_DUPLICATE_QUERIES = {
     "payment_orders.matched_tx_hash": ["matched_tx_hash"],
     "oraculum_link_tokens.token_hash": ["token_hash"],
     "sentinel_link_tokens.token_hash": ["token_hash"],
+    "hades_guide_link_tokens.token_hash": ["token_hash"],
     "system_health.component": ["component"],
 }
 
@@ -269,6 +274,12 @@ COLLECTION_INDEX_MODELS = {
         IndexModel([("expires_at", ASCENDING)], name="ttl_expires_at_1h", expireAfterSeconds=3600),
         IndexModel([("used_at", ASCENDING), ("expires_at", ASCENDING)], name="used_expires_idx"),
     ],
+    "hades_guide_link_tokens": [
+        IndexModel([("token_hash", ASCENDING)], name="token_hash_unique", unique=True),
+        IndexModel([("user_id", ASCENDING), ("created_at", DESCENDING)], name="user_created_idx"),
+        IndexModel([("expires_at", ASCENDING)], name="ttl_expires_at_1h", expireAfterSeconds=3600),
+        IndexModel([("used_at", ASCENDING), ("expires_at", ASCENDING)], name="used_expires_idx"),
+    ],
     "audit_logs": [
         IndexModel([("created_at", DESCENDING)], name="created_at_idx"),
         IndexModel([("event_type", ASCENDING), ("created_at", DESCENDING)], name="event_created_idx"),
@@ -307,6 +318,7 @@ COLLECTION_GETTERS = {
     "subscription_events": subscription_events_collection,
     "oraculum_link_tokens": oraculum_link_tokens_collection,
     "sentinel_link_tokens": sentinel_link_tokens_collection,
+    "hades_guide_link_tokens": hades_guide_link_tokens_collection,
     "payment_orders": payment_orders_collection,
     "payment_verification_logs": payment_verification_logs_collection,
     "audit_logs": audit_logs_collection,
