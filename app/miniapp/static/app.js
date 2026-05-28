@@ -712,6 +712,8 @@ function bridgeErrorMessage(product, error) {
     sentinel_url_not_configured: 'SENTINEL_URL no está configurado en Railway.',
     oraculum_link_unavailable: 'El backend no devolvió la URL de Oraculum.',
     sentinel_link_unavailable: 'El backend no devolvió la URL de Sentinel.',
+    hades_guide_url_not_configured: 'HADES_GUIDE_URL no está configurado en Railway.',
+    hades_guide_link_unavailable: 'El backend no devolvió la URL de Hades Guide.',
     request_failed_401: 'Tu sesión de HADES expiró. Cierra y vuelve a abrir la Mini App desde Telegram.',
     request_failed_403: `${product} requiere PREMIUM activo o la sesión no tiene permiso.`,
   };
@@ -792,6 +794,40 @@ async function createAndOpenSentinelLink(button = null) {
 
 async function createAndOpenOraculumLink(button = null) {
   return createAndOpenEcosystemLink('oraculum', button);
+}
+
+async function createAndOpenHadesGuideLink(button = null) {
+  const productName = 'Hades Guide';
+  const original = button ? button.textContent : '';
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Creando acceso...';
+  }
+
+  try {
+    const result = await api('/api/miniapp/guide/link', { method: 'POST' });
+    if (!result?.url) throw new Error('hades_guide_link_unavailable');
+
+    setAccountNotice('Hades Guide vinculado. Abriendo centro de conocimiento...', 'positive');
+    if (button) button.textContent = 'Abriendo...';
+    openExternalUrl(result.url);
+  } catch (error) {
+    const raw = String(error?.message || error || '').trim();
+    const map = {
+      hades_guide_url_not_configured: 'HADES_GUIDE_URL no está configurado en Railway.',
+      hades_guide_link_unavailable: 'El backend no devolvió la URL de Hades Guide.',
+      user_banned: 'Tu cuenta no tiene acceso porque está restringida.',
+      request_failed_401: 'Tu sesión de HADES expiró. Cierra y vuelve a abrir la Mini App desde Telegram.',
+      request_failed_403: 'Tu cuenta no tiene acceso a Hades Guide.',
+    };
+    const key = raw.toLowerCase().replaceAll(' ', '_');
+    setAccountNotice(map[key] || `No se pudo abrir ${productName}: ${raw || 'error desconocido'}`, 'negative');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = original || 'Abrir Hades Guide';
+    }
+  }
 }
 
 
@@ -3312,6 +3348,15 @@ function renderHome() {
             <button type="button" class="ecosystem-suite-action" data-goto="signals">Ver señales</button>
           </article>
 
+          <article class="ecosystem-suite-card guide is-active">
+            <div class="ecosystem-suite-icon">📘</div>
+            <div class="ecosystem-suite-body">
+              <strong>Hades Guide</strong>
+              <span>Centro textual de enseñanza del ecosistema: HADES Alpha, Oraculum, Sentinel, señales, riesgo, radar y uso correcto.</span>
+            </div>
+            <button type="button" class="ecosystem-suite-action" data-open-guide>Abrir Hades Guide</button>
+          </article>
+
           <article class="ecosystem-suite-card oraculum ${ecosystemPremiumActive ? 'is-active' : 'is-locked'}">
             <div class="ecosystem-suite-icon">🔮</div>
             <div class="ecosystem-suite-body">
@@ -5486,6 +5531,18 @@ function renderAccount() {
         </div>
       </div>
 
+      <div class="card card-span-12 account-ecosystem-card account-guide-card guide-bridge-card is-active">
+        <div class="account-ecosystem-head">
+          <div>
+            <h2 style="margin:0;">Hades Guide</h2>
+            <div class="item-subtitle">Centro de enseñanza textual del ecosistema HADES. Disponible para toda cuenta registrada y activa.</div>
+          </div>
+          <span class="account-ecosystem-badge active">ACCESO INCLUIDO</span>
+        </div>
+        <p class="account-ecosystem-copy">Abre Hades Guide para entender paso a paso HADES Alpha, señales, radar, watchlist, riesgo, Oraculum y Sentinel. No requiere premium ni suscripción propia.</p>
+        <button type="button" class="button button-primary" data-open-guide>📘 Abrir Hades Guide</button>
+      </div>
+
       <div class="card card-span-12 account-ecosystem-card account-oraculum-card oraculum-bridge-card ${isPremiumActive ? 'is-active' : 'is-locked'}">
         <div class="item-header">
           <div>
@@ -5681,6 +5738,13 @@ function bindViewButtons() {
     button.onclick = () => {
       if (button.disabled) return;
       createAndOpenSentinelLink(button);
+    };
+  });
+
+  document.querySelectorAll('[data-open-guide]').forEach(button => {
+    button.onclick = () => {
+      if (button.disabled) return;
+      createAndOpenHadesGuideLink(button);
     };
   });
 
