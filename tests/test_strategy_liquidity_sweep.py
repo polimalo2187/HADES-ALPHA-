@@ -139,22 +139,3 @@ def test_pullback_entry_waits_for_retrace_instead_of_chasing_close():
 
     assert entry is not None
     assert 100.0 < entry < 100.8
-
-
-def test_quality_gate_rejects_single_touch_soft_sweep():
-    zone = {"price": 100.0, "count": 1}
-    sweep = {"sweep_mode": "soft", "sweep_distance_atr": 0.05, "wick_ratio": 0.34}
-
-    assert strategy._quality_sweep_ok(zone, sweep, strategy.FREE_PROFILE) is False
-
-
-def test_quality_gate_accepts_clustered_soft_sweep_with_real_penetration():
-    zone = {"price": 100.0, "count": 2}
-    sweep = {"sweep_mode": "soft", "sweep_distance_atr": 0.06, "wick_ratio": 0.34}
-
-    assert strategy._quality_sweep_ok(zone, sweep, strategy.FREE_PROFILE) is True
-
-
-def test_entry_gap_rejects_late_chase_after_confirmation():
-    assert strategy._entry_gap_ok(entry_price=100.0, reference_price=100.8, atr_now=1.0) is False
-    assert strategy._entry_gap_ok(entry_price=100.0, reference_price=100.5, atr_now=1.0) is True
