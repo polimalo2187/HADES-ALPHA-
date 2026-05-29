@@ -66,6 +66,7 @@ from app.plans import can_access_feature, normalize_plan, plan_status
 from app.watchlist import add_symbol, normalize_many, remove_symbol, set_symbols, clear_watchlist
 from app.risk import RiskConfigurationError, get_exchange_fee_preset, normalize_exchange_name, normalize_entry_mode, save_user_risk_profile
 from app.binance_api import get_futures_24h_tickers
+from app.trading_session import get_trading_session_public_payload, get_trading_session_status
 
 logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
@@ -437,6 +438,10 @@ def create_mini_app() -> FastAPI:
     async def miniapp_me(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
         return build_me_payload(user)
 
+    @app.get("/api/miniapp/session")
+    async def miniapp_session_status(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
+        return {"trading_session": get_trading_session_public_payload()}
+
     @app.get("/api/miniapp/ecosystem/status")
     async def miniapp_ecosystem_status(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
         import os
@@ -571,6 +576,9 @@ def create_mini_app() -> FastAPI:
     @app.get("/api/miniapp/symbols")
     async def miniapp_symbols(user: Dict[str, Any] = Depends(get_authenticated_user)):
         """Devuelve pares USDT perpetual desde proveedores públicos configurados, ordenados por volumen."""
+        session_status = get_trading_session_status()
+        if not session_status.is_open:
+            return {"symbols": [], "trading_session": session_status.to_public_dict(), "paused": True}
         tickers = get_futures_24h_tickers()
         symbols = [
             {
@@ -585,6 +593,9 @@ def create_mini_app() -> FastAPI:
 
     @app.get("/api/miniapp/radar/{symbol}")
     async def miniapp_radar_detail(symbol: str, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
+        session_status = get_trading_session_status()
+        if not session_status.is_open:
+            return {"ok": False, "paused": True, "symbol": symbol.upper(), "trading_session": session_status.to_public_dict(), "message": session_status.to_public_dict().get("message")}
         payload = build_radar_symbol_payload(user, symbol)
         if not payload:
             raise HTTPException(status_code=404, detail="radar_symbol_not_found")
