@@ -270,13 +270,67 @@ def _fetch_binance_tickers() -> List[Dict[str, Any]]:
     return data
 
 
+def _merge_ticker_payloads(provider_payloads: Sequence[ProviderResult]) -> List[Dict[str, Any]]:
+    """Merge 24h ticker universes across public providers.
+
+    Previous behavior returned the first successful provider. That was safe for
+    latency, but it hid symbols that exist only on a later provider. The market
+    page, watchlist and radar need coverage from the complete configured public
+    provider chain while still preserving priority for duplicate symbols.
+
+    Provider priority rule:
+      - first provider in MARKET_DATA_PROVIDERS wins for duplicated symbols;
+      - later providers fill coverage gaps only;
+      - each row keeps its real source in ``provider`` and gets a tiny
+        ``providers_available`` provenance list for diagnostics/UI.
+    """
+    by_symbol: Dict[str, Dict[str, Any]] = {}
+    providers_by_symbol: Dict[str, List[str]] = {}
+
+    for result in provider_payloads:
+        provider = str(result.provider or "").lower().strip()
+        payload = result.payload if isinstance(result.payload, list) else []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            symbol = str(item.get("symbol", "")).upper().strip()
+            if not symbol.endswith("USDT") or symbol.endswith("BUSD"):
+                continue
+
+            providers = providers_by_symbol.setdefault(symbol, [])
+            if provider and provider not in providers:
+                providers.append(provider)
+
+            # Keep the highest priority provider row as the canonical row.
+            if symbol in by_symbol:
+                continue
+
+            row = dict(item)
+            row["symbol"] = symbol
+            row.setdefault("provider", provider or "unknown")
+            by_symbol[symbol] = row
+
+    merged: List[Dict[str, Any]] = []
+    for symbol, row in by_symbol.items():
+        enriched = dict(row)
+        enriched["providers_available"] = list(providers_by_symbol.get(symbol) or [])
+        merged.append(enriched)
+
+    # Deterministic and useful ordering: strongest quote volume first, then symbol.
+    merged.sort(key=lambda item: (_safe_float(item.get("quoteVolume")), str(item.get("symbol", ""))), reverse=True)
+    return merged
+
+
 def get_public_24h_tickers(*, allow_fallback: bool = True) -> List[Dict[str, Any]]:
-    key = "public:24h_tickers:" + ",".join(_provider_order())
+    key = "public:24h_tickers:merged:" + ",".join(_provider_order())
     cached = _cache_get(key)
     if cached is not None:
         return cached
 
     errors: List[str] = []
+    provider_payloads: List[ProviderResult] = []
+    provider_counts: Dict[str, int] = {}
+
     for provider in _provider_order():
         try:
             if provider == "bybit":
@@ -287,12 +341,22 @@ def get_public_24h_tickers(*, allow_fallback: bool = True) -> List[Dict[str, Any
                 payload = _fetch_binance_tickers()
             else:
                 continue
-            _cache_set(key, payload, _TTL_TICKERS)
-            logger.info("✅ Market data tickers provider=%s count=%s", provider, len(payload))
-            return payload
+            provider_payloads.append(ProviderResult(provider=provider, payload=payload))
+            provider_counts[provider] = len(payload) if isinstance(payload, list) else 0
         except Exception as exc:
             errors.append(f"{provider}: {exc}")
             logger.warning("⚠️ Market data provider falló en tickers | provider=%s error=%s", provider, exc)
+
+    merged = _merge_ticker_payloads(provider_payloads)
+    if merged:
+        _cache_set(key, merged, _TTL_TICKERS)
+        logger.info(
+            "✅ Market data tickers merged | providers=%s | total=%s | counts=%s",
+            ",".join([r.provider for r in provider_payloads]),
+            len(merged),
+            provider_counts,
+        )
+        return merged
 
     if allow_fallback:
         fallback = _fallback_24h_tickers()
