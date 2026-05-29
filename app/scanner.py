@@ -103,9 +103,9 @@ if KLINE_LIMIT_1H < _MIN_HTF_BARS:
 EFFECTIVE_REQUEST_DELAY = REQUEST_DELAY if SCANNER_FORCE_REQUEST_DELAY else 0.0
 
 # Thresholds basados en raw_score real.
-PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "83"))
-PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "76"))
-FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "69"))
+PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "85"))
+PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "78"))
+FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "72"))
 
 # BTC market-regime guard.
 BTC_REGIME_ENABLED = str(os.getenv("BTC_REGIME_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}

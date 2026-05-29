@@ -809,9 +809,9 @@ def _history_expiry_type(doc: Dict[str, Any]) -> Optional[str]:
 def _history_expiry_label(doc: Dict[str, Any]) -> Optional[str]:
     expiry_type = _history_expiry_type(doc)
     if expiry_type == "no_fill":
-        return "Expirada: no llegó al entry"
+        return "No Entry: no tocó entrada"
     if expiry_type == "after_entry_no_followthrough":
-        return "Expirada: tocó entry pero no desarrolló"
+        return "Fallo post-entry: tocó entrada pero no desarrolló"
     return None
 
 
