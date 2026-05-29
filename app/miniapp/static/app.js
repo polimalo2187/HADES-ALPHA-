@@ -94,7 +94,7 @@ const LIVE_SIGNALS_HOME_POLL_INTERVAL_MS = 15000;
 const LIVE_SIGNALS_VIEW_POLL_INTERVAL_MS = 8000;
 const LIVE_SIGNALS_FOCUS_DEBOUNCE_MS = 2500;
 const PAYLOAD_CACHE_TTL_MS = 10 * 60 * 1000;
-const PAYLOAD_CACHE_PREFIX = 'hades-miniapp-payload-v3';
+const PAYLOAD_CACHE_PREFIX = 'hades-miniapp-payload-v4';
 
 const els = {
   loading: document.getElementById('loading'),
