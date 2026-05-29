@@ -53,7 +53,6 @@ from app.miniapp.service import (
 from app.observability import build_runtime_health_report, heartbeat, record_audit_event, start_background_heartbeat
 from app.oraculum_bridge import OraculumBridgeError, create_oraculum_link
 from app.sentinel_bridge import SentinelBridgeError, create_sentinel_link
-from app.hades_guide_bridge import HadesGuideBridgeError, consume_hades_guide_code, create_hades_guide_link
 from app.services.admin_runtime_service import (
     get_admin_operational_overview,
     get_admin_runtime_health_matrix,
@@ -63,7 +62,7 @@ from app.services.admin_runtime_service import (
 from app.services.admin_service import is_effectively_banned
 from app.payment_service import cancel_payment_order, confirm_payment_order, create_payment_order, get_active_payment_order_for_user
 from app.statistics import reset_statistics
-from app.plans import has_access, normalize_plan, plan_status
+from app.plans import can_access_feature, normalize_plan, plan_status
 from app.watchlist import add_symbol, normalize_many, remove_symbol, set_symbols, clear_watchlist
 from app.risk import RiskConfigurationError, get_exchange_fee_preset, normalize_exchange_name, normalize_entry_mode, save_user_risk_profile
 from app.binance_api import get_futures_24h_tickers
@@ -95,10 +94,6 @@ def _render_index_html() -> str:
 class MiniAppAuthRequest(BaseModel):
     init_data: Optional[str] = None
     dev_user_id: Optional[int] = None
-
-
-class HadesGuideConsumeRequest(BaseModel):
-    code: str
 
 
 class MiniAppPlanSelectionRequest(BaseModel):
@@ -508,55 +503,6 @@ def create_mini_app() -> FastAPI:
         )
         return payload
 
-
-    @app.post("/api/miniapp/guide/link")
-    async def miniapp_hades_guide_link(request: Request, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
-        try:
-            payload = create_hades_guide_link(user, request_id=getattr(request.state, "request_id", None))
-        except HadesGuideBridgeError as exc:
-            record_audit_event(
-                event_type="hades_guide_link_failed",
-                status="warning",
-                module="miniapp",
-                user_id=int(user.get("user_id") or 0),
-                message=str(exc),
-            )
-            raise HTTPException(status_code=403 if str(exc) == "user_banned" else 400, detail=str(exc)) from exc
-
-        record_audit_event(
-            event_type="hades_guide_link_created",
-            status="ok",
-            module="miniapp",
-            user_id=int(user.get("user_id") or 0),
-            message="hades_guide_link_created",
-            metadata={
-                "expires_in_seconds": payload.get("expires_in_seconds"),
-            },
-        )
-        return payload
-
-    @app.post("/api/miniapp/guide/consume")
-    async def miniapp_hades_guide_consume(payload: HadesGuideConsumeRequest, request: Request) -> Dict[str, Any]:
-        try:
-            result = consume_hades_guide_code(payload.code, request_id=getattr(request.state, "request_id", None))
-        except HadesGuideBridgeError as exc:
-            record_audit_event(
-                event_type="hades_guide_code_rejected",
-                status="warning",
-                module="miniapp",
-                message=str(exc),
-            )
-            raise HTTPException(status_code=401 if str(exc) in {"invalid_or_expired_code", "code_required"} else 403, detail=str(exc)) from exc
-
-        record_audit_event(
-            event_type="hades_guide_code_consumed",
-            status="ok",
-            module="miniapp",
-            user_id=int(result.get("user", {}).get("userId") or 0),
-            message="hades_guide_code_consumed",
-        )
-        return result
-
     @app.get("/api/miniapp/dashboard")
     async def miniapp_dashboard(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
         return build_dashboard_payload(user)
@@ -610,8 +556,16 @@ def create_mini_app() -> FastAPI:
 
     @app.get("/api/miniapp/market")
     async def miniapp_market(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
-        if not has_access(user):
-            raise HTTPException(status_code=403, detail="plan_required")
+        status = plan_status(user)
+        effective_plan = normalize_plan(status.get("plan") or user.get("plan"))
+        subscription_status = str(status.get("status") or "free").lower().strip()
+        if not can_access_feature(
+            effective_plan,
+            "market_basic",
+            has_trial=subscription_status == "trial",
+            is_admin_user=is_admin(int(user.get("user_id") or 0)),
+        ):
+            raise HTTPException(status_code=403, detail="market_unavailable")
         return build_market_payload(user)
 
     @app.get("/api/miniapp/symbols")
