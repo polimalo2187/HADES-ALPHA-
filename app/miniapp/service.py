@@ -7,7 +7,7 @@ from math import isfinite, log10
 from typing import Any, Dict, Iterable, List, Optional
 
 from app.binance_api import get_futures_24h_tickers, get_open_interest, get_premium_index, get_radar_opportunities
-from app.market_data_public import public_provider_label
+from app.market_data_public import get_public_24h_ticker_for_symbol, public_provider_label
 from app.services.market_data_service import get_funding_rate_pct_map, get_open_interest_map
 from app.config import get_bot_username, get_payment_configuration_status, get_payment_min_confirmations, is_admin
 from app.i18n import normalize_language
@@ -1679,6 +1679,13 @@ def _serialize_watchlist(symbols: Iterable[str], *, user_id: int = 0) -> List[Di
     rows: List[Dict[str, Any]] = []
     for symbol in selected_order:
         item = ticker_by_symbol.get(symbol)
+        if not item:
+            # Targeted rescue path for explicit watchlist symbols. The bulk
+            # merged ticker cache is optimized for scanner/radar, but newly
+            # listed or Binance-only contracts can be missed by an older warmed
+            # cache. This makes a cached per-symbol 24h lookup only for symbols
+            # the user explicitly added to the watchlist.
+            item = _safe_call(get_public_24h_ticker_for_symbol, {}, symbol) or None
         missing_market_data = item is None
         if not item:
             last_price = 0.0
