@@ -8,6 +8,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
 
 from app.binance_api import get_open_interest, get_premium_index, get_radar_opportunities, get_top_movers_usdtm
+from app.market_data_public import public_provider_label
 from app.config import is_admin, is_payment_configuration_ready
 from app.database import users_collection
 from app.market_ui import render_market_state
@@ -814,7 +815,7 @@ async def handle_market(query, user):
         await query.edit_message_text(_tr(language, "⚠️ No pude cargar Mercado ahora mismo. Intenta de nuevo en unos segundos.", "⚠️ I could not load Market right now. Try again in a few seconds."), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="back_menu")]]))
 
 async def handle_movers(query, user):
-    """Muestra Top Movers 24h de Binance USDT-M Futures."""
+    """Muestra Top Movers 24h desde proveedores públicos configurados."""
     language = _get_user_language(user)
     if not has_access(user):
         await query.edit_message_text(
@@ -843,13 +844,13 @@ async def handle_movers(query, user):
     try:
         movers = get_top_movers_usdtm(limit=10)
     except Exception as e:
-        logger.exception("Error obteniendo movers de Binance: %s", e)
+        logger.exception("Error obteniendo movers de proveedores públicos: %s", e)
         await query.edit_message_text(_tr(language, "⚠️ No pude obtener los movers ahora mismo. Intenta de nuevo en unos segundos.", "⚠️ I could not get movers right now. Try again in a few seconds."), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="back_menu")]]))
         return
     if not movers:
         await query.edit_message_text(_tr(language, "⚠️ No hay datos disponibles ahora mismo. Intenta de nuevo.", "⚠️ No data available right now. Try again."), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(_tr(language, "⬅️ Volver", "⬅️ Back"), callback_data="back_menu")]]))
         return
-    lines_out = [_tr(language, "🔥 TOP MOVERS FUTURES (24h)", "🔥 TOP FUTURES MOVERS (24h)"), "", "*Binance USDT-M*", f"🕒 {_tr(language, 'Actualizado', 'Updated')}: {datetime.utcnow():%H:%M:%S} UTC", ""]
+    lines_out = [_tr(language, "🔥 TOP MOVERS FUTURES (24h)", "🔥 TOP FUTURES MOVERS (24h)"), "", f"*Datos públicos: {public_provider_label()}*", f"🕒 {_tr(language, 'Actualizado', 'Updated')}: {datetime.utcnow():%H:%M:%S} UTC", ""]
     for i, m in enumerate(movers, start=1):
         symbol = str(m.get("symbol", ""))
         try: change = float(m.get("priceChangePercent", 0.0))
