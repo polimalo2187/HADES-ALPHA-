@@ -31,6 +31,28 @@ _RADAR_SYMBOL_COOLDOWN_SECONDS = 1800  # 30 minutos
 
 BINANCE_PUBLIC_TIMEOUT_SECONDS = int(os.getenv("BINANCE_PUBLIC_TIMEOUT_SECONDS", "4"))
 
+FALLBACK_MARKET_SYMBOLS = [
+    s.strip().upper()
+    for s in os.getenv(
+        "ACTIVE_SYMBOLS_FALLBACK",
+        "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,LTCUSDT,TRXUSDT,NEARUSDT,OPUSDT,ARBUSDT,APTUSDT,INJUSDT,SUIUSDT,SEIUSDT,TONUSDT,DOTUSDT",
+    ).split(",")
+    if s.strip()
+]
+
+
+def _fallback_24h_tickers() -> List[Dict[str, Any]]:
+    return [
+        {
+            "symbol": symbol,
+            "priceChangePercent": "0",
+            "quoteVolume": "0",
+            "lastPrice": "0",
+            "count": "0",
+        }
+        for symbol in FALLBACK_MARKET_SYMBOLS
+    ]
+
 
 def _get_json(url: str, timeout: int = BINANCE_PUBLIC_TIMEOUT_SECONDS) -> Any:
     """GET JSON con tolerancia a fallos.
@@ -90,8 +112,10 @@ def get_futures_24h_tickers() -> List[Dict[str, Any]]:
     if cached is not None:
         return cached
     data = _get_json(FAPI_24H_TICKER, timeout=max(BINANCE_PUBLIC_TIMEOUT_SECONDS, 4))
-    if not isinstance(data, list):
-        return []
+    if not isinstance(data, list) or not data:
+        fallback = _fallback_24h_tickers()
+        _cache_set(key, fallback, _TTL_TICKERS)
+        return fallback
     _cache_set(key, data, _TTL_TICKERS)
     return data
 

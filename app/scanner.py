@@ -837,6 +837,23 @@ _active_symbols_cache = ActiveSymbolsCache()
 _request_gate = BinanceRequestGate()
 
 
+FALLBACK_ACTIVE_FUTURES_SYMBOLS = [
+    s.strip().upper()
+    for s in os.getenv(
+        "ACTIVE_SYMBOLS_FALLBACK",
+        "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,LTCUSDT,TRXUSDT,NEARUSDT,OPUSDT,ARBUSDT,APTUSDT,INJUSDT,SUIUSDT,SEIUSDT,TONUSDT,DOTUSDT",
+    ).split(",")
+    if s.strip()
+]
+
+
+class BinanceRestrictedLocationError(RuntimeError):
+    def __init__(self, status_code: int, body: str):
+        self.status_code = int(status_code)
+        self.body = str(body or "")
+        super().__init__(f"binance_restricted_location status={self.status_code} body={self.body[:160]}")
+
+
 class TokenBucket:
     """Thread-safe token bucket to cap request rate without serializing all work.
 
@@ -883,6 +900,9 @@ def _request_json(url: str, *, params: dict | None = None, timeout: int = REQUES
             _token_bucket.acquire(1.0)
             rate_limiter.wait()
             resp = requests.get(url, params=params, timeout=timeout)
+            if resp.status_code == 451:
+                body = str(resp.text or "")
+                raise BinanceRestrictedLocationError(resp.status_code, body)
             if resp.status_code in (418, 429):
                 body = str(resp.text or "")
                 if resp.status_code == 418:
@@ -903,7 +923,7 @@ def _request_json(url: str, *, params: dict | None = None, timeout: int = REQUES
                 raise RuntimeError(f"binance_5xx status={resp.status_code} body={resp.text[:120]}")
             resp.raise_for_status()
             return resp.json()
-        except (BinanceRateLimitedError, BinanceCooldownActiveError):
+        except (BinanceRateLimitedError, BinanceCooldownActiveError, BinanceRestrictedLocationError):
             raise
         except Exception as exc:
             last_exc = exc
@@ -1016,12 +1036,21 @@ def get_active_futures_symbols(*, allow_stale_on_error: bool = True) -> List[str
     url = f"{BINANCE_FUTURES_API}/fapi/v1/ticker/24hr"
     try:
         payload = _request_json(url, timeout=REQUEST_TIMEOUT)
-    except (BinanceRateLimitedError, BinanceCooldownActiveError):
+    except (BinanceRateLimitedError, BinanceCooldownActiveError, BinanceRestrictedLocationError) as exc:
         if allow_stale_on_error:
             stale = _active_symbols_cache.get(allow_stale=True)
             if stale is not None:
-                logger.warning("⚠️ Usando cache stale de símbolos activos por cooldown/rate-limit")
+                logger.warning("⚠️ Usando cache stale de símbolos activos por error Binance: %s", exc)
                 return stale
+
+        if FALLBACK_ACTIVE_FUTURES_SYMBOLS:
+            logger.warning(
+                "⚠️ Usando universo fallback de símbolos activos por error Binance: %s | count=%s",
+                exc,
+                len(FALLBACK_ACTIVE_FUTURES_SYMBOLS),
+            )
+            _active_symbols_cache.set(FALLBACK_ACTIVE_FUTURES_SYMBOLS)
+            return list(FALLBACK_ACTIVE_FUTURES_SYMBOLS)
         raise
 
     symbols = [
