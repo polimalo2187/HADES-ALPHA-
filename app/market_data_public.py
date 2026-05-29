@@ -1194,4 +1194,17 @@ def get_public_klines_between_rows(symbol: str, start_dt: Any, end_dt: Any, inte
     raise PublicMarketDataError(f"all kline-range providers failed for {symbol} {interval_key}: " + " | ".join(errors))
 
 def get_valid_public_symbols() -> set[str]:
-    return set(get_public_active_symbols(min_quote_volume=0.0, allow_fallback=True))
+    """Return the full merged public USDT perpetual universe.
+
+    This must be full provider coverage, not scanner Top-N. Watchlist validation
+    depends on this to accept symbols from Bybit, OKX and Binance, including lower
+    volume symbols that would never appear in the scanner's active-symbol cache.
+    """
+    symbols = {
+        str(item.get("symbol") or "").upper().strip()
+        for item in get_public_24h_tickers(allow_fallback=True)
+        if isinstance(item, dict)
+        and str(item.get("symbol") or "").upper().strip().endswith("USDT")
+        and not str(item.get("symbol") or "").upper().strip().endswith("BUSD")
+    }
+    return {symbol for symbol in symbols if symbol}
