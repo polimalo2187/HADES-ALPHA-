@@ -23,6 +23,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import pandas as pd
 import requests
 
+from app.trading_session import get_trading_session_status
+
 logger = logging.getLogger(__name__)
 
 PUBLIC_MARKET_TIMEOUT_SECONDS = int(os.getenv("PUBLIC_MARKET_TIMEOUT_SECONDS", os.getenv("BINANCE_PUBLIC_TIMEOUT_SECONDS", "6")))
@@ -220,6 +222,11 @@ def _public_get_json(
     provider: Optional[str] = None,
 ) -> Any:
     provider_name = str(provider or _infer_provider_from_url(url)).lower().strip()
+    session_status = get_trading_session_status()
+    if not session_status.is_open:
+        raise PublicMarketDataError(
+            f"trading_session_closed provider={provider_name} now={session_status.now_label} next_open={session_status.next_open_label}"
+        )
     if provider_name in {"bybit", "okx", "binance"} and not _provider_available(provider_name):
         raise _provider_unavailable_error(provider_name)
 
@@ -551,6 +558,9 @@ def _fetch_binance_symbol_24h_ticker(symbol: str) -> Dict[str, Any]:
 
 
 def get_public_24h_ticker_for_symbol(symbol: str, *, allow_direct_fetch: bool = True) -> Dict[str, Any]:
+    session_status = get_trading_session_status()
+    if not session_status.is_open:
+        return {}
     """Return one normalized 24h ticker for a symbol from the public provider chain.
 
     This is intentionally separate from ``get_public_24h_tickers``. The merged
@@ -691,6 +701,9 @@ def _merge_ticker_payloads(provider_payloads: Sequence[ProviderResult]) -> List[
 
 
 def get_public_24h_tickers(*, allow_fallback: bool = True) -> List[Dict[str, Any]]:
+    session_status = get_trading_session_status()
+    if not session_status.is_open:
+        return []
     key = "public:24h_tickers:merged:" + ",".join(_provider_order())
     cached = _cache_get(key)
     if cached is not None:

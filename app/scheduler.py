@@ -12,6 +12,7 @@ from app.database import signal_history_collection, signal_results_collection
 from app.history_service import backfill_signal_history
 from app.observability import heartbeat, log_event, record_audit_event
 from app.payment_service import expire_stale_payment_orders
+from app.trading_session import get_trading_session_status
 
 logger = logging.getLogger(__name__)
 
@@ -190,16 +191,33 @@ async def scheduler_loop():
                     metadata={"processed": processed},
                 )
 
-            refresh_now = (iteration % STATS_REFRESH_EVERY_LOOPS == 0)
-            if refresh_now:
-                run_statistics_cycle(evaluation_limit=EVALUATION_LIMIT)
-                heartbeat("statistics", status="ok", details={"mode": "refresh_cycle", "iteration": iteration})
+            session_status = get_trading_session_status()
+            if not session_status.is_open:
+                from app.signals import discard_active_signals_for_session_close
+                discarded = discard_active_signals_for_session_close(source="scheduler")
+                if discarded:
+                    logger.info("🌙 Señales descartadas por cierre de horario operativo | discarded=%s", discarded)
+                heartbeat(
+                    "statistics",
+                    status="paused",
+                    details={
+                        "mode": "trading_session_closed",
+                        "iteration": iteration,
+                        "discarded_signals": discarded,
+                        "session": session_status.to_public_dict(),
+                    },
+                )
             else:
-                from app.signals import evaluate_expired_signals
-                evaluated = evaluate_expired_signals(limit=EVALUATION_LIMIT)
-                if evaluated:
-                    logger.info("📊 Evaluación automática completada | evaluated=%s", evaluated)
-                heartbeat("statistics", status="ok", details={"mode": "evaluate_only", "iteration": iteration, "evaluated": evaluated or 0})
+                refresh_now = (iteration % STATS_REFRESH_EVERY_LOOPS == 0)
+                if refresh_now:
+                    run_statistics_cycle(evaluation_limit=EVALUATION_LIMIT)
+                    heartbeat("statistics", status="ok", details={"mode": "refresh_cycle", "iteration": iteration})
+                else:
+                    from app.signals import evaluate_expired_signals
+                    evaluated = evaluate_expired_signals(limit=EVALUATION_LIMIT)
+                    if evaluated:
+                        logger.info("📊 Evaluación automática completada | evaluated=%s", evaluated)
+                    heartbeat("statistics", status="ok", details={"mode": "evaluate_only", "iteration": iteration, "evaluated": evaluated or 0})
 
             if iteration % HISTORY_BACKFILL_EVERY_LOOPS == 0:
                 backfilled = backfill_signal_history(limit=EVALUATION_LIMIT)

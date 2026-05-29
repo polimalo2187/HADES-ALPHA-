@@ -18,12 +18,13 @@ from telegram import Bot
 from app.database import signals_collection, scanner_cycle_stats_collection
 from app.realtime_pipeline import enqueue_signal_dispatch
 from app.plans import PLAN_FREE, PLAN_PLUS, PLAN_PREMIUM
-from app.signals import create_base_signal
+from app.signals import create_base_signal, discard_active_signals_for_session_close
 from app.observability import heartbeat
 from app.models import new_scanner_cycle_stat
 from app import regime_engine, strategy_router
 from app import strategy as strategy_engine
 from app.market_data_public import get_public_active_symbols, get_public_klines_df
+from app.trading_session import get_trading_session_status, seconds_until_trading_session_open
 
 logger = logging.getLogger(__name__)
 
@@ -1604,6 +1605,30 @@ async def scan_market_async(bot: Bot):
 
     while True:
         try:
+            session_status = get_trading_session_status()
+            if not session_status.is_open:
+                discarded = discard_active_signals_for_session_close(source="scanner")
+                wait_seconds = min(max(30, seconds_until_trading_session_open() or SCAN_INTERVAL_SECONDS), 900)
+                heartbeat(
+                    "scanner",
+                    status="paused",
+                    details={
+                        "reason": "trading_session_closed",
+                        "session": session_status.to_public_dict(),
+                        "discarded_signals": discarded,
+                        "sleep_seconds": wait_seconds,
+                    },
+                )
+                logger.info(
+                    "🌙 Scanner pausado por horario operativo | now=%s | next_open=%s | discarded=%s | sleep=%ss",
+                    session_status.now_label,
+                    session_status.next_open_label,
+                    discarded,
+                    wait_seconds,
+                )
+                await asyncio.sleep(wait_seconds)
+                continue
+
             cooldown_remaining = _request_gate.remaining_seconds()
             if cooldown_remaining > 0.0:
                 wait_seconds = min(max(1.0, cooldown_remaining + 1.0), 900.0)

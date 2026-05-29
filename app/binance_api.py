@@ -9,6 +9,7 @@ import os
 import time
 from typing import Any, Dict, List, Tuple
 
+from app.trading_session import get_trading_session_status
 from app.market_data_public import (
     get_public_24h_tickers,
     get_public_open_interest,
@@ -65,6 +66,9 @@ def _get_json(url: str, timeout: int = BINANCE_PUBLIC_TIMEOUT_SECONDS) -> Any:
     tests import it, but production data now comes from the public provider layer
     with Bybit/OKX/Binance failover.
     """
+    session_status = get_trading_session_status()
+    if not session_status.is_open:
+        return []
     try:
         if url == FAPI_24H_TICKER:
             return get_public_24h_tickers(allow_fallback=True)

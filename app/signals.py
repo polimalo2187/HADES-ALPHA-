@@ -1006,6 +1006,7 @@ def _result_to_label(result: Optional[str]) -> str:
         "won": "GANADA",
         "lost": "PERDIDA",
         "expired": "EXPIRADA",
+        "discarded": "DESCARTADA",
     }
     return mapping.get(str(result or "").lower(), "Aún sin cierre final")
 
@@ -2257,6 +2258,64 @@ def _result_r_metrics(signal_doc: Dict, evaluation: Dict[str, Any]) -> Dict[str,
         "reward_pct": round(reward_pct, 8) if reward_pct is not None else None,
         "r_multiple": r_multiple,
     }
+
+
+def discard_active_signals_for_session_close(*, source: str = "session_gate") -> int:
+    """Discard still-active signals when the operating session closes.
+
+    This is intentionally NOT a TP/SL/expired evaluation. Per business rule,
+    a signal that remains vigente when the platform goes off-hours is removed
+    from active tracking and marked as discarded by session close. It must not
+    produce win/loss/expired statistics.
+    """
+    now = datetime.utcnow()
+    query = {
+        "evaluated": {"$ne": True},
+        "$or": [
+            {"telegram_valid_until": {"$gt": now}},
+            {"entry_valid_until": {"$gt": now}},
+            {"tracking_status": "open_after_entry"},
+            {"entry_touched": True},
+        ],
+    }
+    closed_at = now - timedelta(seconds=1)
+    update_payload = {
+        "evaluated": True,
+        "result": "discarded",
+        "resolution": "session_closed_discarded",
+        "completed": False,
+        "discarded": True,
+        "discarded_at": now,
+        "discard_reason": "trading_session_closed",
+        "discard_source": str(source or "session_gate"),
+        "tracking_status": "discarded_session_closed",
+        "telegram_valid_until": closed_at,
+        "entry_valid_until": closed_at,
+        "updated_at": now,
+    }
+    try:
+        base_result = signals_collection().update_many(query, {"$set": update_payload})
+        # Mirror the discard state into user-scoped copies so MiniApp/live feed
+        # immediately stops showing them as active.
+        user_result = user_signals_collection().update_many(
+            {
+                "evaluated": {"$ne": True},
+                "$or": [
+                    {"telegram_valid_until": {"$gt": now}},
+                    {"entry_valid_until": {"$gt": now}},
+                    {"tracking_status": "open_after_entry"},
+                    {"entry_touched": True},
+                ],
+            },
+            {"$set": update_payload},
+        )
+        discarded = int(getattr(base_result, "modified_count", 0) or 0) + int(getattr(user_result, "modified_count", 0) or 0)
+        if discarded:
+            logger.info("🌙 Señales descartadas por cierre operativo | source=%s | modified=%s", source, discarded)
+        return discarded
+    except Exception as exc:
+        logger.error("❌ Error descartando señales por cierre operativo: %s", exc, exc_info=True)
+        return 0
 
 
 def evaluate_expired_signals(limit: int = 100) -> int:
