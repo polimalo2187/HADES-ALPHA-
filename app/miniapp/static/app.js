@@ -674,6 +674,25 @@ function apiUrl(path) {
   return `${window.location.origin}${normalized}`;
 }
 
+
+function notifyUser(message) {
+  const text = String(message || '').trim();
+  if (!text) return;
+  try {
+    if (tg?.showAlert) {
+      tg.showAlert(text);
+      return;
+    }
+  } catch (error) {
+    console.warn('[HADES MiniApp] Telegram alert failed', error);
+  }
+  try {
+    window.alert(text);
+  } catch (error) {
+    console.warn('[HADES MiniApp] Browser alert failed', error);
+  }
+}
+
 async function api(path, options = {}) {
   const headers = Object.assign({}, options.headers || {});
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
@@ -4378,7 +4397,7 @@ async function mutateWatchlist(path, body, successMessage) {
   renderMarket();
   renderHome();
   bindViewButtons();
-  if (successMessage || payload.message) tg?.showAlert(successMessage || payload.message);
+  if (successMessage || payload.message) notifyUser(successMessage || payload.message);
 }
 
 function renderHistory() {
@@ -6204,7 +6223,7 @@ function bindViewButtons() {
     button.onclick = async () => {
       const raw = (watchlistInput?.value || '').trim();
       if (!raw) {
-        tg?.showAlert('Escribe al menos un símbolo.');
+        notifyUser('Escribe al menos un símbolo.');
         return;
       }
       try {
@@ -6216,7 +6235,7 @@ function bindViewButtons() {
         }
         if (watchlistInput) watchlistInput.value = '';
       } catch (error) {
-        tg?.showAlert(error.message || 'No se pudo añadir a watchlist.');
+        notifyUser(error.message || 'No se pudo añadir a watchlist.');
       }
     };
   });
@@ -6227,7 +6246,7 @@ function bindViewButtons() {
         await mutateWatchlist('/api/miniapp/watchlist/replace', { raw });
         if (watchlistInput) watchlistInput.value = '';
       } catch (error) {
-        tg?.showAlert(error.message || 'No se pudo reemplazar la watchlist.');
+        notifyUser(error.message || 'No se pudo reemplazar la watchlist.');
       }
     };
   });
@@ -6236,7 +6255,7 @@ function bindViewButtons() {
       try {
         await mutateWatchlist('/api/miniapp/watchlist/clear');
       } catch (error) {
-        tg?.showAlert(error.message || 'No se pudo limpiar la watchlist.');
+        notifyUser(error.message || 'No se pudo limpiar la watchlist.');
       }
     };
   });
@@ -6245,7 +6264,7 @@ function bindViewButtons() {
       try {
         await mutateWatchlist('/api/miniapp/watchlist/remove', { symbol: button.dataset.watchlistRemove });
       } catch (error) {
-        tg?.showAlert(error.message || 'No se pudo eliminar el símbolo.');
+        notifyUser(error.message || 'No se pudo eliminar el símbolo.');
       }
     };
   });
@@ -6371,7 +6390,7 @@ function bindViewButtons() {
       try {
         await mutateWatchlist('/api/miniapp/watchlist/add', { symbol: button.dataset.radarFollow }, 'Añadido a watchlist.');
       } catch (error) {
-        tg?.showAlert(error.message || 'No se pudo seguir el símbolo.');
+        notifyUser(error.message || 'No se pudo seguir el símbolo.');
       }
     };
   });
