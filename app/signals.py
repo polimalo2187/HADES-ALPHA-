@@ -1777,6 +1777,161 @@ def _fetch_klines_between(symbol: str, start_dt: datetime, end_dt: datetime, int
     """
     return get_public_klines_between_rows(symbol, start_dt, end_dt, interval=interval)
 
+
+
+
+def _ms_to_dt(value: Any) -> Optional[datetime]:
+    try:
+        return datetime.utcfromtimestamp(int(value) / 1000.0)
+    except Exception:
+        return None
+
+
+def _candle_time_bounds(row: List[Any]) -> tuple[Optional[datetime], Optional[datetime]]:
+    """Return UTC open/close datetimes for a Binance-like kline row.
+
+    Public providers are normalized by app.market_data_public to the same row
+    shape used by Binance: [open_time, open, high, low, close, volume, close_time].
+    This helper is intentionally local and side-effect free so both the automatic
+    evaluator and the user-facing signal intelligence use exactly the same candle
+    window semantics without extra network calls.
+    """
+    open_dt = _ms_to_dt(row[0]) if row else None
+    close_dt: Optional[datetime] = None
+    try:
+        if row and len(row) > 6 and row[6] is not None:
+            close_dt = _ms_to_dt(row[6])
+    except Exception:
+        close_dt = None
+    if open_dt is not None and close_dt is None:
+        close_dt = open_dt + timedelta(minutes=1)
+    return open_dt, close_dt
+
+
+def _entry_window_allows_new_fill(row: List[Any], entry_window_end: Optional[datetime]) -> bool:
+    """True only if the entire candle belongs to the pending-entry window.
+
+    This is the canonical fill gate for pending-entry strategies such as
+    Liquidity Sweep and Breakout + Reset. A signal may be sent in advance, but it
+    can only become filled if the entry/zone is touched before entry_valid_until.
+    After a fill, TP/SL evaluation continues independently of the entry window.
+    """
+    if entry_window_end is None:
+        return True
+    candle_open_dt, candle_close_dt = _candle_time_bounds(row)
+    if candle_open_dt is None:
+        return False
+    if candle_open_dt >= entry_window_end:
+        return False
+    if candle_close_dt is not None and candle_close_dt > entry_window_end:
+        return False
+    return True
+
+
+def _candle_within_window(row: List[Any], window_end: Optional[datetime]) -> bool:
+    if window_end is None:
+        return True
+    candle_open_dt, candle_close_dt = _candle_time_bounds(row)
+    if candle_open_dt is None:
+        return False
+    if candle_open_dt >= window_end:
+        return False
+    if candle_close_dt is not None and candle_close_dt > window_end:
+        return False
+    return True
+
+
+def _entry_zone_touched_in_candle(zone_low: float, zone_high: float, high: float, low: float) -> bool:
+    return low <= zone_high and high >= zone_low
+
+
+def _entry_touched_in_candle(direction: str, entry_price: float, high: float, low: float) -> bool:
+    if direction == "LONG":
+        return low <= entry_price
+    if direction == "SHORT":
+        return high >= entry_price
+    return False
+
+
+def _pending_entry_touched(signal_doc: Dict[str, Any], direction: str, entry_price: float, high: float, low: float) -> bool:
+    """Return whether a pending signal filled on this candle.
+
+    Prefer the explicit entry_zone when present. This matters for anticipatory
+    reset/sweep signals because entry_price may be the center/anchor while the
+    valid fill is a small zone around it.
+    """
+    entry_zone = signal_doc.get("entry_zone") or {}
+    zone_low = entry_zone.get("low")
+    zone_high = entry_zone.get("high")
+    try:
+        if zone_low is not None and zone_high is not None:
+            zone_low = float(zone_low)
+            zone_high = float(zone_high)
+            if zone_low > zone_high:
+                zone_low, zone_high = zone_high, zone_low
+            return _entry_zone_touched_in_candle(zone_low, zone_high, high, low)
+    except Exception:
+        pass
+    return _entry_touched_in_candle(direction, entry_price, high, low)
+
+
+def _tp1_progress_pct(direction: str, entry_price: float, tp1: float, high: float, low: float) -> Optional[float]:
+    distance = abs(float(tp1) - float(entry_price))
+    if distance <= 0:
+        return None
+    if direction == "LONG":
+        favorable_move = max(0.0, float(high) - float(entry_price))
+    else:
+        favorable_move = max(0.0, float(entry_price) - float(low))
+    return round((favorable_move / distance) * 100.0, 2)
+
+
+def _excursions_after_entry_r(direction: str, entry_price: float, stop_loss: float, high: float, low: float) -> Dict[str, float]:
+    risk_distance = abs(float(entry_price) - float(stop_loss))
+    if risk_distance <= 0:
+        return {"favorable_r": 0.0, "adverse_r": 0.0}
+
+    if direction == "LONG":
+        favorable_move = max(0.0, float(high) - float(entry_price))
+        adverse_move = max(0.0, float(entry_price) - float(low))
+    else:
+        favorable_move = max(0.0, float(entry_price) - float(low))
+        adverse_move = max(0.0, float(high) - float(entry_price))
+
+    return {
+        "favorable_r": round(favorable_move / risk_distance, 4),
+        "adverse_r": round(adverse_move / risk_distance, 4),
+    }
+
+
+def _evaluation_observability_payload(
+    *,
+    entry_touched: bool,
+    entry_touched_at: Optional[datetime],
+    expiry_type: Optional[str],
+    expiry_reason: Optional[str],
+    tp1_progress_max_pct: Optional[float],
+    max_favorable_excursion_r: Optional[float],
+    max_adverse_excursion_r: Optional[float],
+) -> Dict[str, Any]:
+    return {
+        "entry_touched": bool(entry_touched),
+        "entry_touched_at": entry_touched_at,
+        "expiry_type": expiry_type,
+        "expiry_reason": expiry_reason,
+        "tp1_progress_max_pct": round(float(tp1_progress_max_pct), 2) if tp1_progress_max_pct is not None else None,
+        "max_favorable_excursion_r": round(float(max_favorable_excursion_r), 4) if max_favorable_excursion_r is not None else None,
+        "max_adverse_excursion_r": round(float(max_adverse_excursion_r), 4) if max_adverse_excursion_r is not None else None,
+    }
+
+
+def _tp1_protection_price(direction: str, entry_price: float, tp1: float) -> float:
+    """Price where a TP1-hit runner is protected and closed as a winner."""
+    ratio = max(0.05, min(0.95, float(TP1_PROTECTED_RETRACE_RATIO)))
+    if str(direction).upper() == "LONG":
+        return float(entry_price) + ((float(tp1) - float(entry_price)) * ratio)
+    return float(entry_price) - ((float(entry_price) - float(tp1)) * ratio)
+
 def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
     direction = str(signal_doc.get("direction", "")).upper()
     symbol = signal_doc.get("symbol")
