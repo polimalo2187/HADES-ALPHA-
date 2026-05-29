@@ -570,7 +570,7 @@ def create_mini_app() -> FastAPI:
 
     @app.get("/api/miniapp/symbols")
     async def miniapp_symbols(user: Dict[str, Any] = Depends(get_authenticated_user)):
-        """Devuelve todos los pares USDT-M de Binance Futures ordenados por volumen."""
+        """Devuelve pares USDT perpetual desde proveedores públicos configurados, ordenados por volumen."""
         tickers = get_futures_24h_tickers()
         symbols = [
             {
