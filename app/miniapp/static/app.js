@@ -94,7 +94,7 @@ const LIVE_SIGNALS_HOME_POLL_INTERVAL_MS = 15000;
 const LIVE_SIGNALS_VIEW_POLL_INTERVAL_MS = 8000;
 const LIVE_SIGNALS_FOCUS_DEBOUNCE_MS = 2500;
 const PAYLOAD_CACHE_TTL_MS = 10 * 60 * 1000;
-const PAYLOAD_CACHE_PREFIX = 'hades-miniapp-payload-v5';
+const PAYLOAD_CACHE_PREFIX = 'hades-miniapp-payload-v6';
 
 const els = {
   loading: document.getElementById('loading'),
@@ -369,7 +369,7 @@ function resultLabel(item) {
   if (resolution === 'tp2') return 'TP2';
   if (resolution === 'tp1') return 'TP1';
   if (resolution === 'sl') return 'SL';
-  if (resolution === 'expired_clean' || result === 'expired') return 'EXP';
+  if (resolution === 'expired_clean' || result === 'expired') return 'NO ENTRY';
   if (result === 'won') return 'WIN';
   if (result === 'lost') return 'LOSS';
   return '—';
@@ -2247,9 +2247,9 @@ function performancePlanCard(item) {
       </div>
       <div class="pill-row compact-pill-row" style="margin-top:12px;">
         <span class="pill">Fill ${escapeHtml(summary.filled_total ?? 0)}</span>
-        <span class="pill">Exp no fill ${escapeHtml(summary.expired_no_fill ?? 0)}</span>
-        <span class="pill">Exp tras entry ${escapeHtml(summary.expired_after_entry ?? 0)}</span>
-        <span class="pill">Exp total ${escapeHtml(summary.expired ?? 0)}</span>
+        <span class="pill">No Entry ${escapeHtml(summary.expired_no_fill ?? 0)}</span>
+        <span class="pill">Fallo post-entry ${escapeHtml(summary.expired_after_entry ?? 0)}</span>
+        <span class="pill">No Entry total ${escapeHtml(summary.expired ?? 0)}</span>
       </div>
       <div class="pill-row compact-pill-row" style="margin-top:8px;">
         <span class="pill">TP1 ${escapeHtml(summary.tp1 ?? 0)}</span>
@@ -2266,7 +2266,7 @@ function performanceDirectionItem(item) {
       <div class="item-header">
         <div>
           <div class="item-title">${escapeHtml(item.direction || '—')}</div>
-          <div class="item-subtitle">Resueltas ${escapeHtml(item.resolved ?? 0)} · Exp ${escapeHtml(item.expired ?? 0)}</div>
+          <div class="item-subtitle">Resueltas ${escapeHtml(item.resolved ?? 0)} · No Entry ${escapeHtml(item.expired ?? 0)}</div>
         </div>
         <span class="plan-tag ${metricToneClass('winrate', item.winrate || 0)}">${escapeHtml(formatNumber(item.winrate || 0))}%</span>
       </div>
@@ -2299,9 +2299,9 @@ function performanceStrategyCard(item) {
       </div>
       <div class="pill-row compact-pill-row" style="margin-top:12px;">
         <span class="pill">Fill rate ${escapeHtml(formatNumber(item.fill_rate || 0))}%</span>
-        <span class="pill">Exp no fill ${escapeHtml(item.expired_no_fill ?? 0)}</span>
-        <span class="pill">Exp tras entry ${escapeHtml(item.expired_after_entry ?? 0)}</span>
-        <span class="pill">Exp total ${escapeHtml(item.expired ?? 0)}</span>
+        <span class="pill">No Entry ${escapeHtml(item.expired_no_fill ?? 0)}</span>
+        <span class="pill">Fallo post-entry ${escapeHtml(item.expired_after_entry ?? 0)}</span>
+        <span class="pill">No Entry total ${escapeHtml(item.expired ?? 0)}</span>
       </div>
       <div class="pill-row compact-pill-row" style="margin-top:8px;">
         <span class="pill">TP1 ${escapeHtml(item.tp1 ?? 0)}</span>
@@ -2318,7 +2318,7 @@ function performanceStrategyDirectionItem(item) {
       <div class="item-header">
         <div>
           <div class="item-title">${escapeHtml(item.strategy_label || '—')} · ${escapeHtml(item.direction || '—')}</div>
-          <div class="item-subtitle">Resueltas ${escapeHtml(item.resolved ?? 0)} · Exp ${escapeHtml(item.expired ?? 0)}</div>
+          <div class="item-subtitle">Resueltas ${escapeHtml(item.resolved ?? 0)} · No Entry ${escapeHtml(item.expired ?? 0)}</div>
         </div>
         <span class="plan-tag ${metricToneClass('winrate', item.winrate || 0)}">${escapeHtml(formatNumber(item.winrate || 0))}%</span>
       </div>
@@ -2339,7 +2339,7 @@ function performanceWeakSymbolItem(item) {
       <div class="item-header">
         <div>
           <div class="item-title">${escapeHtml(item.symbol || '—')}</div>
-          <div class="item-subtitle">Resueltas ${escapeHtml(item.resolved ?? 0)} · Loss ${escapeHtml(item.lost ?? 0)} · Exp ${escapeHtml(item.expired ?? 0)}</div>
+          <div class="item-subtitle">Resueltas ${escapeHtml(item.resolved ?? 0)} · Loss ${escapeHtml(item.lost ?? 0)} · No Entry ${escapeHtml(item.expired ?? 0)}</div>
         </div>
         <span class="plan-tag ${metricToneClass('winrate', item.winrate || 0)}">${escapeHtml(formatNumber(item.winrate || 0))}%</span>
       </div>
@@ -2530,14 +2530,14 @@ function renderPerformance() {
           ${resBar('TP1', tp1, '+1R por señal', '#22c55e', 'rgba(34,197,94,0.70)')}
           ${resBar('TP2', tp2, '+2R por señal', '#4ade80', 'rgba(74,222,128,0.55)')}
           ${resBar('SL',  sl,  '−1R por señal', '#ef4444', 'rgba(239,68,68,0.70)')}
-          ${resBar('Exp', exp, 'expiradas',      '#6b7280', 'rgba(107,114,128,0.45)')}
+          ${resBar('No Entry', exp, 'no tocó entrada', '#6b7280', 'rgba(107,114,128,0.45)')}
         </div>
         <div class="perf-res-footer">
           <span class="perf-res-footer-item">Resueltas <strong>${escapeHtml(String(summary.resolved ?? 0))}</strong></span>
           <span class="perf-res-footer-sep">·</span>
           <span class="perf-res-footer-item">Fill rate <strong class="${metricToneClass('winrate', summary.fill_rate || 0)}">${escapeHtml(formatNumber(summary.fill_rate || 0))}%</strong></span>
           <span class="perf-res-footer-sep">·</span>
-          <span class="perf-res-footer-item">No fill <strong>${escapeHtml(String(summary.expired_no_fill ?? 0))}</strong></span>
+          <span class="perf-res-footer-item">No Entry <strong>${escapeHtml(String(summary.expired_no_fill ?? 0))}</strong></span>
           <span class="perf-res-footer-sep">·</span>
           <span class="perf-res-footer-item">Fallo post-entry <strong>${escapeHtml(String(summary.expired_after_entry ?? 0))}</strong></span>
         </div>
@@ -2549,8 +2549,8 @@ function renderPerformance() {
         <div class="perf-secondary-grid">
           ${statBox('Max DD (R)',       loading ? '…' : formatNumber(summary.max_drawdown_r || 0, 2) + 'R',   metricToneClass('drawdown', summary.max_drawdown_r || 0))}
           ${statBox('Fill rate',        loading ? '…' : `${formatNumber(summary.fill_rate || 0)}%`,           metricToneClass('winrate', summary.fill_rate || 0))}
-          ${statBox('Exp no fill',      loading ? '…' : `${escapeHtml(String(summary.expired_no_fill ?? 0))}  (${formatNumber(summary.no_fill_rate || 0)}%)`, metricToneClass('drawdown', -(summary.no_fill_rate || 0)))}
-          ${statBox('Exp tras entry',   loading ? '…' : `${escapeHtml(String(summary.expired_after_entry ?? 0))}  (${formatNumber(summary.after_entry_failure_rate || 0)}%)`, metricToneClass('drawdown', -(summary.after_entry_failure_rate || 0)))}
+          ${statBox('No Entry',         loading ? '…' : `${escapeHtml(String(summary.expired_no_fill ?? 0))}  (${formatNumber(summary.no_fill_rate || 0)}%)`, metricToneClass('drawdown', -(summary.no_fill_rate || 0)))}
+          ${statBox('Fallo post-entry',   loading ? '…' : `${escapeHtml(String(summary.expired_after_entry ?? 0))}  (${formatNumber(summary.after_entry_failure_rate || 0)}%)`, metricToneClass('drawdown', -(summary.after_entry_failure_rate || 0)))}
           ${statBox('Señales scanner',  loading ? '…' : String(activity.signals_total ?? '—'), '')}
           ${statBox('Score medio',      loading ? '…' : (activity.avg_score === null ? '—' : formatNumber(activity.avg_score, 2)), '')}
           ${statBox('Eval media',       loading ? '…' : (summary.avg_resolution_minutes === null ? '—' : `${formatNumber(summary.avg_resolution_minutes, 1)} min`), '')}
@@ -3320,7 +3320,7 @@ function renderHome() {
           </div>
           ${expCount > 0 ? `
           <div class="scoreboard-row">
-            <span class="scoreboard-row-label sb-label-exp">EXP</span>
+            <span class="scoreboard-row-label sb-label-exp">NO ENTRY</span>
             <div class="scoreboard-bar-track">
               <div class="scoreboard-bar sb-bar-exp" style="width:${expPct}%"></div>
             </div>
@@ -4492,7 +4492,7 @@ function renderHistory() {
         ${filterBtn('all', 'Todas')}
         ${filterBtn('win', '✓ WIN')}
         ${filterBtn('loss', '✗ LOSS')}
-        ${filterBtn('exp', '○ EXP')}
+        ${filterBtn('exp', '○ NO ENTRY')}
       </div>
     </div>
     <div class="hx-list">
@@ -6598,7 +6598,7 @@ const SPLASH_FEATURES = [
     icon: '📊',
     name: 'Historial',
     desc: 'Registro completo de resultados',
-    detail: 'Accede a todas las señales emitidas con sus resultados finales: TP1, TP2, SL o expirada. Incluye múltiplo R conseguido, tiempo de resolución y progreso máximo alcanzado. Filtra por estrategia, dirección y ventana temporal.',
+    detail: 'Accede a todas las señales emitidas con sus resultados finales: TP1, TP2, SL o No Entry. Incluye múltiplo R conseguido, tiempo de resolución y progreso máximo alcanzado. Filtra por estrategia, dirección y ventana temporal.',
   },
   {
     icon: '📈',
