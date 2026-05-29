@@ -386,6 +386,7 @@ def new_scanner_cycle_stat(
     rejected_by_strategy: Optional[Dict[str, int]] = None,
     reject_reasons: Optional[Dict[str, int]] = None,
     reject_reasons_by_strategy: Optional[Dict[str, Dict[str, int]]] = None,
+    router_events: Optional[Dict[str, int]] = None,
     cache_stats: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     now = utcnow()
@@ -412,6 +413,7 @@ def new_scanner_cycle_stat(
         "rejected_by_strategy": rejected_by_strategy or {},
         "reject_reasons": reject_reasons or {},
         "reject_reasons_by_strategy": reject_reasons_by_strategy or {},
+        "router_events": router_events or {},
         "cache_stats": cache_stats or {},
         "schema_version": SCANNER_CYCLE_STAT_SCHEMA_VERSION,
         "created_at": now,

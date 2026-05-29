@@ -75,6 +75,11 @@ KLINE_LIMIT_1H = int(os.getenv("SCANNER_KLINE_LIMIT_1H", "260"))
 KLINE_LIMIT_15M = int(os.getenv("SCANNER_KLINE_LIMIT_15M", "260"))
 KLINE_LIMIT_5M = int(os.getenv("SCANNER_KLINE_LIMIT_5M", "260"))
 
+# Low-cost strategy observability. This only aggregates in-memory counters already
+# produced during the scan; it does not add market requests or per-symbol DB writes.
+SCANNER_OBSERVABILITY_LOG_EVERY_N_CYCLES = max(1, int(os.getenv("SCANNER_OBSERVABILITY_LOG_EVERY_N_CYCLES", "1")))
+SCANNER_OBSERVABILITY_COMPACT_LIMIT = max(3, int(os.getenv("SCANNER_OBSERVABILITY_COMPACT_LIMIT", "6")))
+
 # Some strategies export these constants; if present, enforce minimums to avoid NaN/indicator-warmup outages.
 _STRATEGY_EMA_SLOW = int(getattr(strategy_engine, "EMA_SLOW", 200))
 _STRATEGY_LOOKBACK = int(getattr(strategy_engine, "BREAKOUT_LOOKBACK", 24))
@@ -1387,9 +1392,14 @@ def _record_failure(debug_counts: Dict[str, int], reason: str) -> None:
     debug_counts[reason] = int(debug_counts.get(reason, 0)) + 1
 
 
-def _merge_debug_counts(total: Dict[str, int], local: Dict[str, int]) -> None:
+def _merge_debug_counts(total: Dict[str, int], local: Dict[str, Any]) -> None:
     for key, value in (local or {}).items():
-        total[key] = int(total.get(key, 0)) + int(value)
+        if str(key).startswith("__"):
+            continue
+        try:
+            total[key] = int(total.get(key, 0)) + int(value or 0)
+        except Exception:
+            continue
 
 
 def _compact_rejects(rejects: Dict[str, int], limit: int = 10) -> Dict[str, int]:
@@ -1401,11 +1411,20 @@ def _compact_rejects(rejects: Dict[str, int], limit: int = 10) -> Dict[str, int]
     return compact
 
 
-
-def _extract_failure_reason(local: Dict[str, int]) -> Optional[str]:
-    if not local:
-        return None
-    return max(local.items(), key=lambda item: item[1])[0]
+def _extract_failure_reason(local: Dict[str, Any]) -> Optional[str]:
+    best_key: Optional[str] = None
+    best_count = -1
+    for key, value in (local or {}).items():
+        if str(key).startswith("__"):
+            continue
+        try:
+            numeric_count = int(value or 0)
+        except Exception:
+            continue
+        if numeric_count > best_count:
+            best_key = str(key)
+            best_count = numeric_count
+    return best_key
 
 
 def _normalize_strategy_key(strategy_name: Optional[str]) -> str:
@@ -1424,7 +1443,37 @@ def _merge_named_counts(target: Dict[str, int], source: Optional[Dict[str, int]]
         return
     for key, value in source.items():
         normalized_key = _normalize_strategy_key(key)
-        target[normalized_key] = int(target.get(normalized_key, 0)) + int(value or 0)
+        try:
+            target[normalized_key] = int(target.get(normalized_key, 0)) + int(value or 0)
+        except Exception:
+            continue
+
+
+def _merge_event_counts(target: Dict[str, int], source: Optional[Dict[str, int]]) -> None:
+    if not source:
+        return
+    for key, value in source.items():
+        normalized_key = str(key or 'unknown').strip() or 'unknown'
+        try:
+            target[normalized_key] = int(target.get(normalized_key, 0)) + int(value or 0)
+        except Exception:
+            continue
+
+
+def _merge_nested_reason_counts(target: Dict[str, Dict[str, int]], source: Optional[Dict[str, Dict[str, int]]]) -> None:
+    if not source:
+        return
+    for strategy_key, reasons in source.items():
+        normalized_strategy = _normalize_strategy_key(strategy_key)
+        if not isinstance(reasons, dict):
+            continue
+        bucket = target.setdefault(normalized_strategy, {})
+        for reason, count in reasons.items():
+            reason_key = str(reason or 'unknown').strip() or 'unknown'
+            try:
+                bucket[reason_key] = int(bucket.get(reason_key, 0)) + int(count or 0)
+            except Exception:
+                continue
 
 
 def _increment_reason_bucket(target: Dict[str, Dict[str, int]], strategy_key: str, reason: Optional[str]) -> None:
@@ -1432,6 +1481,40 @@ def _increment_reason_bucket(target: Dict[str, Dict[str, int]], strategy_key: st
     bucket_key = str(reason or 'unknown').strip() or 'unknown'
     per_strategy = target.setdefault(normalized_strategy, {})
     per_strategy[bucket_key] = int(per_strategy.get(bucket_key, 0)) + 1
+
+
+def _get_nested_counts(local: Dict[str, Any], key: str) -> Dict[str, Any]:
+    value = (local or {}).get(key, {})
+    return value if isinstance(value, dict) else {}
+
+
+def _compact_nested_counts(nested: Dict[str, Dict[str, int]], limit: Optional[int] = None) -> Dict[str, Dict[str, int]]:
+    compact: Dict[str, Dict[str, int]] = {}
+    max_items = int(limit or SCANNER_OBSERVABILITY_COMPACT_LIMIT)
+    for strategy_key, reasons in (nested or {}).items():
+        if not isinstance(reasons, dict):
+            continue
+        compact[_normalize_strategy_key(strategy_key)] = _compact_rejects(reasons, limit=max_items)
+    return compact
+
+
+def _top_candidates_snapshot(candidates: List[Dict[str, Any]], limit: int = 3) -> List[Dict[str, Any]]:
+    """Tiny candidate summary for logs/heartbeat; intentionally capped to protect log volume."""
+    snapshot: List[Dict[str, Any]] = []
+    for candidate in candidates[: max(0, int(limit))]:
+        try:
+            snapshot.append({
+                'symbol': candidate.get('symbol'),
+                'strategy': _normalize_strategy_key(candidate.get('strategy_name')),
+                'direction': candidate.get('direction'),
+                'final_score': candidate.get('final_score'),
+                'send_mode': candidate.get('send_mode'),
+                'stage': candidate.get('setup_stage'),
+                'fallback': bool(candidate.get('router_fallback_used')),
+            })
+        except Exception:
+            continue
+    return snapshot
 
 
 def _summarize_candidates_by_strategy(candidates: List[Dict[str, Any]]) -> Dict[str, int]:
@@ -1563,6 +1646,8 @@ async def scan_market_async(bot: Bot):
             selected_by_strategy: Dict[str, int] = {}
             rejected_by_strategy: Dict[str, int] = {}
             reject_reasons_by_strategy: Dict[str, Dict[str, int]] = {}
+            attempts_by_strategy: Dict[str, int] = {}
+            router_events: Dict[str, int] = {}
             selected_signals: List[Dict[str, Any]] = []
 
             for candidate, local_debug, failure in results:
@@ -1572,6 +1657,14 @@ async def scan_market_async(bot: Bot):
                         failure_samples.append(failure)
                     continue
 
+                # Merge observability for every processed symbol, including successful candidates.
+                # This is intentionally aggregate-only to keep cloud CPU/RAM/log volume low.
+                _merge_debug_counts(reject_totals, local_debug)
+                _merge_named_counts(attempts_by_strategy, _get_nested_counts(local_debug, "__strategy_attempts__"))
+                _merge_named_counts(rejected_by_strategy, _get_nested_counts(local_debug, "__strategy_rejections__"))
+                _merge_nested_reason_counts(reject_reasons_by_strategy, _get_nested_counts(local_debug, "__strategy_terminal_reasons__"))
+                _merge_event_counts(router_events, _get_nested_counts(local_debug, "__router_events__"))
+
                 if candidate:
                     candidates.append(candidate)
                     continue
@@ -1579,12 +1672,13 @@ async def scan_market_async(bot: Bot):
                 rejected_symbols_total += 1
                 if regime_strategy_key == "risk_off":
                     risk_off_symbols_total += 1
-                elif regime_strategy_key:
-                    rejected_by_strategy[regime_strategy_key] = int(rejected_by_strategy.get(regime_strategy_key, 0)) + 1
-                _merge_debug_counts(reject_totals, local_debug)
-                terminal_reason = _extract_failure_reason(local_debug) or "unknown"
-                if regime_strategy_key and regime_strategy_key != "risk_off":
-                    _increment_reason_bucket(reject_reasons_by_strategy, regime_strategy_key, terminal_reason)
+
+                # Legacy fallback for old strategy modules that do not emit structured observability.
+                if not _get_nested_counts(local_debug, "__strategy_terminal_reasons__"):
+                    terminal_reason = _extract_failure_reason(local_debug) or "unknown"
+                    if regime_strategy_key and regime_strategy_key != "risk_off":
+                        rejected_by_strategy[regime_strategy_key] = int(rejected_by_strategy.get(regime_strategy_key, 0)) + 1
+                        _increment_reason_bucket(reject_reasons_by_strategy, regime_strategy_key, terminal_reason)
 
             attempted_symbols_total = max(len(active_symbols) - failures, 0)
             cycle_duration = (datetime.utcnow() - cycle_started_at).total_seconds()
@@ -1692,7 +1786,8 @@ async def scan_market_async(bot: Bot):
                 )
 
             selected_by_strategy = _summarize_selected_by_strategy(selected_signals)
-            attempts_by_strategy = {regime_strategy_key: attempted_symbols_total} if regime_strategy_key and regime_strategy_key != "risk_off" else {}
+            if not attempts_by_strategy and regime_strategy_key and regime_strategy_key != "risk_off":
+                attempts_by_strategy = {regime_strategy_key: attempted_symbols_total}
             overall_terminal_reasons: Dict[str, int] = {}
             for bucket in reject_reasons_by_strategy.values():
                 for reason, count in bucket.items():
@@ -1720,8 +1815,25 @@ async def scan_market_async(bot: Bot):
                 "rejected_by_strategy": rejected_by_strategy,
                 "reject_reasons": overall_terminal_reasons,
                 "reject_reasons_by_strategy": reject_reasons_by_strategy,
+                "router_events": router_events,
+                "top_candidates": _top_candidates_snapshot(candidates),
                 "kline_cache": cache_stats,
             }
+
+            if cycle_number % SCANNER_OBSERVABILITY_LOG_EVERY_N_CYCLES == 0:
+                logger.info(
+                    "🧭 Strategy obs | cycle=%s | regime=%s/%s | primary=%s | attempts=%s | candidates=%s | selected=%s | rejected=%s | reasons=%s | router=%s",
+                    cycle_number,
+                    regime_summary.get("state"),
+                    regime_summary.get("bias"),
+                    regime_summary.get("strategy_name"),
+                    attempts_by_strategy,
+                    candidate_pool_by_strategy,
+                    selected_by_strategy,
+                    rejected_by_strategy,
+                    _compact_nested_counts(reject_reasons_by_strategy),
+                    _compact_rejects(router_events, limit=SCANNER_OBSERVABILITY_COMPACT_LIMIT),
+                )
 
             _persist_scanner_cycle_stat(
                 new_scanner_cycle_stat(
@@ -1747,6 +1859,7 @@ async def scan_market_async(bot: Bot):
                     rejected_by_strategy=rejected_by_strategy,
                     reject_reasons=overall_terminal_reasons,
                     reject_reasons_by_strategy=reject_reasons_by_strategy,
+                    router_events=router_events,
                     cache_stats=cache_stats,
                 )
             )
