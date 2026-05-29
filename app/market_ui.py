@@ -2,6 +2,7 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.market import format_open_interest, format_volume, get_market_state_snapshot
+from app.market_data_public import public_provider_label
 from app.plans import PLAN_FREE, PLAN_PREMIUM
 
 CB_MARKET_REFRESH = "market_refresh"
@@ -103,7 +104,7 @@ def _build_market_state_text_plus(snapshot: dict, premium: bool = False, languag
     lines = [
         "🌐 MARKET STATE" if en else "🌐 ESTADO DE MERCADO",
         "",
-        "*Binance USDT-M Futures*",
+        f"*Datos públicos: {public_provider_label()}*",
         f"🕒 {'Updated' if en else 'Actualizado'}: {snapshot['time']}",
         "",
         "*Main read*" if en else "*Lectura principal*",
