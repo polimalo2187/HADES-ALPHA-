@@ -121,7 +121,7 @@ def test_mtf_strategy_routes_premium_then_plus_then_free(monkeypatch):
 
 
 
-def test_strategy_only_publishes_breakout_when_live_price_touches_reset_zone(monkeypatch):
+def test_strategy_publishes_breakout_before_reset_as_pending_entry(monkeypatch):
     import app.strategy as strategy
 
     bars = strategy._required_history_bars() + 1
@@ -146,7 +146,7 @@ def test_strategy_only_publishes_breakout_when_live_price_touches_reset_zone(mon
         enriched["atr_pct"] = 0.01
         enriched["body_ratio"] = 0.4
         enriched["vol_ma"] = 1000.0
-        # últimas tres velas: breakout cerrado, continuación cerrada, vela viva de ejecución
+        # últimas tres velas: breakout cerrado, continuación cerrada, vela viva aún esperando reset
         enriched.iloc[-3, enriched.columns.get_loc("close")] = 100.7
         enriched.iloc[-3, enriched.columns.get_loc("high")] = 100.9
         enriched.iloc[-3, enriched.columns.get_loc("low")] = 100.1
@@ -155,31 +155,31 @@ def test_strategy_only_publishes_breakout_when_live_price_touches_reset_zone(mon
 
         enriched.iloc[-2, enriched.columns.get_loc("close")] = 100.8
         enriched.iloc[-2, enriched.columns.get_loc("high")] = 101.0
-        enriched.iloc[-2, enriched.columns.get_loc("low")] = 100.5
+        enriched.iloc[-2, enriched.columns.get_loc("low")] = 100.65
         enriched.iloc[-2, enriched.columns.get_loc("open")] = 100.4
         enriched.iloc[-2, enriched.columns.get_loc("body_ratio")] = 0.38
 
-        enriched.iloc[-1, enriched.columns.get_loc("close")] = 100.55
-        enriched.iloc[-1, enriched.columns.get_loc("high")] = 100.58
-        enriched.iloc[-1, enriched.columns.get_loc("low")] = 100.18
-        enriched.iloc[-1, enriched.columns.get_loc("open")] = 100.56
+        enriched.iloc[-1, enriched.columns.get_loc("close")] = 101.1
+        enriched.iloc[-1, enriched.columns.get_loc("high")] = 101.2
+        enriched.iloc[-1, enriched.columns.get_loc("low")] = 100.8
+        enriched.iloc[-1, enriched.columns.get_loc("open")] = 100.95
         enriched.iloc[-1, enriched.columns.get_loc("body_ratio")] = 0.18
         return enriched
 
     monkeypatch.setattr(strategy, "add_indicators", fake_add_indicators)
     monkeypatch.setattr(strategy, "_passes_profile_score_floor", lambda *_args, **_kwargs: True)
 
-    # Precio todavía extendido por encima de la zona: no se publica nada al usuario.
-    blocked = strategy.mtf_strategy(df, df, df.copy(), reference_market_price=101.1)
-    assert blocked is None
-
-    # Cuando el precio toca la zona de reset en vivo, la señal sí se publica.
-    candidate = strategy.mtf_strategy(df, df, df.copy(), reference_market_price=100.2)
+    # Precio todavía extendido por encima de la zona: se publica señal anticipada/pending.
+    candidate = strategy.mtf_strategy(df, df, df.copy(), reference_market_price=101.1)
     assert candidate is not None
-    assert candidate["send_mode"] == "market_on_close"
-    assert candidate["setup_stage"] == strategy.SETUP_STAGE_RESET_TOUCH_LIVE
-    assert float(candidate["entry_price"]) == 100.2
-    assert float(candidate["entry_model_price"]) == 100.3
+    assert candidate["send_mode"] == "entry_zone_pending"
+    assert candidate["setup_stage"] == strategy.SETUP_STAGE_PRE_RESET_WAITING_RETEST
+    assert float(candidate["entry_price"]) == 100.3
+    assert float(candidate["entry_sent_price"]) == 101.1
+
+    # Si el precio ya toca la zona de reset, ya no es anticipada y se rechaza.
+    blocked = strategy.mtf_strategy(df, df, df.copy(), reference_market_price=100.2)
+    assert blocked is None
 
 
 def test_strategy_rejects_breakout_if_live_candle_already_rebounded_from_reset_zone(monkeypatch):
@@ -317,9 +317,9 @@ def test_continuation_filter_is_now_tiered_for_free_plus_and_premium():
         "open": 100.0,
         "high": 100.8,
         "low": 99.9,
-        "close": 100.36,
-        "body_ratio": 0.22,
-        "volume": 920.0,
+        "close": 100.28,
+        "body_ratio": 0.14,
+        "volume": 850.0,
         "vol_ma": 1000.0,
         "atr": 1.0,
     })
@@ -333,8 +333,8 @@ def test_continuation_filter_is_now_tiered_for_free_plus_and_premium():
         "high": 101.0,
         "low": 99.9,
         "close": 100.82,
-        "body_ratio": 0.25,
-        "volume": 1080.0,
+        "body_ratio": 0.16,
+        "volume": 950.0,
         "vol_ma": 1000.0,
         "atr": 1.0,
     })
