@@ -5915,3 +5915,63 @@ html, body, .app-shell, .section-grid, .card {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Trading session banner ─────────────────────────────────────────────── */
+.session-banner {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 18px;
+  background: rgba(255,255,255,0.045);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.16);
+}
+.session-banner.session-open {
+  border-color: rgba(54, 211, 153, 0.28);
+  background: linear-gradient(135deg, rgba(54,211,153,0.10), rgba(255,255,255,0.035));
+}
+.session-banner.session-closed {
+  border-color: rgba(251, 191, 36, 0.34);
+  background: linear-gradient(135deg, rgba(251,191,36,0.13), rgba(255,255,255,0.035));
+}
+.session-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  background: #36d399;
+  box-shadow: 0 0 0 5px rgba(54,211,153,0.14);
+}
+.session-closed .session-status-dot {
+  background: #fbbf24;
+  box-shadow: 0 0 0 5px rgba(251,191,36,0.14);
+}
+.session-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+.session-copy strong {
+  font-size: 0.92rem;
+  letter-spacing: .01em;
+}
+.session-copy span,
+.session-times span {
+  color: rgba(255,255,255,0.70);
+  font-size: 0.78rem;
+}
+.session-times {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: right;
+  flex: 0 0 auto;
+}
+@media (max-width: 620px) {
+  .session-banner { align-items: flex-start; }
+  .session-times { display: none; }
+}

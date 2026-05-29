@@ -94,7 +94,7 @@ const LIVE_SIGNALS_HOME_POLL_INTERVAL_MS = 15000;
 const LIVE_SIGNALS_VIEW_POLL_INTERVAL_MS = 8000;
 const LIVE_SIGNALS_FOCUS_DEBOUNCE_MS = 2500;
 const PAYLOAD_CACHE_TTL_MS = 10 * 60 * 1000;
-const PAYLOAD_CACHE_PREFIX = 'hades-miniapp-payload-v4';
+const PAYLOAD_CACHE_PREFIX = 'hades-miniapp-payload-v5';
 
 const els = {
   loading: document.getElementById('loading'),
@@ -170,6 +170,7 @@ function primePayloadShell(me = {}) {
   state.payload.bootstrap_mode = 'light';
   state.payload.me = { ...(state.payload.me || {}), ...(me || {}) };
   if (!state.payload.market || typeof state.payload.market !== 'object') state.payload.market = {};
+  if (!state.payload.trading_session || typeof state.payload.trading_session !== 'object') state.payload.trading_session = {};
   if (!state.payload.market.recommendation) state.payload.market.recommendation = 'Cargando lectura de mercado...';
   if (!state.payload.market.radar_context || typeof state.payload.market.radar_context !== 'object') {
     state.payload.market.radar_context = {
@@ -198,6 +199,7 @@ function applyBootstrapPayload(payload, { persist = true } = {}) {
       market: Object.keys(state.payload.market || {}).length
         ? { ...(incoming.market || {}), ...(state.payload.market || {}) }
         : { ...(incoming.market || {}) },
+      trading_session: Object.keys(incoming.trading_session || {}).length ? incoming.trading_session : (state.payload.trading_session || {}),
       watchlist_meta: Object.keys(state.payload.watchlist_meta || {}).length
         ? { ...(incoming.watchlist_meta || {}), ...(state.payload.watchlist_meta || {}) }
         : { ...(incoming.watchlist_meta || {}) },
@@ -3115,6 +3117,43 @@ function paymentInstructions(order, focus = null) {
   `;
 }
 
+function getTradingSessionPayload() {
+  const fromRoot = state.payload?.trading_session;
+  const fromMarket = state.payload?.market?.trading_session;
+  const fromDashboard = state.payload?.dashboard?.trading_session;
+  const fromWatchlist = state.payload?.watchlist_meta?.trading_session;
+  return (fromRoot && Object.keys(fromRoot).length ? fromRoot : null)
+    || (fromMarket && Object.keys(fromMarket).length ? fromMarket : null)
+    || (fromDashboard && Object.keys(fromDashboard).length ? fromDashboard : null)
+    || (fromWatchlist && Object.keys(fromWatchlist).length ? fromWatchlist : null)
+    || {};
+}
+
+function renderTradingSessionBanner(compact = false) {
+  const session = getTradingSessionPayload();
+  const stateLabel = String(session.state || '').toLowerCase();
+  const isOpen = session.is_open === true || stateLabel === 'open';
+  const schedule = session.schedule_label || '08:00 - 23:00 hora de Cuba';
+  const message = session.message || (isOpen
+    ? `Plataforma operativa · ${schedule}`
+    : `Mercado pausado · horario operativo ${schedule}`);
+  const next = isOpen
+    ? (session.next_close_label ? `Cierre: ${session.next_close_label}` : 'Cierre: 23:00 hora de Cuba')
+    : (session.next_open_label ? `Apertura: ${session.next_open_label}` : 'Apertura: 08:00 hora de Cuba');
+  return `
+    <div class="session-banner ${isOpen ? 'session-open' : 'session-closed'} ${compact ? 'session-compact' : ''}">
+      <div class="session-status-dot"></div>
+      <div class="session-copy">
+        <strong>${escapeHtml(isOpen ? 'Horario operativo activo' : 'Plataforma en pausa')}</strong>
+        <span>${escapeHtml(message)}</span>
+      </div>
+      <div class="session-times">
+        <span>${escapeHtml(schedule)}</span>
+        <span>${escapeHtml(next)}</span>
+      </div>
+    </div>`;
+}
+
 function renderHome() {
   const me = state.payload.me || {};
   const dashboard = state.payload.dashboard || {};
@@ -3163,6 +3202,7 @@ function renderHome() {
 
   els.home.innerHTML = `
     <div class="section-grid">
+      ${renderTradingSessionBanner()}
 
       <!-- ① COMMAND HEADER -->
       <div class="card card-span-12 cmd-header ${heroGradientClass}">
@@ -3835,6 +3875,7 @@ function renderMarket() {
 
   els.market.innerHTML = `
     <div class="section-grid">
+      ${renderTradingSessionBanner()}
 
       <!-- ── TICKER STRIP: BTC / ETH / Pulso ───────────────────────────── -->
       <div class="card card-span-12 market-ticker-card">
