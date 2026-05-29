@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from app.binance_api import get_futures_24h_tickers, get_open_interest, get_premium_index, get_radar_opportunities
 from app.market_data_public import get_public_24h_ticker_for_symbol, public_provider_label
+from app.trading_session import get_trading_session_public_payload, get_trading_session_status
 from app.services.market_data_service import get_funding_rate_pct_map, get_open_interest_map
 from app.config import get_bot_username, get_payment_configuration_status, get_payment_min_confirmations, is_admin
 from app.i18n import normalize_language
@@ -3224,7 +3225,10 @@ def build_dashboard_payload(user: Dict[str, Any]) -> Dict[str, Any]:
 
     active_count = _safe_call(lambda: int(user_signals_collection().count_documents(active_query)), len(active_signals))
 
+    trading_session = get_trading_session_public_payload()
+
     return {
+        "trading_session": trading_session,
         "summary_7d": summary_7d,
         "summary_30d": summary_30d,
         "home_summary": home_summary,
@@ -3356,7 +3360,81 @@ def build_history_payload(user: Dict[str, Any], *, limit: int = 20) -> List[Dict
     return [_serialize_history(doc) for doc in docs]
 
 
+def _paused_market_payload() -> Dict[str, Any]:
+    session = get_trading_session_public_payload()
+    return {
+        "paused": True,
+        "pause_reason": "trading_session_closed",
+        "trading_session": session,
+        "fear_greed": 0,
+        "btc_dominance": 0,
+        "top_gainers": [],
+        "top_losers": [],
+        "top_volume": [],
+        "top_open_interest": [],
+        "radar": [],
+        "radar_summary": {"total": 0, "paused": True},
+        "radar_context": {
+            "bias": "neutral",
+            "regime": "paused",
+            "environment": "Pausado",
+            "recommendation": session.get("message") or "Mercado pausado por horario operativo.",
+        },
+        "bias": "Pausado",
+        "regime": "Fuera de horario",
+        "volatility": "—",
+        "environment": "Pausado",
+        "recommendation": session.get("message") or "Mercado pausado por horario operativo.",
+        "time": session.get("now_label"),
+        "generated_at": utcnow().isoformat(),
+    }
+
+
+def _serialize_watchlist_paused(symbols: Iterable[str]) -> List[Dict[str, Any]]:
+    session = get_trading_session_public_payload()
+    rows: List[Dict[str, Any]] = []
+    for symbol in [str(item).upper() for item in symbols if item]:
+        rows.append({
+            "symbol": symbol,
+            "last_price": 0.0,
+            "change_pct": 0.0,
+            "quote_volume": 0.0,
+            "volume_base": 0.0,
+            "trade_count": 0,
+            "high_24h": 0.0,
+            "low_24h": 0.0,
+            "range_pct_24h": 0.0,
+            "range_position_pct": None,
+            "range_bias_label": "Mercado pausado",
+            "volatility_label": "Fuera de horario",
+            "price_change_abs": 0.0,
+            "is_positive": True,
+            "radar_score": 0.0,
+            "radar_direction": None,
+            "radar_momentum": None,
+            "setup_priority_score": 0.0,
+            "setup_priority_label": "Pausado",
+            "setup_proximity_score": 0.0,
+            "setup_proximity_label": "Pausado",
+            "setup_action_label": "Fuera de horario",
+            "priority_reasons": [session.get("message") or "Mercado pausado por horario operativo."],
+            "priority_reason_short": "Horario operativo cerrado",
+            "priority_driver_label": "Horario operativo cerrado",
+            "latest_signal": None,
+            "active_signal": None,
+            "market_provider": "paused",
+            "market_provider_label": "Pausado",
+            "missing_market_data": True,
+            "trading_session": session,
+        })
+    return rows
+
+
 def build_market_payload(user: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    session_status = get_trading_session_status()
+    if not session_status.is_open:
+        return _paused_market_payload()
+
     user_id = int((user or {}).get("user_id") or 0)
     cache_key = f"market:{user_id}"
     cached = _cache_get_payload(_MARKET_PAYLOAD_CACHE, cache_key)
@@ -3385,8 +3463,10 @@ def build_watchlist_context(user: Dict[str, Any]) -> Dict[str, Any]:
     max_symbols = get_watchlist_limit_for_plan(plan_value)
     symbols_count = len(raw_symbols)
     slots_left = None if max_symbols is None else max(max_symbols - symbols_count, 0)
+    session_status = get_trading_session_status()
+    items = _serialize_watchlist(raw_symbols, user_id=int(user.get("user_id") or 0)) if session_status.is_open else _serialize_watchlist_paused(raw_symbols)
     return {
-        "items": _serialize_watchlist(raw_symbols, user_id=int(user.get("user_id") or 0)),
+        "items": items,
         "meta": {
             "symbols": raw_symbols,
             "symbols_count": symbols_count,
@@ -3395,6 +3475,7 @@ def build_watchlist_context(user: Dict[str, Any]) -> Dict[str, Any]:
             "plan": plan_value,
             "plan_name": get_plan_name(plan_value),
             "can_add_more": True if max_symbols is None else symbols_count < max_symbols,
+            "trading_session": session_status.to_public_dict(),
         },
     }
 
@@ -3441,6 +3522,7 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "bootstrap_mode": "light",
+        "trading_session": get_trading_session_public_payload(),
         "me": me_payload,
         "dashboard": {
             "summary_7d": _empty_summary(),
@@ -3477,6 +3559,7 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
             "volatility": "—",
             "environment": "—",
             "recommendation": "Cargando lectura de mercado...",
+            "trading_session": get_trading_session_public_payload(),
         },
         "watchlist": [],
         "watchlist_meta": {
