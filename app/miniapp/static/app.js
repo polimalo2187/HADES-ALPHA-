@@ -4076,7 +4076,7 @@ function renderMarket() {
 // ── TradingView Live Chart ────────────────────────────────────────────────────
 const _chartState = { symbol: 'BINANCE:BTCUSDT', interval: '30', allPairs: [], filteredPairs: [] };
 
-async function _loadBinancePairs() {
+async function _loadMarketPairs() {
   if (_chartState.allPairs.length) return _chartState.allPairs;
   try {
     const data = await api('/api/miniapp/symbols');
@@ -4193,13 +4193,13 @@ async function bindChartControls() {
 
     // Load pairs and show top 30 on focus
     input.addEventListener('focus', async () => {
-      await _loadBinancePairs();
+      await _loadMarketPairs();
       const results = _searchPairs(input.value === _formatPairLabel(_chartState.symbol.replace('BINANCE:', '')) ? '' : input.value);
       _renderDropdown(results, input);
     });
 
     input.addEventListener('input', async () => {
-      await _loadBinancePairs();
+      await _loadMarketPairs();
       _renderDropdown(_searchPairs(input.value), input);
     });
 
@@ -4253,14 +4253,13 @@ const _marketStream = {
   onTick: null,     // optional callback(symbol, {price, change, vol}) for signal detail
 };
 
-// ✅ Migrated to Binance new /market/ws/ path (legacy /ws/ deprecated April 2026)
-// Docs: https://developers.binance.com/docs/derivatives/usds-margined-futures/websocket-market-streams/Important-WebSocket-Change-Notice
-const _WS_URL = 'wss://fstream.binance.com/market/ws/!miniTicker@arr';
+// No browser-side exchange WebSocket. Market data must come from backend public providers
+// so the MiniApp does not depend on a restricted exchange from the user's device or cloud region.
+const _WS_URL = null;
 
 function startMarketStream() {
-  if (_marketStream.ws && _marketStream.ws.readyState <= 1) return;
-  _marketStream.active = true;
-  _openMarketWS();
+  _marketStream.active = false;
+  return;
 }
 
 function stopMarketStream() {
@@ -4273,7 +4272,7 @@ function stopMarketStream() {
 }
 
 function _openMarketWS() {
-  if (!_marketStream.active) return;
+  if (!_marketStream.active || !_WS_URL) return;
   try {
     const ws = new WebSocket(_WS_URL);
     _marketStream.ws = ws;
@@ -4825,7 +4824,7 @@ function closeSignalDetailModal() {
 // Strategy:
 //   1. Hook _marketStream.onTick → called by _flushMarketTicks on every RAF flush
 //   2. Ensure market stream is running (starts it if user is not on market view)
-//   3. No direct REST fallback to Binance from browser; backend/WS owns market data.
+//   3. No direct REST/WS dependency on a single exchange from browser; backend public providers own market data.
 // Docs: https://developers.binance.com/docs/derivatives/usds-margined-futures/websocket-market-streams/Individual-Symbol-Ticker-Streams
 const _priceTicker = {
   symbol:      null,
@@ -4841,7 +4840,7 @@ function startSignalPriceTicker(symbol) {
   stopSignalPriceTicker();
   if (!symbol) return;
 
-  // Binance tickBuffer uses UPPERCASE symbols (e.g. "PENGUUSDT")
+  // Provider tickBuffer uses UPPERCASE symbols (e.g. "PENGUUSDT")
   const pair = symbol.replace('BINANCE:', '').replace('/', '').toUpperCase();
   _priceTicker.symbol = pair;
   _priceTicker._lastTickAt = 0;
@@ -4858,7 +4857,7 @@ function startSignalPriceTicker(symbol) {
   // Ensure stream is active (user may not be on the market view)
   startMarketStream();
 
-  // ── 2. Sin REST directo a Binance desde el navegador ─────────────────────
+  // ── 2. Sin REST directo a exchanges desde el navegador ─────────────────────
   // El fallback REST directo podía romper Mercado con 451/CORS en ciertas regiones.
   // Si el WebSocket no entrega ticks, mantenemos el último precio conocido sin tumbar la vista.
   _priceTicker._pollTimer = null;
@@ -5211,7 +5210,7 @@ function renderSignalDetailModal(payload) {
     </div>
   `;
 
-  // Start live price ticker via Binance WebSocket
+  // Start provider-safe live price ticker
   const signalSymbol = signal.symbol ? `BINANCE:${signal.symbol}` : 'BINANCE:BTCUSDT';
   startSignalPriceTicker(signalSymbol);
 
