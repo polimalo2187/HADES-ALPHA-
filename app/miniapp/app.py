@@ -596,26 +596,33 @@ def create_mini_app() -> FastAPI:
 
     @app.post("/api/miniapp/watchlist/add")
     async def miniapp_watchlist_add(payload: MiniAppWatchlistSymbolRequest, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
-        ok, message = add_symbol(int(user.get("user_id") or 0), payload.symbol, plan=_resolve_watchlist_plan(user))
+        user_id = int(user.get("user_id") or 0)
+        ok, message = add_symbol(user_id, payload.symbol, plan=_resolve_watchlist_plan(user))
+        context_user = get_user_by_id(user_id) or user
+        context = build_watchlist_context(context_user)
         if not ok:
+            # Validation failures are business responses, not transport failures.
+            # Returning 200 lets the MiniApp render the current watchlist and show
+            # the rejection message instead of failing silently behind a generic
+            # 400 access log in Railway/mobile Telegram.
             record_audit_event(
-                event_type="miniapp_watchlist_add_failed",
+                event_type="miniapp_watchlist_add_rejected",
                 status="warning",
                 module="miniapp",
-                user_id=int(user.get("user_id") or 0),
+                user_id=user_id,
                 message=message,
                 metadata={"symbol": payload.symbol},
             )
-            raise HTTPException(status_code=400, detail=message)
+            return {"ok": False, "message": message, **context}
         record_audit_event(
             event_type="miniapp_watchlist_added",
             status="ok",
             module="miniapp",
-            user_id=int(user.get("user_id") or 0),
+            user_id=user_id,
             message=message,
             metadata={"symbol": payload.symbol},
         )
-        return {"ok": True, "message": message, **build_watchlist_context(get_user_by_id(int(user.get("user_id") or 0)) or user)}
+        return {"ok": True, "message": message, **context}
 
     @app.post("/api/miniapp/watchlist/remove")
     async def miniapp_watchlist_remove(payload: MiniAppWatchlistSymbolRequest, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
