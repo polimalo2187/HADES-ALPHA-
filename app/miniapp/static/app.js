@@ -4825,7 +4825,7 @@ function closeSignalDetailModal() {
 // Strategy:
 //   1. Hook _marketStream.onTick → called by _flushMarketTicks on every RAF flush
 //   2. Ensure market stream is running (starts it if user is not on market view)
-//   3. REST fallback via fapi.binance.com every 3 s if no WS tick in 5 s
+//   3. No direct REST fallback to Binance from browser; backend/WS owns market data.
 // Docs: https://developers.binance.com/docs/derivatives/usds-margined-futures/websocket-market-streams/Individual-Symbol-Ticker-Streams
 const _priceTicker = {
   symbol:      null,
@@ -4858,26 +4858,10 @@ function startSignalPriceTicker(symbol) {
   // Ensure stream is active (user may not be on the market view)
   startMarketStream();
 
-  // ── 2. REST fallback — only fires when WS has been silent > 5 s ────────────
-  // Uses the same Binance Futures REST endpoint the backend already trusts
-  _priceTicker._pollTimer = setInterval(async () => {
-    if (Date.now() - _priceTicker._lastTickAt < 5000) return; // WS is healthy
-    try {
-      const res = await fetch(
-        `https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=${pair}`
-      );
-      if (!res.ok) return;
-      const d = await res.json();
-      const price = parseFloat(d.lastPrice);
-      const pct   = parseFloat(d.priceChangePercent);
-      if (!isNaN(price) && price > 0) {
-        _priceTicker.prevPrice   = _priceTicker.lastPrice;
-        _priceTicker.lastPrice   = price;
-        _priceTicker._lastTickAt = Date.now();
-        updateLivePriceDisplay(price, pct);
-      }
-    } catch {}
-  }, 3000);
+  // ── 2. Sin REST directo a Binance desde el navegador ─────────────────────
+  // El fallback REST directo podía romper Mercado con 451/CORS en ciertas regiones.
+  // Si el WebSocket no entrega ticks, mantenemos el último precio conocido sin tumbar la vista.
+  _priceTicker._pollTimer = null;
 }
 
 function stopSignalPriceTicker() {
