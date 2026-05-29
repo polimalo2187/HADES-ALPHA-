@@ -110,6 +110,29 @@ def _provider_order() -> List[str]:
     return ordered
 
 
+def get_public_provider_order() -> List[str]:
+    """Return the effective public provider order used by the app.
+
+    Kept tiny and cache-free so UI/service layers can label market data without
+    hardcoding Binance as the source.
+    """
+    return list(_provider_order())
+
+
+def public_provider_label(provider: Any = None) -> str:
+    value = str(provider or "").lower().strip()
+    labels = {
+        "bybit": "Bybit",
+        "okx": "OKX",
+        "binance": "Binance",
+        "fallback": "proveedores públicos",
+    }
+    if value:
+        return labels.get(value, value.upper())
+    order = [labels.get(p, p.upper()) for p in _provider_order()]
+    return " / ".join(order[:2]) if order else "proveedores públicos"
+
+
 def _symbol_to_okx_inst_id(symbol: str) -> str:
     s = str(symbol or "").upper().strip().replace("-", "").replace("/", "")
     if not s.endswith("USDT"):
@@ -179,13 +202,21 @@ def _fetch_bybit_tickers() -> List[Dict[str, Any]]:
         symbol = str(item.get("symbol", "")).upper().strip()
         if not symbol.endswith("USDT"):
             continue
+        last_price = _safe_float(item.get("lastPrice"))
+        prev_price = _safe_float(item.get("prevPrice24h"))
+        high_price = _safe_float(item.get("highPrice24h"), last_price)
+        low_price = _safe_float(item.get("lowPrice24h"), last_price)
         change_pct = _safe_float(item.get("price24hPcnt")) * 100.0
+        price_change = last_price - prev_price if prev_price > 0 else 0.0
         normalized.append(
             {
                 "symbol": symbol,
                 "priceChangePercent": str(change_pct),
+                "priceChange": str(price_change),
                 "quoteVolume": str(_safe_float(item.get("turnover24h"))),
-                "lastPrice": str(_safe_float(item.get("lastPrice"))),
+                "lastPrice": str(last_price),
+                "highPrice": str(high_price),
+                "lowPrice": str(low_price),
                 "count": "0",
                 "openInterest": str(_safe_float(item.get("openInterest"))),
                 "lastFundingRate": str(_safe_float(item.get("fundingRate"))),
@@ -207,13 +238,19 @@ def _fetch_okx_tickers() -> List[Dict[str, Any]]:
             continue
         last_price = _safe_float(item.get("last"))
         open_24h = _safe_float(item.get("open24h"))
+        high_price = _safe_float(item.get("high24h"), last_price)
+        low_price = _safe_float(item.get("low24h"), last_price)
+        price_change = last_price - open_24h if open_24h > 0 else 0.0
         change_pct = ((last_price - open_24h) / open_24h * 100.0) if open_24h > 0 else 0.0
         normalized.append(
             {
                 "symbol": _okx_inst_id_to_symbol(inst_id),
                 "priceChangePercent": str(change_pct),
+                "priceChange": str(price_change),
                 "quoteVolume": str(_safe_float(item.get("volCcy24h"))),
                 "lastPrice": str(last_price),
+                "highPrice": str(high_price),
+                "lowPrice": str(low_price),
                 "count": "0",
                 "provider": "okx",
             }

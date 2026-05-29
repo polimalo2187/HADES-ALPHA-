@@ -6,6 +6,7 @@ from math import isfinite, log10
 from typing import Any, Dict, Iterable, List, Optional
 
 from app.binance_api import get_futures_24h_tickers, get_open_interest, get_premium_index, get_radar_opportunities
+from app.market_data_public import public_provider_label
 from app.services.market_data_service import get_funding_rate_pct_map, get_open_interest_map
 from app.config import get_bot_username, get_payment_configuration_status, get_payment_min_confirmations, is_admin
 from app.i18n import normalize_language
@@ -1050,7 +1051,7 @@ def _watchlist_priority_reasons(
     if extreme_score >= 60.0:
         reasons.append("Cotiza cerca de un extremo del rango")
     if missing_market_data:
-        reasons.append("Sin datos frescos de Binance ahora mismo")
+        reasons.append("Sin datos frescos de proveedores públicos ahora mismo")
     if not reasons:
         reasons.append("En observación, sin gatillo operativo claro")
     return reasons[:3]
@@ -1307,7 +1308,7 @@ def _radar_reasons(
     if open_interest > 0 and open_interest >= 1_000_000:
         reasons.append("Open interest elevado para seguir el flujo")
     if missing_market_data:
-        reasons.append("Sin datos frescos de Binance ahora mismo")
+        reasons.append("Sin datos frescos de proveedores públicos ahora mismo")
     if not reasons:
         reasons.append("En observación, esperando mejor confirmación")
     return reasons[:4]
@@ -1326,8 +1327,10 @@ def _ticker_range_metrics(item: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             "price_change_abs": 0.0,
             "range_pct_24h": 0.0,
             "range_position_pct": None,
-            "range_bias_label": "Sin datos de Binance",
+            "range_bias_label": "Sin cobertura pública",
             "volatility_label": "Sin datos",
+            "market_provider": "none",
+            "market_provider_label": public_provider_label(),
         }
 
     last_price = _safe_float(item.get("lastPrice"))
@@ -1362,6 +1365,8 @@ def _ticker_range_metrics(item: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "range_position_pct": range_position_pct,
         "range_bias_label": _watchlist_range_bias(range_position_pct),
         "volatility_label": _watchlist_volatility_label(range_pct_24h),
+        "market_provider": str(item.get("provider") or "public").lower(),
+        "market_provider_label": public_provider_label(item.get("provider")),
     }
 
 
@@ -1659,8 +1664,10 @@ def _serialize_watchlist(symbols: Iterable[str], *, user_id: int = 0) -> List[Di
             price_change_abs = 0.0
             range_pct_24h = 0.0
             range_position_pct = None
-            range_bias_label = "Sin datos de Binance"
+            range_bias_label = "Sin cobertura pública"
             volatility_label = "Sin datos"
+            market_provider = "none"
+            market_provider_label = public_provider_label()
         else:
             last_price = _safe_float(item.get("lastPrice"))
             change_pct = _safe_float(item.get("priceChangePercent"))
@@ -1670,6 +1677,8 @@ def _serialize_watchlist(symbols: Iterable[str], *, user_id: int = 0) -> List[Di
             low_24h = _safe_float(item.get("lowPrice"), last_price)
             trade_count = int(_safe_float(item.get("count"), 0.0))
             price_change_abs = _safe_float(item.get("priceChange"))
+            market_provider = str(item.get("provider") or "public").lower()
+            market_provider_label = public_provider_label(item.get("provider"))
 
             if high_24h > 0 and low_24h > 0 and high_24h >= low_24h:
                 range_width = max(high_24h - low_24h, 0.0)
@@ -1763,6 +1772,8 @@ def _serialize_watchlist(symbols: Iterable[str], *, user_id: int = 0) -> List[Di
             "active_signal": active_signal_public,
             "latest_signal": latest_signal_public,
             "has_active_signal": bool(active_signal_public),
+            "market_provider": market_provider,
+            "market_provider_label": market_provider_label,
         })
 
     return rows
