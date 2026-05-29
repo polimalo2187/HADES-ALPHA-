@@ -502,5 +502,197 @@ def get_public_klines_df(symbol: str, interval: str, limit: int = 220) -> pd.Dat
     raise PublicMarketDataError(f"all kline providers failed for {symbol} {interval_key}: " + " | ".join(errors))
 
 
+
+def get_public_current_price(symbol: str) -> float:
+    """Return the latest public price without calling Binance directly.
+
+    Uses the same provider priority as the scanner. This is intentionally backed
+    by the cached 24h ticker payload, so signal creation/evaluation does not add
+    extra network pressure per symbol when the scanner already warmed the cache.
+    """
+    symbol = str(symbol or "").upper().strip()
+    if not symbol:
+        raise PublicMarketDataError("missing symbol for current price")
+    ticker = _find_cached_ticker(symbol)
+    price = _safe_float(ticker.get("lastPrice"))
+    if price > 0:
+        return price
+    errors: List[str] = []
+    for provider in _provider_order():
+        try:
+            if provider == "bybit":
+                item = _fetch_bybit_symbol_ticker(symbol)
+                price = _safe_float(item.get("lastPrice"))
+            elif provider == "okx":
+                data = _public_get_json("https://www.okx.com/api/v5/market/ticker", params={"instId": _symbol_to_okx_inst_id(symbol)})
+                rows = (data or {}).get("data") or []
+                if not rows:
+                    raise PublicMarketDataError(f"okx returned no ticker for {symbol}")
+                price = _safe_float(rows[0].get("last"))
+            elif provider == "binance":
+                data = _public_get_json("https://fapi.binance.com/fapi/v1/ticker/price", params={"symbol": symbol})
+                price = _safe_float((data or {}).get("price"))
+            else:
+                continue
+            if price > 0:
+                return float(price)
+            raise PublicMarketDataError(f"{provider} returned invalid price for {symbol}")
+        except Exception as exc:
+            errors.append(f"{provider}: {exc}")
+            logger.debug("Market price provider failed | provider=%s symbol=%s error=%s", provider, symbol, exc)
+    raise PublicMarketDataError(f"all price providers failed for {symbol}: " + " | ".join(errors))
+
+
+def _interval_ms(interval: str) -> int:
+    key = str(interval or "").strip().lower()
+    mapping = {
+        "1m": 60_000,
+        "3m": 180_000,
+        "5m": 300_000,
+        "15m": 900_000,
+        "30m": 1_800_000,
+        "1h": 3_600_000,
+        "2h": 7_200_000,
+        "4h": 14_400_000,
+        "1d": 86_400_000,
+    }
+    return mapping.get(key, 60_000)
+
+
+def _df_to_binance_like_rows(df: pd.DataFrame) -> List[List[Any]]:
+    if df is None or df.empty:
+        return []
+    rows: List[List[Any]] = []
+    for _, item in df.sort_values("open_time").iterrows():
+        open_time = int(pd.Timestamp(item["open_time"]).timestamp() * 1000)
+        close_time = int(pd.Timestamp(item.get("close_time", item["open_time"])).timestamp() * 1000)
+        rows.append([
+            open_time,
+            str(float(item["open"])),
+            str(float(item["high"])),
+            str(float(item["low"])),
+            str(float(item["close"])),
+            str(float(item["volume"])),
+            close_time,
+        ])
+    return rows
+
+
+def _filter_df_between(df: pd.DataFrame, start_ms: int, end_ms: int) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+    open_ms = (pd.to_datetime(df["open_time"], utc=True).astype("int64") // 1_000_000)
+    return df[(open_ms >= int(start_ms)) & (open_ms <= int(end_ms))].copy()
+
+
+def _fetch_bybit_klines_between(symbol: str, interval: str, start_ms: int, end_ms: int) -> pd.DataFrame:
+    interval_key = str(interval or "1m").lower()
+    step_ms = _interval_ms(interval_key)
+    cursor = int(start_ms)
+    chunks: List[pd.DataFrame] = []
+    safety = 0
+    while cursor < int(end_ms) and safety < 20:
+        safety += 1
+        remaining = max(1, int((int(end_ms) - cursor) / step_ms) + 2)
+        limit = min(1000, remaining)
+        chunk_end = min(int(end_ms), cursor + (limit * step_ms))
+        data = _public_get_json(
+            "https://api.bybit.com/v5/market/kline",
+            params={
+                "category": "linear",
+                "symbol": symbol.upper(),
+                "interval": _interval_to_bybit(interval_key),
+                "start": cursor,
+                "end": chunk_end,
+                "limit": limit,
+            },
+        )
+        rows = (((data or {}).get("result") or {}).get("list") or [])
+        if not rows:
+            break
+        df = _filter_df_between(_klines_to_df(rows, provider="bybit"), start_ms, end_ms)
+        if not df.empty:
+            chunks.append(df)
+            last_ms = int(pd.Timestamp(df["open_time"].max()).timestamp() * 1000)
+            next_cursor = last_ms + step_ms
+        else:
+            next_cursor = chunk_end + step_ms
+        if next_cursor <= cursor:
+            break
+        cursor = next_cursor
+        if len(rows) < limit:
+            break
+    if not chunks:
+        raise PublicMarketDataError(f"bybit returned no klines between for {symbol} {interval_key}")
+    return pd.concat(chunks, ignore_index=True).sort_values("open_time").drop_duplicates(subset=["open_time"], keep="last").reset_index(drop=True)
+
+
+def _fetch_recent_klines_between(symbol: str, interval: str, start_ms: int, end_ms: int, *, provider: str) -> pd.DataFrame:
+    interval_key = str(interval or "1m").lower()
+    needed = max(2, int((int(end_ms) - int(start_ms)) / _interval_ms(interval_key)) + 5)
+    limit = min(1000 if provider != "okx" else 300, needed)
+    if provider == "okx":
+        df = _fetch_okx_klines(symbol, interval_key, limit)
+    elif provider == "binance":
+        df = _fetch_binance_klines(symbol, interval_key, limit)
+    else:
+        df = _fetch_bybit_klines(symbol, interval_key, limit)
+    filtered = _filter_df_between(df, start_ms, end_ms)
+    if filtered.empty:
+        raise PublicMarketDataError(f"{provider} returned no recent klines in requested window for {symbol} {interval_key}")
+    return filtered
+
+
+def get_public_klines_between_rows(symbol: str, start_dt: Any, end_dt: Any, interval: str = "1m") -> List[List[Any]]:
+    """Return Binance-like kline rows for signal lifecycle evaluation.
+
+    This replaces the old app.signals direct Binance /fapi/v1/klines call. It is
+    optimized for short lifecycle windows (pending entry / TP / SL checks) and
+    uses provider failover without adding calls to the scanner path.
+    """
+    symbol = str(symbol or "").upper().strip()
+    start_ts = pd.Timestamp(start_dt)
+    end_ts = pd.Timestamp(end_dt)
+    if start_ts.tzinfo is None:
+        start_ts = start_ts.tz_localize("UTC")
+    else:
+        start_ts = start_ts.tz_convert("UTC")
+    if end_ts.tzinfo is None:
+        end_ts = end_ts.tz_localize("UTC")
+    else:
+        end_ts = end_ts.tz_convert("UTC")
+    start_ms = int(start_ts.timestamp() * 1000)
+    end_ms = int(end_ts.timestamp() * 1000)
+    interval_key = str(interval or "1m").strip().lower()
+    if not symbol or start_ms >= end_ms:
+        return []
+
+    bucket_start = start_ms - (start_ms % _interval_ms(interval_key))
+    bucket_end = end_ms - (end_ms % _interval_ms(interval_key))
+    key = f"public:klines_between:{symbol}:{interval_key}:{bucket_start}:{bucket_end}:" + ",".join(_provider_order())
+    cached = _cache_get(key)
+    if cached is not None:
+        return list(cached)
+
+    errors: List[str] = []
+    for provider in _provider_order():
+        try:
+            if provider == "bybit":
+                df = _fetch_bybit_klines_between(symbol, interval_key, start_ms, end_ms)
+            elif provider in {"okx", "binance"}:
+                df = _fetch_recent_klines_between(symbol, interval_key, start_ms, end_ms, provider=provider)
+            else:
+                continue
+            rows = _df_to_binance_like_rows(_filter_df_between(df, start_ms, end_ms))
+            if not rows:
+                raise PublicMarketDataError(f"{provider} returned no rows after filtering")
+            # Short TTL: lifecycle checks are time-sensitive but repeated often by scheduler.
+            _cache_set(key, rows, max(5, min(_TTL_KLINES, 20)))
+            return rows
+        except Exception as exc:
+            errors.append(f"{provider}: {exc}")
+            logger.debug("Market kline-range provider failed | provider=%s symbol=%s interval=%s error=%s", provider, symbol, interval_key, exc)
+    raise PublicMarketDataError(f"all kline-range providers failed for {symbol} {interval_key}: " + " | ".join(errors))
+
 def get_valid_public_symbols() -> set[str]:
     return set(get_public_active_symbols(min_quote_volume=0.0, allow_fallback=True))

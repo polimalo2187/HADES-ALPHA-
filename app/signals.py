@@ -23,6 +23,7 @@ from app.database import (
 )
 from app.history_service import upsert_signal_history_record
 from app.services.admin_service import is_effectively_banned
+from app.market_data_public import get_public_current_price, get_public_klines_between_rows
 
 logger = logging.getLogger(__name__)
 
@@ -197,16 +198,22 @@ def calculate_entry_zone(entry: float, stop_loss: Optional[float] = None, pct: O
 
 
 def get_current_price(symbol: str) -> float:
-    url = f"{BINANCE_FUTURES_API}/fapi/v1/ticker/price"
+    """Get current price through the shared public provider layer.
+
+    Important: this must not call Binance directly. Binance can be blocked by
+    region even when Bybit/OKX are healthy, and signal lifecycle code must use
+    the same market-data path as the scanner.
+    """
+    last_error = None
     for attempt in range(BINANCE_MAX_RETRIES):
         try:
-            r = requests.get(url, params={"symbol": symbol}, timeout=10)
-            r.raise_for_status()
-            return float(r.json()["price"])
-        except Exception:
+            return float(get_public_current_price(symbol))
+        except Exception as exc:
+            last_error = exc
             if attempt == BINANCE_MAX_RETRIES - 1:
                 raise
             time.sleep(BINANCE_RETRY_DELAY)
+    raise last_error or RuntimeError(f"price unavailable for {symbol}")
 
 
 def estimate_minutes_to_entry(
@@ -1762,194 +1769,13 @@ def _dt_to_ms(dt: datetime) -> int:
 
 
 def _fetch_klines_between(symbol: str, start_dt: datetime, end_dt: datetime, interval: str = "1m") -> List[List]:
-    url = f"{BINANCE_FUTURES_API}/fapi/v1/klines"
-    start_ms = _dt_to_ms(start_dt)
-    end_ms = _dt_to_ms(end_dt)
-    all_rows: List[List] = []
+    """Fetch lifecycle klines through public provider failover.
 
-    while start_ms < end_ms:
-        r = requests.get(
-            url,
-            params={
-                "symbol": symbol,
-                "interval": interval,
-                "startTime": start_ms,
-                "endTime": end_ms,
-                "limit": 1000,
-            },
-            timeout=15,
-        )
-        r.raise_for_status()
-        rows = r.json()
-        if not rows:
-            break
-
-        all_rows.extend(rows)
-        last_open_ms = int(rows[-1][0])
-        next_start = last_open_ms + 60_000
-        if next_start <= start_ms:
-            break
-        start_ms = next_start
-
-        if len(rows) < 1000:
-            break
-
-    return all_rows
-
-
-def _ms_to_dt(value: Any) -> Optional[datetime]:
-    try:
-        return datetime.utcfromtimestamp(int(value) / 1000.0)
-    except Exception:
-        return None
-
-
-def _candle_time_bounds(row: List[Any]) -> tuple[Optional[datetime], Optional[datetime]]:
-    open_dt = _ms_to_dt(row[0]) if row else None
-    close_dt: Optional[datetime] = None
-    try:
-        if row and len(row) > 6 and row[6] is not None:
-            close_dt = _ms_to_dt(row[6])
-    except Exception:
-        close_dt = None
-    if open_dt is not None and close_dt is None:
-        close_dt = open_dt + timedelta(minutes=1)
-    return open_dt, close_dt
-
-
-def _entry_window_allows_new_fill(row: List[Any], entry_window_end: Optional[datetime]) -> bool:
-    if entry_window_end is None:
-        return True
-    candle_open_dt, candle_close_dt = _candle_time_bounds(row)
-    if candle_open_dt is None:
-        return False
-    if candle_open_dt >= entry_window_end:
-        return False
-    if candle_close_dt is not None and candle_close_dt > entry_window_end:
-        return False
-    return True
-
-
-def _candle_within_window(row: List[Any], window_end: Optional[datetime]) -> bool:
-    if window_end is None:
-        return True
-    candle_open_dt, candle_close_dt = _candle_time_bounds(row)
-    if candle_open_dt is None:
-        return False
-    if candle_open_dt >= window_end:
-        return False
-    if candle_close_dt is not None and candle_close_dt > window_end:
-        return False
-    return True
-
-
-def _post_fill_invalidation_config(signal_doc: Dict[str, Any]) -> Optional[Dict[str, float]]:
-    runtime = signal_doc.get("strategy_runtime") or {}
-    cfg = runtime.get("post_fill_invalidation") or signal_doc.get("post_fill_invalidation") or {}
-    if not isinstance(cfg, dict):
-        return None
-    try:
-        minutes = int(cfg.get("minutes") or 0)
-        min_progress = float(cfg.get("min_tp1_progress_pct") or 0.0)
-    except Exception:
-        return None
-    if minutes <= 0:
-        return None
-    return {
-        "minutes": float(minutes),
-        "min_tp1_progress_pct": max(0.0, min_progress),
-        "reason": str(cfg.get("reason") or "no_followthrough").strip() or "no_followthrough",
-    }
-
-
-def _entry_zone_touched_in_candle(zone_low: float, zone_high: float, high: float, low: float) -> bool:
-    return low <= zone_high and high >= zone_low
-
-
-def _pending_entry_touched(signal_doc: Dict[str, Any], direction: str, entry_price: float, high: float, low: float) -> bool:
-    entry_zone = signal_doc.get("entry_zone") or {}
-    zone_low = entry_zone.get("low")
-    zone_high = entry_zone.get("high")
-    try:
-        if zone_low is not None and zone_high is not None:
-            zone_low = float(zone_low)
-            zone_high = float(zone_high)
-            return _entry_zone_touched_in_candle(zone_low, zone_high, high, low)
-    except Exception:
-        pass
-    return _entry_touched_in_candle(direction, entry_price, high, low)
-
-
-def _entry_touched_in_candle(direction: str, entry_price: float, high: float, low: float) -> bool:
-    if direction == "LONG":
-        return low <= entry_price
-    if direction == "SHORT":
-        return high >= entry_price
-    return False
-
-
-def _tp1_progress_pct(direction: str, entry_price: float, tp1: float, high: float, low: float) -> Optional[float]:
-    distance = abs(tp1 - entry_price)
-    if distance <= 0:
-        return None
-    if direction == "LONG":
-        favorable_move = max(0.0, high - entry_price)
-    else:
-        favorable_move = max(0.0, entry_price - low)
-    return round((favorable_move / distance) * 100.0, 2)
-
-
-def _excursions_after_entry_r(direction: str, entry_price: float, stop_loss: float, high: float, low: float) -> Dict[str, float]:
-    risk_distance = abs(entry_price - stop_loss)
-    if risk_distance <= 0:
-        return {"favorable_r": 0.0, "adverse_r": 0.0}
-
-    if direction == "LONG":
-        favorable_move = max(0.0, high - entry_price)
-        adverse_move = max(0.0, entry_price - low)
-    else:
-        favorable_move = max(0.0, entry_price - low)
-        adverse_move = max(0.0, high - entry_price)
-
-    return {
-        "favorable_r": round(favorable_move / risk_distance, 4),
-        "adverse_r": round(adverse_move / risk_distance, 4),
-    }
-
-
-def _evaluation_observability_payload(
-    *,
-    entry_touched: bool,
-    entry_touched_at: Optional[datetime],
-    expiry_type: Optional[str],
-    expiry_reason: Optional[str],
-    tp1_progress_max_pct: Optional[float],
-    max_favorable_excursion_r: Optional[float],
-    max_adverse_excursion_r: Optional[float],
-) -> Dict[str, Any]:
-    return {
-        "entry_touched": bool(entry_touched),
-        "entry_touched_at": entry_touched_at,
-        "expiry_type": expiry_type,
-        "expiry_reason": expiry_reason,
-        "tp1_progress_max_pct": round(float(tp1_progress_max_pct), 2) if tp1_progress_max_pct is not None else None,
-        "max_favorable_excursion_r": round(float(max_favorable_excursion_r), 4) if max_favorable_excursion_r is not None else None,
-        "max_adverse_excursion_r": round(float(max_adverse_excursion_r), 4) if max_adverse_excursion_r is not None else None,
-    }
-
-
-
-def _tp1_protection_price(direction: str, entry_price: float, tp1: float) -> float:
-    """Price where a TP1-hit runner is protected and closed as a winner.
-
-    LONG: entry + 50% of the entry->TP1 distance by default.
-    SHORT: entry - 50% of the entry->TP1 distance by default.
+    This intentionally replaces the old direct Binance Futures call so active
+    signal evaluation, pending-entry fills, TP/SL checks and stats keep working
+    when Binance returns 451 from the cloud region.
     """
-    ratio = max(0.05, min(0.95, float(TP1_PROTECTED_RETRACE_RATIO)))
-    if str(direction).upper() == "LONG":
-        return float(entry_price) + ((float(tp1) - float(entry_price)) * ratio)
-    return float(entry_price) - ((float(entry_price) - float(tp1)) * ratio)
-
+    return get_public_klines_between_rows(symbol, start_dt, end_dt, interval=interval)
 
 def _evaluate_signal_result(signal_doc: Dict) -> Dict[str, Any]:
     direction = str(signal_doc.get("direction", "")).upper()

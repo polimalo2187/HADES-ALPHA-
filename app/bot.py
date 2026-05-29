@@ -6,6 +6,7 @@ import logging
 import threading
 import signal
 import sys
+import re
 from typing import Any
 
 from telegram import Bot
@@ -19,11 +20,38 @@ from app.database import initialize_database
 from app.observability import heartbeat, log_event, record_audit_event, start_background_heartbeat
 from app.realtime_pipeline import initialize_signal_pipeline
 
+
+
+class _SensitiveUrlFilter(logging.Filter):
+    _BOT_TOKEN_RE = re.compile(r"/bot\d+:[A-Za-z0-9_-]+")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+            redacted = self._BOT_TOKEN_RE.sub("/bot<redacted>", message)
+            if redacted != message:
+                record.msg = redacted
+                record.args = ()
+        except Exception:
+            pass
+        return True
+
+
+def _install_sensitive_log_filter() -> None:
+    sensitive_filter = _SensitiveUrlFilter()
+    root = logging.getLogger()
+    root.addFilter(sensitive_filter)
+    for handler in root.handlers:
+        handler.addFilter(sensitive_filter)
+    logging.getLogger("httpx").addFilter(sensitive_filter)
+    logging.getLogger("telegram").addFilter(sensitive_filter)
+
 # Configurar logging
 logging.basicConfig(
     format='%(asctime)s %(levelname)s %(name)s %(message)s',
     level=logging.INFO
 )
+_install_sensitive_log_filter()
 logger = logging.getLogger(__name__)
 
 # ======================================================
