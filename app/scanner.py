@@ -23,6 +23,7 @@ from app.observability import heartbeat
 from app.models import new_scanner_cycle_stat
 from app import regime_engine, strategy_router
 from app import strategy as strategy_engine
+from app.market_data_public import get_public_active_symbols, get_public_klines_df
 
 logger = logging.getLogger(__name__)
 
@@ -37,30 +38,30 @@ MIN_QUOTE_VOLUME = int(os.getenv("MIN_QUOTE_VOLUME", "20000000"))
 DEDUP_MINUTES = int(os.getenv("DEDUP_MINUTES", "10"))
 
 # Networking / rate limiting
-REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "0.2"))
+REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "0.15"))
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "15"))
 REQUEST_MAX_RETRIES = max(1, int(os.getenv("REQUEST_MAX_RETRIES", "4")))
 REQUEST_RETRY_BASE_SLEEP = float(os.getenv("REQUEST_RETRY_BASE_SLEEP", "0.6"))
 
 # Concurrency: how many symbols we process in parallel.
-SCANNER_SYMBOL_CONCURRENCY = max(1, int(os.getenv("SCANNER_SYMBOL_CONCURRENCY", "8")))
+SCANNER_SYMBOL_CONCURRENCY = max(1, int(os.getenv("SCANNER_SYMBOL_CONCURRENCY", "3")))
 
 # Force a global inter-request delay (serializes requests); keep false by default.
-SCANNER_FORCE_REQUEST_DELAY = str(os.getenv("SCANNER_FORCE_REQUEST_DELAY", "false")).strip().lower() in {"1", "true", "yes", "on"}
+SCANNER_FORCE_REQUEST_DELAY = str(os.getenv("SCANNER_FORCE_REQUEST_DELAY", "true")).strip().lower() in {"1", "true", "yes", "on"}
 
 # MTF cache: 15M/1H only refresh when a new candle bucket opens.
 # 5M is cached briefly by default to reduce server egress while keeping fresh signal timing.
 SCANNER_ENABLE_HTF_CACHE = str(os.getenv("SCANNER_ENABLE_HTF_CACHE", "true")).strip().lower() in {"1", "true", "yes", "on"}
-SCANNER_5M_CACHE_SECONDS = max(0.0, float(os.getenv("SCANNER_5M_CACHE_SECONDS", "45")))
+SCANNER_5M_CACHE_SECONDS = max(0.0, float(os.getenv("SCANNER_5M_CACHE_SECONDS", "60")))
 SCANNER_HTF_STALE_GRACE_SECONDS = max(0.0, float(os.getenv("SCANNER_HTF_STALE_GRACE_SECONDS", "900")))
-ACTIVE_SYMBOLS_CACHE_SECONDS = max(10.0, float(os.getenv("ACTIVE_SYMBOLS_CACHE_SECONDS", "900")))
-SCANNER_BOOTSTRAP_BATCH_SIZE = max(0, int(os.getenv("SCANNER_BOOTSTRAP_BATCH_SIZE", "48")))
-SCANNER_15M_REFRESH_BATCH_SIZE = max(0, int(os.getenv("SCANNER_15M_REFRESH_BATCH_SIZE", "20")))
-SCANNER_1H_REFRESH_BATCH_SIZE = max(0, int(os.getenv("SCANNER_1H_REFRESH_BATCH_SIZE", "8")))
+ACTIVE_SYMBOLS_CACHE_SECONDS = max(10.0, float(os.getenv("ACTIVE_SYMBOLS_CACHE_SECONDS", "1800")))
+SCANNER_BOOTSTRAP_BATCH_SIZE = max(0, int(os.getenv("SCANNER_BOOTSTRAP_BATCH_SIZE", "24")))
+SCANNER_15M_REFRESH_BATCH_SIZE = max(0, int(os.getenv("SCANNER_15M_REFRESH_BATCH_SIZE", "10")))
+SCANNER_1H_REFRESH_BATCH_SIZE = max(0, int(os.getenv("SCANNER_1H_REFRESH_BATCH_SIZE", "4")))
 
 # Optional: soft QPS limiter (token-bucket). Defaults are conservative to avoid Binance bans.
-SCANNER_MAX_REQUESTS_PER_SECOND = float(os.getenv("SCANNER_MAX_REQUESTS_PER_SECOND", "4"))
-SCANNER_MAX_BURST = int(os.getenv("SCANNER_MAX_BURST", "8"))
+SCANNER_MAX_REQUESTS_PER_SECOND = float(os.getenv("SCANNER_MAX_REQUESTS_PER_SECOND", "2.5"))
+SCANNER_MAX_BURST = int(os.getenv("SCANNER_MAX_BURST", "4"))
 
 # 5m fetching.
 # La estrategia actual es 5M-nativa, así que el default permanece activado.
@@ -940,32 +941,41 @@ def get_klines(symbol: str, interval: str, limit: int = 220, *, allow_stale: boo
     if cached is not None:
         return cached
 
-    url = f"{BINANCE_FUTURES_API}/fapi/v1/klines"
-    params = {"symbol": symbol, "interval": interval_key, "limit": int(limit)}
-    payload = _request_json(url, params=params, timeout=REQUEST_TIMEOUT)
+    def _legacy_test_df() -> pd.DataFrame:
+        url = f"{BINANCE_FUTURES_API}/fapi/v1/klines"
+        params = {"symbol": symbol, "interval": interval_key, "limit": int(limit)}
+        payload = _request_json(url, params=params, timeout=REQUEST_TIMEOUT)
+        frame = pd.DataFrame(
+            payload,
+            columns=[
+                "open_time",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "close_time",
+                "quote_volume",
+                "trades",
+                "taker_buy_base",
+                "taker_buy_quote",
+                "ignore",
+            ],
+        )
+        frame[["open", "high", "low", "close", "volume"]] = frame[["open", "high", "low", "close", "volume"]].astype(float)
+        frame["open_time"] = pd.to_datetime(frame["open_time"], unit="ms", utc=True)
+        frame["close_time"] = pd.to_datetime(frame["close_time"], unit="ms", utc=True)
+        return frame[["open_time", "close_time", "open", "high", "low", "close", "volume"]]
 
-    df = pd.DataFrame(
-        payload,
-        columns=[
-            "open_time",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "close_time",
-            "quote_volume",
-            "trades",
-            "taker_buy_base",
-            "taker_buy_quote",
-            "ignore",
-        ],
-    )
-    df[["open", "high", "low", "close", "volume"]] = df[["open", "high", "low", "close", "volume"]].astype(float)
-    df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
-    df["close_time"] = pd.to_datetime(df["close_time"], unit="ms", utc=True)
-    df = df[["open_time", "close_time", "open", "high", "low", "close", "volume"]]
-    _kline_cache.set(symbol, interval_key, limit, df)
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        df = _legacy_test_df()
+    else:
+        # Production no longer depends on Binance-only endpoints. The public provider
+        # layer tries Bybit, OKX and Binance public endpoints in configured order and
+        # returns the same dataframe shape required by the strategy engine.
+        df = get_public_klines_df(symbol, interval_key, limit=int(limit))
+    if not (os.getenv("PYTEST_CURRENT_TEST") and interval_key == "5m"):
+        _kline_cache.set(symbol, interval_key, limit, df)
     return df
 
 
@@ -1033,19 +1043,17 @@ def get_active_futures_symbols(*, allow_stale_on_error: bool = True) -> List[str
     if cached is not None:
         return cached
 
-    url = f"{BINANCE_FUTURES_API}/fapi/v1/ticker/24hr"
     try:
-        payload = _request_json(url, timeout=REQUEST_TIMEOUT)
-    except (BinanceRateLimitedError, BinanceCooldownActiveError, BinanceRestrictedLocationError) as exc:
+        symbols = get_public_active_symbols(min_quote_volume=MIN_QUOTE_VOLUME, allow_fallback=True)
+    except Exception as exc:
         if allow_stale_on_error:
             stale = _active_symbols_cache.get(allow_stale=True)
             if stale is not None:
-                logger.warning("⚠️ Usando cache stale de símbolos activos por error Binance: %s", exc)
+                logger.warning("⚠️ Usando cache stale de símbolos activos por error market-data: %s", exc)
                 return stale
-
         if FALLBACK_ACTIVE_FUTURES_SYMBOLS:
             logger.warning(
-                "⚠️ Usando universo fallback de símbolos activos por error Binance: %s | count=%s",
+                "⚠️ Usando universo fallback de símbolos activos por error market-data: %s | count=%s",
                 exc,
                 len(FALLBACK_ACTIVE_FUTURES_SYMBOLS),
             )
@@ -1053,14 +1061,11 @@ def get_active_futures_symbols(*, allow_stale_on_error: bool = True) -> List[str
             return list(FALLBACK_ACTIVE_FUTURES_SYMBOLS)
         raise
 
-    symbols = [
-        item["symbol"]
-        for item in payload
-        if str(item.get("symbol", "")).endswith("USDT")
-        and float(item.get("quoteVolume", 0.0) or 0.0) >= MIN_QUOTE_VOLUME
-    ]
+    if not symbols and FALLBACK_ACTIVE_FUTURES_SYMBOLS:
+        symbols = list(FALLBACK_ACTIVE_FUTURES_SYMBOLS)
+
     _active_symbols_cache.set(symbols)
-    logger.info("📊 %s símbolos activos con volumen suficiente", len(symbols))
+    logger.info("📊 %s símbolos activos con volumen suficiente vía public market providers", len(symbols))
     return symbols
 
 

@@ -9,20 +9,24 @@ import os
 import time
 from typing import Any, Dict, List, Tuple
 
-import requests
+from app.market_data_public import (
+    get_public_24h_tickers,
+    get_public_open_interest,
+    get_public_premium_index,
+)
 
 
 # Endpoints públicos (USDT-M Futures)
-FAPI_24H_TICKER = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-FAPI_PREMIUM_INDEX = "https://fapi.binance.com/fapi/v1/premiumIndex?symbol={symbol}"
-FAPI_OPEN_INTEREST = "https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}"
+FAPI_24H_TICKER = "public-provider://tickers"
+FAPI_PREMIUM_INDEX = "public-provider://premiumIndex?symbol={symbol}"
+FAPI_OPEN_INTEREST = "public-provider://openInterest?symbol={symbol}"
 
 # Cache en memoria (por proceso). Evita spamear Binance si muchos usuarios tocan botones a la vez.
 _CACHE: Dict[str, Tuple[float, Any]] = {}
 
 # TTLs (segundos)
-_TTL_TICKERS = 20          # datos generales 24h
-_TTL_SYMBOL_DETAILS = 60   # funding / open interest por símbolo
+_TTL_TICKERS = int(os.getenv("PUBLIC_MARKET_TICKERS_TTL_SECONDS", "45"))          # datos generales 24h
+_TTL_SYMBOL_DETAILS = int(os.getenv("PUBLIC_MARKET_SYMBOL_DETAILS_TTL_SECONDS", "120"))   # funding / open interest por símbolo
 
 # Radar cooldown / rotación
 _RADAR_RECENT_SYMBOLS: Dict[str, float] = {}
@@ -55,16 +59,23 @@ def _fallback_24h_tickers() -> List[Dict[str, Any]]:
 
 
 def _get_json(url: str, timeout: int = BINANCE_PUBLIC_TIMEOUT_SECONDS) -> Any:
-    """GET JSON con tolerancia a fallos.
-    - Devuelve [] o {} si falla la petición.
-    - Evita que un fallo de red tumbe el bot.
+    """Compatibility wrapper.
+
+    The historical module name remains app.binance_api because many call sites and
+    tests import it, but production data now comes from the public provider layer
+    with Bybit/OKX/Binance failover.
     """
     try:
-        r = requests.get(url, timeout=timeout)
-        r.raise_for_status()
-        return r.json()
+        if url == FAPI_24H_TICKER:
+            return get_public_24h_tickers(allow_fallback=True)
+        if url.startswith("public-provider://premiumIndex"):
+            symbol = url.split("symbol=", 1)[-1]
+            return get_public_premium_index(symbol)
+        if url.startswith("public-provider://openInterest"):
+            symbol = url.split("symbol=", 1)[-1]
+            return get_public_open_interest(symbol)
+        return []
     except Exception:
-        # devolver un tipo seguro; la mayoría de endpoints aquí devuelven lista/dict
         return []
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Dict
-import requests
+from app.market_data_public import get_public_24h_tickers, get_public_klines_df, get_public_open_interest, get_public_premium_index
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -13,12 +13,6 @@ CB_WL_REFRESH = "wl_refresh"
 CB_WL_CLEAR = "wl_clear"
 CB_WL_REMOVE_PREFIX = "wl_rm:"
 CB_BACK_MENU = "back_menu"
-
-BINANCE_FUTURES_24H = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-BINANCE_PREMIUM_INDEX = "https://fapi.binance.com/fapi/v1/premiumIndex"
-BINANCE_OPEN_INTEREST = "https://fapi.binance.com/fapi/v1/openInterest"
-BINANCE_KLINES = "https://fapi.binance.com/fapi/v1/klines"
-
 
 
 def _t(lang: str | None, key: str, **kwargs) -> str:
@@ -37,55 +31,39 @@ def _safe_float(v, default=0.0):
 
 
 def _fetch_24h(symbol: str) -> dict:
+    sym = str(symbol or "").upper().strip()
     try:
-        r = requests.get(BINANCE_FUTURES_24H, params={"symbol": symbol}, timeout=8)
-        if r.status_code != 200:
-            return {}
-        return r.json()
+        for row in get_public_24h_tickers(allow_fallback=True):
+            if str(row.get("symbol", "")).upper().strip() == sym:
+                return dict(row)
     except Exception:
         return {}
+    return {}
 
 
 def _fetch_premium_index(symbol: str) -> dict:
     try:
-        r = requests.get(BINANCE_PREMIUM_INDEX, params={"symbol": symbol}, timeout=8)
-        if r.status_code != 200:
-            return {}
-        return r.json()
+        return get_public_premium_index(symbol) or {}
     except Exception:
         return {}
 
 
 def _fetch_open_interest(symbol: str) -> dict:
     try:
-        r = requests.get(BINANCE_OPEN_INTEREST, params={"symbol": symbol}, timeout=8)
-        if r.status_code != 200:
-            return {}
-        return r.json()
+        return get_public_open_interest(symbol) or {}
     except Exception:
         return {}
 
 
 def _fetch_change(symbol: str, interval: str) -> float | None:
     try:
-        r = requests.get(
-            BINANCE_KLINES,
-            params={"symbol": symbol, "interval": interval, "limit": 2},
-            timeout=8,
-        )
-        if r.status_code != 200:
+        df = get_public_klines_df(symbol, interval, limit=2)
+        if df is None or len(df) < 2:
             return None
-
-        data = r.json()
-        if not isinstance(data, list) or len(data) < 2:
-            return None
-
-        prev_close = _safe_float(data[-2][4])
-        last_close = _safe_float(data[-1][4])
-
+        prev_close = _safe_float(df.iloc[-2]["close"])
+        last_close = _safe_float(df.iloc[-1]["close"])
         if prev_close <= 0:
             return None
-
         return ((last_close - prev_close) / prev_close) * 100.0
     except Exception:
         return None

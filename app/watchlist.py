@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Iterable, List, Optional, Set
-import requests
+from app.market_data_public import get_valid_public_symbols
 
 from app.database import watchlists_collection
 from app.models import WATCHLIST_SCHEMA_VERSION, new_watchlist
 
-BINANCE_INFO_URL = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+PUBLIC_MARKET_INFO_SOURCE = "public-provider://symbols"
+
 
 collection = watchlists_collection()
 
@@ -16,31 +17,13 @@ def _now():
     return datetime.now(timezone.utc)
 
 
-def _safe_json_get(url: str, timeout: int = 10):
-    try:
-        r = requests.get(url, timeout=timeout)
-        if r.status_code != 200:
-            return None
-        return r.json()
-    except Exception:
-        return None
 
 
 def get_valid_symbols() -> Set[str]:
-    data = _safe_json_get(BINANCE_INFO_URL, timeout=10)
-    if not data or "symbols" not in data:
+    try:
+        return get_valid_public_symbols()
+    except Exception:
         return set()
-
-    symbols = set()
-    for item in data.get("symbols", []):
-        try:
-            if item.get("contractType") == "PERPETUAL" and item.get("status") == "TRADING":
-                sym = str(item.get("symbol", "")).upper().strip()
-                if sym.endswith("USDT"):
-                    symbols.add(sym)
-        except Exception:
-            continue
-    return symbols
 
 
 def normalize_symbol(symbol: str) -> Optional[str]:
@@ -137,7 +120,7 @@ def add_symbol(user_id: int, symbol: str, plan: str = "FREE"):
 
     valid = get_valid_symbols()
     if valid and sym not in valid:
-        return False, f"❌ {sym} no es un contrato válido de Binance Futures USDT-M."
+        return False, f"❌ {sym} no es un contrato USDT válido en los proveedores públicos soportados."
 
     current = get_symbols(int(user_id))
     if sym in current:
