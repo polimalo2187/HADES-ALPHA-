@@ -48,8 +48,27 @@ _TTL_TICKERS = int(os.getenv("PUBLIC_MARKET_TICKERS_TTL_SECONDS", "45"))
 _TTL_SYMBOL_DETAILS = int(os.getenv("PUBLIC_MARKET_SYMBOL_DETAILS_TTL_SECONDS", "120"))
 _TTL_KLINES = int(os.getenv("PUBLIC_MARKET_KLINES_TTL_SECONDS", "25"))
 
+# Provider health / circuit breaker. This is deliberately process-local and cheap:
+# it prevents repeated calls to a provider that already returned a hard block
+# (Binance 451, WAF 403, rate-limit 429/418, etc.) without adding Redis/DB load.
+_PROVIDER_HEALTH_ENABLED = str(os.getenv("PUBLIC_MARKET_PROVIDER_HEALTH_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
+_PROVIDER_RESTRICTED_COOLDOWN_SECONDS = max(60, int(os.getenv("PUBLIC_MARKET_PROVIDER_RESTRICTED_COOLDOWN_SECONDS", "1800")))
+_PROVIDER_FORBIDDEN_COOLDOWN_SECONDS = max(30, int(os.getenv("PUBLIC_MARKET_PROVIDER_FORBIDDEN_COOLDOWN_SECONDS", "300")))
+_PROVIDER_RATE_LIMIT_COOLDOWN_SECONDS = max(30, int(os.getenv("PUBLIC_MARKET_PROVIDER_RATE_LIMIT_COOLDOWN_SECONDS", "300")))
+_PROVIDER_5XX_COOLDOWN_SECONDS = max(10, int(os.getenv("PUBLIC_MARKET_PROVIDER_5XX_COOLDOWN_SECONDS", "60")))
+_SYMBOL_PROVIDER_MISS_TTL_SECONDS = max(60, int(os.getenv("PUBLIC_MARKET_SYMBOL_PROVIDER_MISS_TTL_SECONDS", "900")))
+
+_PROVIDER_HEALTH: Dict[str, Dict[str, Any]] = {}
+_PROVIDER_HEALTH_LOCK = threading.Lock()
+_SYMBOL_PROVIDER_MISSES: Dict[Tuple[str, str, str], float] = {}
+_SYMBOL_PROVIDER_MISSES_LOCK = threading.Lock()
+
 
 class PublicMarketDataError(RuntimeError):
+    pass
+
+
+class ProviderCircuitOpen(PublicMarketDataError):
     pass
 
 
@@ -90,12 +109,166 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def _public_get_json(url: str, *, params: Optional[dict] = None, timeout: int = PUBLIC_MARKET_TIMEOUT_SECONDS) -> Any:
+def _infer_provider_from_url(url: str) -> str:
+    value = str(url or "").lower()
+    if "bybit" in value:
+        return "bybit"
+    if "okx" in value:
+        return "okx"
+    if "binance" in value:
+        return "binance"
+    return "unknown"
+
+
+def _provider_health_snapshot() -> Dict[str, Dict[str, Any]]:
+    now = time.time()
+    with _PROVIDER_HEALTH_LOCK:
+        return {
+            provider: dict(state)
+            for provider, state in _PROVIDER_HEALTH.items()
+            if float(state.get("cooldown_until", 0.0) or 0.0) > now
+        }
+
+
+def get_public_provider_health() -> Dict[str, Dict[str, Any]]:
+    """Return currently open provider circuits for diagnostics/admin logs."""
+    snapshot = _provider_health_snapshot()
+    now = time.time()
+    for state in snapshot.values():
+        state["remaining_seconds"] = max(0.0, float(state.get("cooldown_until", 0.0) or 0.0) - now)
+    return snapshot
+
+
+def _provider_cooldown_remaining(provider: str) -> float:
+    if not _PROVIDER_HEALTH_ENABLED:
+        return 0.0
+    provider = str(provider or "unknown").lower().strip()
+    now = time.time()
+    with _PROVIDER_HEALTH_LOCK:
+        state = _PROVIDER_HEALTH.get(provider)
+        if not state:
+            return 0.0
+        until = float(state.get("cooldown_until", 0.0) or 0.0)
+        if until <= now:
+            _PROVIDER_HEALTH.pop(provider, None)
+            return 0.0
+        return until - now
+
+
+def _provider_available(provider: str) -> bool:
+    return _provider_cooldown_remaining(provider) <= 0.0
+
+
+def _provider_unavailable_error(provider: str) -> ProviderCircuitOpen:
+    state = _provider_health_snapshot().get(str(provider or "unknown").lower().strip(), {})
+    remaining = max(0.0, float(state.get("cooldown_until", 0.0) or 0.0) - time.time())
+    reason = str(state.get("reason") or "provider_circuit_open")
+    return ProviderCircuitOpen(f"{provider} circuit_open remaining={remaining:.1f}s reason={reason[:120]}")
+
+
+def _mark_provider_unhealthy(provider: str, reason: str, cooldown_seconds: int, *, status_code: Optional[int] = None) -> None:
+    if not _PROVIDER_HEALTH_ENABLED:
+        return
+    provider = str(provider or "unknown").lower().strip()
+    if provider not in {"bybit", "okx", "binance"}:
+        return
+    cooldown_seconds = max(1, int(cooldown_seconds))
+    until = time.time() + cooldown_seconds
+    with _PROVIDER_HEALTH_LOCK:
+        previous = _PROVIDER_HEALTH.get(provider) or {}
+        previous_until = float(previous.get("cooldown_until", 0.0) or 0.0)
+        if previous_until >= until:
+            return
+        _PROVIDER_HEALTH[provider] = {
+            "cooldown_until": until,
+            "reason": str(reason or "provider_unhealthy"),
+            "status_code": status_code,
+            "marked_at": time.time(),
+        }
+    logger.warning(
+        "⛔ Public market provider circuit opened | provider=%s | cooldown=%ss | status=%s | reason=%s",
+        provider,
+        cooldown_seconds,
+        status_code,
+        str(reason or "")[:180],
+    )
+
+
+def _clear_provider_health(provider: str) -> None:
+    if not _PROVIDER_HEALTH_ENABLED:
+        return
+    provider = str(provider or "unknown").lower().strip()
+    with _PROVIDER_HEALTH_LOCK:
+        _PROVIDER_HEALTH.pop(provider, None)
+
+
+def _retry_after_seconds(response: requests.Response, default: int) -> int:
+    try:
+        retry_after = response.headers.get("Retry-After") if getattr(response, "headers", None) else None
+        if retry_after is not None:
+            return max(1, int(float(retry_after)))
+    except Exception:
+        pass
+    return int(default)
+
+
+def _public_get_json(
+    url: str,
+    *,
+    params: Optional[dict] = None,
+    timeout: int = PUBLIC_MARKET_TIMEOUT_SECONDS,
+    provider: Optional[str] = None,
+) -> Any:
+    provider_name = str(provider or _infer_provider_from_url(url)).lower().strip()
+    if provider_name in {"bybit", "okx", "binance"} and not _provider_available(provider_name):
+        raise _provider_unavailable_error(provider_name)
+
     response = requests.get(url, params=params, timeout=timeout)
-    if response.status_code == 451:
-        raise PublicMarketDataError(f"restricted_location status=451 url={url} body={response.text[:160]}")
+    status = int(getattr(response, "status_code", 0) or 0)
+    body = str(getattr(response, "text", "") or "")
+
+    if status == 451:
+        _mark_provider_unhealthy(
+            provider_name,
+            f"restricted_location status=451 url={url} body={body[:160]}",
+            _PROVIDER_RESTRICTED_COOLDOWN_SECONDS,
+            status_code=status,
+        )
+        raise PublicMarketDataError(f"restricted_location status=451 provider={provider_name} url={url} body={body[:160]}")
+
+    if status == 403:
+        _mark_provider_unhealthy(
+            provider_name,
+            f"forbidden status=403 url={url} body={body[:160]}",
+            _PROVIDER_FORBIDDEN_COOLDOWN_SECONDS,
+            status_code=status,
+        )
+        raise PublicMarketDataError(f"forbidden status=403 provider={provider_name} url={url} body={body[:160]}")
+
+    if status in (418, 429):
+        cooldown = _retry_after_seconds(response, _PROVIDER_RATE_LIMIT_COOLDOWN_SECONDS)
+        _mark_provider_unhealthy(
+            provider_name,
+            f"rate_limited status={status} url={url} body={body[:160]}",
+            cooldown,
+            status_code=status,
+        )
+        raise PublicMarketDataError(f"rate_limited status={status} provider={provider_name} url={url} body={body[:160]}")
+
+    if 500 <= status < 600:
+        _mark_provider_unhealthy(
+            provider_name,
+            f"upstream_5xx status={status} url={url} body={body[:160]}",
+            _PROVIDER_5XX_COOLDOWN_SECONDS,
+            status_code=status,
+        )
+        raise PublicMarketDataError(f"upstream_5xx status={status} provider={provider_name} url={url} body={body[:160]}")
+
     response.raise_for_status()
-    return response.json()
+    payload = response.json()
+    if provider_name in {"bybit", "okx", "binance"}:
+        _clear_provider_health(provider_name)
+    return payload
 
 
 def _provider_order() -> List[str]:
@@ -108,6 +281,48 @@ def _provider_order() -> List[str]:
         if provider not in ordered:
             ordered.append(provider)
     return ordered
+
+
+def _available_provider_order() -> List[str]:
+    return [provider for provider in _provider_order() if _provider_available(provider)]
+
+
+def _provider_skip_reason(provider: str) -> Optional[str]:
+    remaining = _provider_cooldown_remaining(provider)
+    if remaining <= 0.0:
+        return None
+    state = _provider_health_snapshot().get(str(provider or "").lower().strip(), {})
+    return f"{provider}: circuit_open remaining={remaining:.1f}s reason={str(state.get('reason') or '')[:120]}"
+
+
+def _mark_symbol_provider_miss(provider: str, symbol: str, data_kind: str, reason: str = "not_listed") -> None:
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return
+    provider = str(provider or "").lower().strip()
+    symbol = str(symbol or "").upper().strip()
+    data_kind = str(data_kind or "ticker").lower().strip()
+    if not provider or not symbol:
+        return
+    with _SYMBOL_PROVIDER_MISSES_LOCK:
+        _SYMBOL_PROVIDER_MISSES[(provider, symbol, data_kind)] = time.time() + _SYMBOL_PROVIDER_MISS_TTL_SECONDS
+
+
+def _symbol_provider_recently_missed(provider: str, symbol: str, data_kind: str) -> bool:
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return False
+    provider = str(provider or "").lower().strip()
+    symbol = str(symbol or "").upper().strip()
+    data_kind = str(data_kind or "ticker").lower().strip()
+    key = (provider, symbol, data_kind)
+    now = time.time()
+    with _SYMBOL_PROVIDER_MISSES_LOCK:
+        expires_at = _SYMBOL_PROVIDER_MISSES.get(key)
+        if not expires_at:
+            return False
+        if now >= expires_at:
+            _SYMBOL_PROVIDER_MISSES.pop(key, None)
+            return False
+        return True
 
 
 def get_public_provider_order() -> List[str]:
@@ -195,7 +410,7 @@ def _fallback_24h_tickers() -> List[Dict[str, Any]]:
 
 
 def _fetch_bybit_tickers() -> List[Dict[str, Any]]:
-    data = _public_get_json("https://api.bybit.com/v5/market/tickers", params={"category": "linear"})
+    data = _public_get_json("https://api.bybit.com/v5/market/tickers", params={"category": "linear"}, provider="bybit")
     rows = (((data or {}).get("result") or {}).get("list") or [])
     normalized: List[Dict[str, Any]] = []
     for item in rows:
@@ -229,7 +444,7 @@ def _fetch_bybit_tickers() -> List[Dict[str, Any]]:
 
 
 def _fetch_okx_tickers() -> List[Dict[str, Any]]:
-    data = _public_get_json("https://www.okx.com/api/v5/market/tickers", params={"instType": "SWAP"})
+    data = _public_get_json("https://www.okx.com/api/v5/market/tickers", params={"instType": "SWAP"}, provider="okx")
     rows = (data or {}).get("data") or []
     normalized: List[Dict[str, Any]] = []
     for item in rows:
@@ -261,7 +476,7 @@ def _fetch_okx_tickers() -> List[Dict[str, Any]]:
 
 
 def _fetch_binance_tickers() -> List[Dict[str, Any]]:
-    data = _public_get_json("https://fapi.binance.com/fapi/v1/ticker/24hr")
+    data = _public_get_json("https://fapi.binance.com/fapi/v1/ticker/24hr", provider="binance")
     if not isinstance(data, list) or not data:
         raise PublicMarketDataError("binance returned no futures tickers")
     for row in data:
@@ -332,6 +547,10 @@ def get_public_24h_tickers(*, allow_fallback: bool = True) -> List[Dict[str, Any
     provider_counts: Dict[str, int] = {}
 
     for provider in _provider_order():
+        skip_reason = _provider_skip_reason(provider)
+        if skip_reason:
+            errors.append(skip_reason)
+            continue
         try:
             if provider == "bybit":
                 payload = _fetch_bybit_tickers()
@@ -400,6 +619,7 @@ def _fetch_bybit_symbol_ticker(symbol: str) -> Dict[str, Any]:
     data = _public_get_json(
         "https://api.bybit.com/v5/market/tickers",
         params={"category": "linear", "symbol": symbol.upper()},
+        provider="bybit",
     )
     rows = (((data or {}).get("result") or {}).get("list") or [])
     if not rows:
@@ -409,7 +629,7 @@ def _fetch_bybit_symbol_ticker(symbol: str) -> Dict[str, Any]:
 
 def _fetch_okx_funding(symbol: str) -> Dict[str, Any]:
     inst_id = _symbol_to_okx_inst_id(symbol)
-    data = _public_get_json("https://www.okx.com/api/v5/public/funding-rate", params={"instId": inst_id})
+    data = _public_get_json("https://www.okx.com/api/v5/public/funding-rate", params={"instId": inst_id}, provider="okx")
     rows = (data or {}).get("data") or []
     if not rows:
         raise PublicMarketDataError(f"okx returned no funding for {symbol}")
@@ -418,7 +638,7 @@ def _fetch_okx_funding(symbol: str) -> Dict[str, Any]:
 
 def _fetch_okx_open_interest(symbol: str) -> Dict[str, Any]:
     inst_id = _symbol_to_okx_inst_id(symbol)
-    data = _public_get_json("https://www.okx.com/api/v5/public/open-interest", params={"instType": "SWAP", "instId": inst_id})
+    data = _public_get_json("https://www.okx.com/api/v5/public/open-interest", params={"instType": "SWAP", "instId": inst_id}, provider="okx")
     rows = (data or {}).get("data") or []
     if not rows:
         raise PublicMarketDataError(f"okx returned no open interest for {symbol}")
@@ -434,6 +654,10 @@ def get_public_premium_index(symbol: str) -> Dict[str, Any]:
 
     errors: List[str] = []
     for provider in _provider_order():
+        skip_reason = _provider_skip_reason(provider)
+        if skip_reason:
+            errors.append(skip_reason)
+            continue
         try:
             if provider == "bybit":
                 item = _fetch_bybit_symbol_ticker(symbol)
@@ -442,7 +666,7 @@ def get_public_premium_index(symbol: str) -> Dict[str, Any]:
                 item = _fetch_okx_funding(symbol)
                 payload = {"symbol": symbol, "lastFundingRate": str(_safe_float(item.get("fundingRate"))), "provider": "okx"}
             elif provider == "binance":
-                payload = _public_get_json("https://fapi.binance.com/fapi/v1/premiumIndex", params={"symbol": symbol})
+                payload = _public_get_json("https://fapi.binance.com/fapi/v1/premiumIndex", params={"symbol": symbol}, provider="binance")
                 if isinstance(payload, dict):
                     payload.setdefault("provider", "binance")
                 else:
@@ -470,6 +694,10 @@ def get_public_open_interest(symbol: str) -> Dict[str, Any]:
 
     errors: List[str] = []
     for provider in _provider_order():
+        skip_reason = _provider_skip_reason(provider)
+        if skip_reason:
+            errors.append(skip_reason)
+            continue
         try:
             if provider == "bybit":
                 item = _fetch_bybit_symbol_ticker(symbol)
@@ -478,7 +706,7 @@ def get_public_open_interest(symbol: str) -> Dict[str, Any]:
                 item = _fetch_okx_open_interest(symbol)
                 payload = {"symbol": symbol, "openInterest": str(_safe_float(item.get("oi"))), "provider": "okx"}
             elif provider == "binance":
-                payload = _public_get_json("https://fapi.binance.com/fapi/v1/openInterest", params={"symbol": symbol})
+                payload = _public_get_json("https://fapi.binance.com/fapi/v1/openInterest", params={"symbol": symbol}, provider="binance")
                 if isinstance(payload, dict):
                     payload.setdefault("provider", "binance")
                 else:
@@ -548,6 +776,7 @@ def _fetch_bybit_klines(symbol: str, interval: str, limit: int) -> pd.DataFrame:
     data = _public_get_json(
         "https://api.bybit.com/v5/market/kline",
         params={"category": "linear", "symbol": symbol.upper(), "interval": _interval_to_bybit(interval), "limit": int(limit)},
+        provider="bybit",
     )
     rows = (((data or {}).get("result") or {}).get("list") or [])
     if not rows:
@@ -559,6 +788,7 @@ def _fetch_okx_klines(symbol: str, interval: str, limit: int) -> pd.DataFrame:
     data = _public_get_json(
         "https://www.okx.com/api/v5/market/candles",
         params={"instId": _symbol_to_okx_inst_id(symbol), "bar": _interval_to_okx(interval), "limit": int(limit)},
+        provider="okx",
     )
     rows = (data or {}).get("data") or []
     if not rows:
@@ -570,6 +800,7 @@ def _fetch_binance_klines(symbol: str, interval: str, limit: int) -> pd.DataFram
     data = _public_get_json(
         "https://fapi.binance.com/fapi/v1/klines",
         params={"symbol": symbol.upper(), "interval": str(interval).lower(), "limit": int(limit)},
+        provider="binance",
     )
     if not isinstance(data, list) or not data:
         raise PublicMarketDataError(f"binance returned no klines for {symbol} {interval}")
@@ -586,6 +817,10 @@ def get_public_klines_df(symbol: str, interval: str, limit: int = 220) -> pd.Dat
 
     errors: List[str] = []
     for provider in _provider_order():
+        skip_reason = _provider_skip_reason(provider)
+        if skip_reason:
+            errors.append(skip_reason)
+            continue
         try:
             if provider == "bybit":
                 df = _fetch_bybit_klines(symbol, interval_key, limit)
@@ -620,18 +855,22 @@ def get_public_current_price(symbol: str) -> float:
         return price
     errors: List[str] = []
     for provider in _provider_order():
+        skip_reason = _provider_skip_reason(provider)
+        if skip_reason:
+            errors.append(skip_reason)
+            continue
         try:
             if provider == "bybit":
                 item = _fetch_bybit_symbol_ticker(symbol)
                 price = _safe_float(item.get("lastPrice"))
             elif provider == "okx":
-                data = _public_get_json("https://www.okx.com/api/v5/market/ticker", params={"instId": _symbol_to_okx_inst_id(symbol)})
+                data = _public_get_json("https://www.okx.com/api/v5/market/ticker", params={"instId": _symbol_to_okx_inst_id(symbol)}, provider="okx")
                 rows = (data or {}).get("data") or []
                 if not rows:
                     raise PublicMarketDataError(f"okx returned no ticker for {symbol}")
                 price = _safe_float(rows[0].get("last"))
             elif provider == "binance":
-                data = _public_get_json("https://fapi.binance.com/fapi/v1/ticker/price", params={"symbol": symbol})
+                data = _public_get_json("https://fapi.binance.com/fapi/v1/ticker/price", params={"symbol": symbol}, provider="binance")
                 price = _safe_float((data or {}).get("price"))
             else:
                 continue
@@ -707,6 +946,7 @@ def _fetch_bybit_klines_between(symbol: str, interval: str, start_ms: int, end_m
                 "end": chunk_end,
                 "limit": limit,
             },
+            provider="bybit",
         )
         rows = (((data or {}).get("result") or {}).get("list") or [])
         if not rows:
@@ -777,6 +1017,10 @@ def get_public_klines_between_rows(symbol: str, start_dt: Any, end_dt: Any, inte
 
     errors: List[str] = []
     for provider in _provider_order():
+        skip_reason = _provider_skip_reason(provider)
+        if skip_reason:
+            errors.append(skip_reason)
+            continue
         try:
             if provider == "bybit":
                 df = _fetch_bybit_klines_between(symbol, interval_key, start_ms, end_ms)

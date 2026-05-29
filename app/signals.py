@@ -1501,10 +1501,17 @@ def get_signal_tracking_for_user(user_id: int, signal_id: str, profile_name: str
 
     warnings = []
     current_price = None
+    symbol_for_price = str(user_signal.get("symbol") or base_signal.get("symbol") or "")
     try:
-        current_price = get_current_price(str(user_signal.get("symbol") or base_signal.get("symbol") or ""))
+        current_price = get_current_price(symbol_for_price)
     except Exception as exc:
-        warnings.append(f"No pude refrescar el precio en vivo: {exc}")
+        logger.warning(
+            "No se pudo refrescar precio vivo para inteligencia de señal | symbol=%s | signal_id=%s | error=%s",
+            symbol_for_price,
+            signal_id,
+            exc,
+        )
+        warnings.append("No hay precio en vivo disponible para este par en los proveedores actuales.")
 
     now = datetime.utcnow()
     telegram_window_open = isinstance(telegram_valid_until, datetime) and telegram_valid_until > now
