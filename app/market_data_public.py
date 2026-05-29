@@ -485,6 +485,160 @@ def _fetch_binance_tickers() -> List[Dict[str, Any]]:
     return data
 
 
+
+
+def _normalize_bybit_symbol_ticker(symbol: str, item: Dict[str, Any]) -> Dict[str, Any]:
+    symbol = str(symbol or item.get("symbol") or "").upper().strip()
+    last_price = _safe_float(item.get("lastPrice"))
+    prev_price = _safe_float(item.get("prevPrice24h"))
+    high_price = _safe_float(item.get("highPrice24h"), last_price)
+    low_price = _safe_float(item.get("lowPrice24h"), last_price)
+    change_pct = _safe_float(item.get("price24hPcnt")) * 100.0
+    price_change = last_price - prev_price if prev_price > 0 else 0.0
+    return {
+        "symbol": symbol,
+        "priceChangePercent": str(change_pct),
+        "priceChange": str(price_change),
+        "quoteVolume": str(_safe_float(item.get("turnover24h"))),
+        "lastPrice": str(last_price),
+        "highPrice": str(high_price),
+        "lowPrice": str(low_price),
+        "count": "0",
+        "openInterest": str(_safe_float(item.get("openInterest"))),
+        "lastFundingRate": str(_safe_float(item.get("fundingRate"))),
+        "provider": "bybit",
+    }
+
+
+def _normalize_okx_symbol_ticker(symbol: str, item: Dict[str, Any]) -> Dict[str, Any]:
+    symbol = str(symbol or _okx_inst_id_to_symbol(item.get("instId", ""))).upper().strip()
+    last_price = _safe_float(item.get("last"))
+    open_24h = _safe_float(item.get("open24h"))
+    high_price = _safe_float(item.get("high24h"), last_price)
+    low_price = _safe_float(item.get("low24h"), last_price)
+    price_change = last_price - open_24h if open_24h > 0 else 0.0
+    change_pct = ((last_price - open_24h) / open_24h * 100.0) if open_24h > 0 else 0.0
+    return {
+        "symbol": symbol,
+        "priceChangePercent": str(change_pct),
+        "priceChange": str(price_change),
+        "quoteVolume": str(_safe_float(item.get("volCcy24h"))),
+        "lastPrice": str(last_price),
+        "highPrice": str(high_price),
+        "lowPrice": str(low_price),
+        "count": "0",
+        "provider": "okx",
+    }
+
+
+def _fetch_okx_symbol_ticker(symbol: str) -> Dict[str, Any]:
+    inst_id = _symbol_to_okx_inst_id(symbol)
+    data = _public_get_json("https://www.okx.com/api/v5/market/ticker", params={"instId": inst_id}, provider="okx")
+    rows = (data or {}).get("data") or []
+    if not rows:
+        raise PublicMarketDataError(f"okx returned no ticker for {symbol}")
+    return rows[0]
+
+
+def _fetch_binance_symbol_24h_ticker(symbol: str) -> Dict[str, Any]:
+    payload = _public_get_json("https://fapi.binance.com/fapi/v1/ticker/24hr", params={"symbol": symbol.upper()}, provider="binance")
+    if not isinstance(payload, dict) or not payload:
+        raise PublicMarketDataError(f"binance returned no 24h ticker for {symbol}")
+    row = dict(payload)
+    row.setdefault("provider", "binance")
+    row["symbol"] = str(row.get("symbol") or symbol).upper().strip()
+    return row
+
+
+def get_public_24h_ticker_for_symbol(symbol: str, *, allow_direct_fetch: bool = True) -> Dict[str, Any]:
+    """Return one normalized 24h ticker for a symbol from the public provider chain.
+
+    This is intentionally separate from ``get_public_24h_tickers``. The merged
+    universe is the cheap bulk path used by scanner/radar, but watchlist cards
+    need a reliable rescue path for Binance-only or newly listed symbols that may
+    be absent from an already-warmed bulk cache. The direct path is cached per
+    symbol and only used for explicit symbols requested by the user.
+    """
+    symbol = str(symbol or "").upper().strip().replace("-", "").replace("/", "")
+    if symbol and not symbol.endswith("USDT"):
+        symbol = f"{symbol}USDT"
+    if not symbol:
+        return {}
+
+    # Fast path: use the merged bulk cache/universe first.
+    cached = _find_cached_ticker(symbol)
+    if cached:
+        return cached
+
+    key = f"public:24h_ticker_symbol:{symbol}:" + ",".join(_provider_order())
+    cached_symbol = _cache_get(key)
+    if cached_symbol is not None:
+        return dict(cached_symbol or {})
+
+    if not allow_direct_fetch:
+        return {}
+
+    errors: List[str] = []
+    for provider in _provider_order():
+        skip_reason = _provider_skip_reason(provider)
+        if skip_reason:
+            errors.append(skip_reason)
+            continue
+        if _symbol_provider_recently_missed(provider, symbol, "24h_ticker"):
+            errors.append(f"{provider}: cached_symbol_miss")
+            continue
+        try:
+            if provider == "bybit":
+                row = _normalize_bybit_symbol_ticker(symbol, _fetch_bybit_symbol_ticker(symbol))
+            elif provider == "okx":
+                row = _normalize_okx_symbol_ticker(symbol, _fetch_okx_symbol_ticker(symbol))
+            elif provider == "binance":
+                row = _fetch_binance_symbol_24h_ticker(symbol)
+            else:
+                continue
+            if _safe_float(row.get("lastPrice")) <= 0:
+                raise PublicMarketDataError(f"{provider} returned invalid 24h ticker price for {symbol}")
+            row = dict(row)
+            row["symbol"] = symbol
+            row.setdefault("provider", provider)
+            row.setdefault("providers_available", [str(row.get("provider") or provider)])
+            _cache_set(key, row, _TTL_SYMBOL_DETAILS)
+            return row
+        except Exception as exc:
+            _mark_symbol_provider_miss(provider, symbol, "24h_ticker", str(exc)[:120])
+            errors.append(f"{provider}: {exc}")
+            logger.debug("Market symbol ticker provider failed | provider=%s symbol=%s error=%s", provider, symbol, exc)
+
+    logger.info("⚪ Market symbol has no live public coverage | symbol=%s | errors=%s", symbol, " | ".join(errors)[:300])
+    _cache_set(key, {}, min(_TTL_SYMBOL_DETAILS, _SYMBOL_PROVIDER_MISS_TTL_SECONDS))
+    return {}
+
+
+def get_public_symbol_coverage_probe(symbols: Iterable[str]) -> Dict[str, Dict[str, Any]]:
+    """Cheap diagnostic map for selected symbols.
+
+    It first checks the merged universe and then, only for missing symbols, uses
+    the targeted per-symbol 24h ticker rescue path. Intended for startup/log
+    probes and support diagnostics, not for scanning hundreds of symbols.
+    """
+    result: Dict[str, Dict[str, Any]] = {}
+    for raw_symbol in symbols or []:
+        symbol = str(raw_symbol or "").upper().strip().replace("-", "").replace("/", "")
+        if symbol and not symbol.endswith("USDT"):
+            symbol = f"{symbol}USDT"
+        if not symbol:
+            continue
+        row = get_public_24h_ticker_for_symbol(symbol, allow_direct_fetch=True)
+        result[symbol] = {
+            "covered": bool(row),
+            "provider": str((row or {}).get("provider") or "none"),
+            "lastPrice": str((row or {}).get("lastPrice") or "0"),
+            "quoteVolume": str((row or {}).get("quoteVolume") or "0"),
+            "providers_available": list((row or {}).get("providers_available") or []),
+        }
+    return result
+
+
 def _merge_ticker_payloads(provider_payloads: Sequence[ProviderResult]) -> List[Dict[str, Any]]:
     """Merge 24h ticker universes across public providers.
 
@@ -864,14 +1018,14 @@ def get_public_current_price(symbol: str) -> float:
                 item = _fetch_bybit_symbol_ticker(symbol)
                 price = _safe_float(item.get("lastPrice"))
             elif provider == "okx":
-                data = _public_get_json("https://www.okx.com/api/v5/market/ticker", params={"instId": _symbol_to_okx_inst_id(symbol)}, provider="okx")
-                rows = (data or {}).get("data") or []
-                if not rows:
-                    raise PublicMarketDataError(f"okx returned no ticker for {symbol}")
-                price = _safe_float(rows[0].get("last"))
+                item = _fetch_okx_symbol_ticker(symbol)
+                price = _safe_float(item.get("last"))
             elif provider == "binance":
-                data = _public_get_json("https://fapi.binance.com/fapi/v1/ticker/price", params={"symbol": symbol}, provider="binance")
-                price = _safe_float((data or {}).get("price"))
+                # Prefer the richer 24h endpoint; it is the same Futures market
+                # source used by coverage/watchlist and avoids a second endpoint
+                # shape when ticker/price is restricted or stale.
+                data = _fetch_binance_symbol_24h_ticker(symbol)
+                price = _safe_float((data or {}).get("lastPrice"))
             else:
                 continue
             if price > 0:
