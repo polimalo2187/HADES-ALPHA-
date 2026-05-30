@@ -53,6 +53,7 @@ from app.miniapp.service import (
 from app.observability import build_runtime_health_report, heartbeat, record_audit_event, start_background_heartbeat
 from app.oraculum_bridge import OraculumBridgeError, create_oraculum_link
 from app.sentinel_bridge import SentinelBridgeError, create_sentinel_link
+from app.hades_guide_bridge import HadesGuideBridgeError, create_hades_guide_link
 from app.services.admin_runtime_service import (
     get_admin_operational_overview,
     get_admin_runtime_health_matrix,
@@ -450,6 +451,9 @@ def create_mini_app() -> FastAPI:
             "premium": not str(user.get("subscription_status") or "").lower() in {"free", "expired"},
             "oraculum_configured": bool(os.getenv("ORACULUM_URL")),
             "sentinel_configured": bool(os.getenv("SENTINEL_URL")),
+            # Hades Guide tiene URL default segura en app.hades_guide_bridge;
+            # esta bandera queda true salvo que se quite explícitamente en código.
+            "hades_guide_configured": True,
             "plan_name": user.get("plan_name"),
             "days_left": user.get("days_left"),
         }
@@ -504,6 +508,42 @@ def create_mini_app() -> FastAPI:
             metadata={
                 "expires_in_seconds": payload.get("expires_in_seconds"),
                 "premium_until": payload.get("premium_until"),
+            },
+        )
+        return payload
+
+    @app.post("/api/miniapp/guide/link")
+    async def miniapp_hades_guide_link(request: Request, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
+        """Crea un acceso temporal HADES → Hades Guide.
+
+        Este endpoint existía en el frontend, pero faltaba en el backend; por eso
+        los botones de Inicio y Cuenta parecían no responder. Hades Guide no exige
+        premium: solo requiere sesión válida y usuario no bloqueado.
+        """
+        try:
+            payload = create_hades_guide_link(user, request_id=getattr(request.state, "request_id", None))
+        except HadesGuideBridgeError as exc:
+            detail = str(exc) or "hades_guide_link_failed"
+            status_code = 403 if detail == "user_banned" else 400
+            record_audit_event(
+                event_type="hades_guide_link_failed",
+                status="warning",
+                module="miniapp",
+                user_id=int(user.get("user_id") or 0),
+                message=detail,
+                metadata={"request_id": getattr(request.state, "request_id", None)},
+            )
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+
+        record_audit_event(
+            event_type="hades_guide_link_created",
+            status="ok",
+            module="miniapp",
+            user_id=int(user.get("user_id") or 0),
+            message="hades_guide_link_created",
+            metadata={
+                "expires_in_seconds": payload.get("expires_in_seconds"),
+                "request_id": getattr(request.state, "request_id", None),
             },
         )
         return payload
