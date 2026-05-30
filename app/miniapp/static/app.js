@@ -829,22 +829,24 @@ async function createAndOpenHadesGuideLink(button = null) {
     const result = await api('/api/miniapp/guide/link', { method: 'POST' });
     if (!result?.url) throw new Error('hades_guide_link_unavailable');
 
-    setAccountNotice('Hades Guide vinculado. Abriendo centro de conocimiento...', 'positive');
+    const message = 'Hades Guide vinculado. Abriendo centro de conocimiento...';
+    setAccountNotice(message, 'positive');
     if (button) button.textContent = 'Abriendo...';
     openExternalUrl(result.url);
   } catch (error) {
-    const raw = String(error?.message || error || '').trim();
-    const map = {
-      hades_guide_url_not_configured: 'HADES_GUIDE_URL no está configurado en Railway.',
-      hades_guide_link_unavailable: 'El backend no devolvió la URL de Hades Guide.',
-      user_banned: 'Tu cuenta no tiene acceso porque está restringida.',
-      request_failed_401: 'Tu sesión de HADES expiró. Cierra y vuelve a abrir la Mini App desde Telegram.',
-      request_failed_403: 'Tu cuenta no tiene acceso a Hades Guide.',
-    };
-    const key = raw.toLowerCase().replaceAll(' ', '_');
-    setAccountNotice(map[key] || `No se pudo abrir ${productName}: ${raw || 'error desconocido'}`, 'negative');
+    const display = bridgeErrorMessage(productName, error);
+    setAccountNotice(display, 'negative');
+    if (state.currentView === 'account') {
+      renderAccount();
+      bindViewButtons();
+    }
+    try {
+      tg?.showAlert(display);
+    } catch (_) {
+      window.alert(display);
+    }
   } finally {
-    if (button) {
+    if (button && button.isConnected) {
       button.disabled = false;
       button.textContent = original || 'Abrir Hades Guide';
     }

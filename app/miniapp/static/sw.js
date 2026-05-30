@@ -2,7 +2,7 @@
 // Versión: 1.0.1
 // Estrategia: Cache-first para assets estáticos, Network-first para API
 
-const CACHE_NAME = 'hades-liquid-sweep-no-entry-v1'; // FIX: bump para desalojar caché vieja que guardó manifest roto
+const CACHE_NAME = 'hades-guide-link-fix-v1'; // FIX: bump para desalojar caché vieja que guardó manifest roto
 const STATIC_ASSETS = [
   '/miniapp/static/index.html',
   '/miniapp/static/app.css',
