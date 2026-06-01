@@ -12,14 +12,14 @@ LIQUIDITY_PIVOT_LEFT = max(1, int(os.getenv("LIQUIDITY_PIVOT_LEFT", "2")))
 LIQUIDITY_PIVOT_RIGHT = max(1, int(os.getenv("LIQUIDITY_PIVOT_RIGHT", "2")))
 SWEEP_SEARCH_BARS = max(2, int(os.getenv("LIQUIDITY_SWEEP_SEARCH_BARS", "4")))
 MIN_HISTORY_BARS = max(LIQUIDITY_LOOKBACK + 4, 36)
-SCORE_CALIBRATION_VERSION = "v4_4_liquidity_sweep_quality_micro_tightened"
+SCORE_CALIBRATION_VERSION = "v4_5_liquidity_sweep_entry_quality_tightened"
 ENTRY_MODEL_NAME = "liquidity_sweep_reversal_pullback_execution_v2"
 SETUP_STAGE_WAITING_PULLBACK = "confirmed_waiting_pullback"
 SEND_MODE_PENDING_ENTRY = breakout.SEND_MODE_PENDING_ENTRY
 
-PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "86"))
-PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "79"))
-FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "73"))
+PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "87"))
+PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "80"))
+FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "74"))
 
 
 FREE_PROFILE = {
@@ -27,13 +27,13 @@ FREE_PROFILE = {
     "atr_pct_min": breakout._env_float("LSR_FREE_ATR_PCT_MIN", 0.0012),
     "atr_pct_max": breakout._env_float("LSR_FREE_ATR_PCT_MAX", 0.0260),
     "liquidity_tolerance_atr": breakout._env_float("LSR_FREE_LIQUIDITY_TOLERANCE_ATR", 0.52),
-    "min_sweep_atr": breakout._env_float("LSR_FREE_MIN_SWEEP_ATR", 0.11),
-    "min_rel_volume": breakout._env_float("LSR_FREE_MIN_REL_VOLUME", 0.78),
-    "min_confirm_rel_volume": breakout._env_float("LSR_FREE_MIN_CONFIRM_REL_VOLUME", 0.82),
+    "min_sweep_atr": breakout._env_float("LSR_FREE_MIN_SWEEP_ATR", 0.12),
+    "min_rel_volume": breakout._env_float("LSR_FREE_MIN_REL_VOLUME", 0.80),
+    "min_confirm_rel_volume": breakout._env_float("LSR_FREE_MIN_CONFIRM_REL_VOLUME", 0.84),
     "min_body_ratio_recovery": breakout._env_float("LSR_FREE_MIN_BODY_RATIO_RECOVERY", 0.16),
-    "min_body_ratio_confirmation": breakout._env_float("LSR_FREE_MIN_BODY_RATIO_CONFIRMATION", 0.16),
-    "min_close_position": breakout._env_float("LSR_FREE_MIN_CLOSE_POSITION", 0.53),
-    "min_rr": breakout._env_float("LSR_FREE_MIN_RR", 0.92),
+    "min_body_ratio_confirmation": breakout._env_float("LSR_FREE_MIN_BODY_RATIO_CONFIRMATION", 0.17),
+    "min_close_position": breakout._env_float("LSR_FREE_MIN_CLOSE_POSITION", 0.54),
+    "min_rr": breakout._env_float("LSR_FREE_MIN_RR", 0.94),
     "htf_price_tolerance": breakout._env_float("LSR_FREE_HTF_PRICE_TOLERANCE", 0.0140),
     "htf_trend_tolerance": breakout._env_float("LSR_FREE_HTF_TREND_TOLERANCE", 0.0240),
     "htf_required_score": max(1, int(os.getenv("LSR_FREE_HTF_REQUIRED_SCORE", "1"))),
@@ -45,13 +45,13 @@ PLUS_PROFILE = {
     "atr_pct_min": breakout._env_float("LSR_PLUS_ATR_PCT_MIN", 0.0015),
     "atr_pct_max": breakout._env_float("LSR_PLUS_ATR_PCT_MAX", 0.0240),
     "liquidity_tolerance_atr": breakout._env_float("LSR_PLUS_LIQUIDITY_TOLERANCE_ATR", 0.47),
-    "min_sweep_atr": breakout._env_float("LSR_PLUS_MIN_SWEEP_ATR", 0.14),
-    "min_rel_volume": breakout._env_float("LSR_PLUS_MIN_REL_VOLUME", 0.84),
-    "min_confirm_rel_volume": breakout._env_float("LSR_PLUS_MIN_CONFIRM_REL_VOLUME", 0.92),
+    "min_sweep_atr": breakout._env_float("LSR_PLUS_MIN_SWEEP_ATR", 0.15),
+    "min_rel_volume": breakout._env_float("LSR_PLUS_MIN_REL_VOLUME", 0.86),
+    "min_confirm_rel_volume": breakout._env_float("LSR_PLUS_MIN_CONFIRM_REL_VOLUME", 0.94),
     "min_body_ratio_recovery": breakout._env_float("LSR_PLUS_MIN_BODY_RATIO_RECOVERY", 0.19),
-    "min_body_ratio_confirmation": breakout._env_float("LSR_PLUS_MIN_BODY_RATIO_CONFIRMATION", 0.19),
-    "min_close_position": breakout._env_float("LSR_PLUS_MIN_CLOSE_POSITION", 0.57),
-    "min_rr": breakout._env_float("LSR_PLUS_MIN_RR", 1.00),
+    "min_body_ratio_confirmation": breakout._env_float("LSR_PLUS_MIN_BODY_RATIO_CONFIRMATION", 0.20),
+    "min_close_position": breakout._env_float("LSR_PLUS_MIN_CLOSE_POSITION", 0.58),
+    "min_rr": breakout._env_float("LSR_PLUS_MIN_RR", 1.02),
     "htf_price_tolerance": breakout._env_float("LSR_PLUS_HTF_PRICE_TOLERANCE", 0.0110),
     "htf_trend_tolerance": breakout._env_float("LSR_PLUS_HTF_TREND_TOLERANCE", 0.0200),
     "htf_required_score": max(1, int(os.getenv("LSR_PLUS_HTF_REQUIRED_SCORE", "1"))),
@@ -63,13 +63,13 @@ PREMIUM_PROFILE = {
     "atr_pct_min": breakout._env_float("LSR_PREMIUM_ATR_PCT_MIN", 0.0018),
     "atr_pct_max": breakout._env_float("LSR_PREMIUM_ATR_PCT_MAX", 0.0225),
     "liquidity_tolerance_atr": breakout._env_float("LSR_PREMIUM_LIQUIDITY_TOLERANCE_ATR", 0.42),
-    "min_sweep_atr": breakout._env_float("LSR_PREMIUM_MIN_SWEEP_ATR", 0.18),
-    "min_rel_volume": breakout._env_float("LSR_PREMIUM_MIN_REL_VOLUME", 0.92),
-    "min_confirm_rel_volume": breakout._env_float("LSR_PREMIUM_MIN_CONFIRM_REL_VOLUME", 1.00),
+    "min_sweep_atr": breakout._env_float("LSR_PREMIUM_MIN_SWEEP_ATR", 0.19),
+    "min_rel_volume": breakout._env_float("LSR_PREMIUM_MIN_REL_VOLUME", 0.94),
+    "min_confirm_rel_volume": breakout._env_float("LSR_PREMIUM_MIN_CONFIRM_REL_VOLUME", 1.03),
     "min_body_ratio_recovery": breakout._env_float("LSR_PREMIUM_MIN_BODY_RATIO_RECOVERY", 0.22),
-    "min_body_ratio_confirmation": breakout._env_float("LSR_PREMIUM_MIN_BODY_RATIO_CONFIRMATION", 0.22),
-    "min_close_position": breakout._env_float("LSR_PREMIUM_MIN_CLOSE_POSITION", 0.62),
-    "min_rr": breakout._env_float("LSR_PREMIUM_MIN_RR", 1.08),
+    "min_body_ratio_confirmation": breakout._env_float("LSR_PREMIUM_MIN_BODY_RATIO_CONFIRMATION", 0.23),
+    "min_close_position": breakout._env_float("LSR_PREMIUM_MIN_CLOSE_POSITION", 0.63),
+    "min_rr": breakout._env_float("LSR_PREMIUM_MIN_RR", 1.10),
     "htf_price_tolerance": breakout._env_float("LSR_PREMIUM_HTF_PRICE_TOLERANCE", 0.0090),
     "htf_trend_tolerance": breakout._env_float("LSR_PREMIUM_HTF_TREND_TOLERANCE", 0.0160),
     "htf_required_score": max(1, int(os.getenv("LSR_PREMIUM_HTF_REQUIRED_SCORE", "1"))),
@@ -156,13 +156,13 @@ LIQUIDITY_TRADE_PROFILES = {
     },
 }
 
-PULLBACK_RETRACE_FRACTION = breakout._env_float("LSR_PULLBACK_RETRACE_FRACTION", 0.40)
+PULLBACK_RETRACE_FRACTION = breakout._env_float("LSR_PULLBACK_RETRACE_FRACTION", 0.38)
 PULLBACK_ATR_MIN = breakout._env_float("LSR_PULLBACK_ATR_MIN", 0.17)
-PULLBACK_ATR_MAX = breakout._env_float("LSR_PULLBACK_ATR_MAX", 0.39)
+PULLBACK_ATR_MAX = breakout._env_float("LSR_PULLBACK_ATR_MAX", 0.37)
 PULLBACK_LEVEL_BUFFER_ATR = breakout._env_float("LSR_PULLBACK_LEVEL_BUFFER_ATR", 0.04)
 PULLBACK_MARKET_GAP_ATR = breakout._env_float("LSR_PULLBACK_MARKET_GAP_ATR", 0.055)
 POST_FILL_INVALIDATION_MINUTES = max(5, int(os.getenv("LSR_POST_FILL_INVALIDATION_MINUTES", "35")))
-POST_FILL_MIN_TP1_PROGRESS_PCT = breakout._env_float("LSR_POST_FILL_MIN_TP1_PROGRESS_PCT", 24.0)
+POST_FILL_MIN_TP1_PROGRESS_PCT = breakout._env_float("LSR_POST_FILL_MIN_TP1_PROGRESS_PCT", 27.0)
 
 
 def _record_reject(debug_counts: Optional[Dict[str, int]], reason: str) -> None:
