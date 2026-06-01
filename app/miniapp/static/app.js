@@ -94,7 +94,7 @@ const LIVE_SIGNALS_HOME_POLL_INTERVAL_MS = 15000;
 const LIVE_SIGNALS_VIEW_POLL_INTERVAL_MS = 8000;
 const LIVE_SIGNALS_FOCUS_DEBOUNCE_MS = 2500;
 const PAYLOAD_CACHE_TTL_MS = 10 * 60 * 1000;
-const PAYLOAD_CACHE_PREFIX = 'hades-miniapp-payload-v6';
+const PAYLOAD_CACHE_PREFIX = 'hades-miniapp-payload-v7-live-price';
 
 const els = {
   loading: document.getElementById('loading'),
@@ -829,24 +829,22 @@ async function createAndOpenHadesGuideLink(button = null) {
     const result = await api('/api/miniapp/guide/link', { method: 'POST' });
     if (!result?.url) throw new Error('hades_guide_link_unavailable');
 
-    const message = 'Hades Guide vinculado. Abriendo centro de conocimiento...';
-    setAccountNotice(message, 'positive');
+    setAccountNotice('Hades Guide vinculado. Abriendo centro de conocimiento...', 'positive');
     if (button) button.textContent = 'Abriendo...';
     openExternalUrl(result.url);
   } catch (error) {
-    const display = bridgeErrorMessage(productName, error);
-    setAccountNotice(display, 'negative');
-    if (state.currentView === 'account') {
-      renderAccount();
-      bindViewButtons();
-    }
-    try {
-      tg?.showAlert(display);
-    } catch (_) {
-      window.alert(display);
-    }
+    const raw = String(error?.message || error || '').trim();
+    const map = {
+      hades_guide_url_not_configured: 'HADES_GUIDE_URL no está configurado en Railway.',
+      hades_guide_link_unavailable: 'El backend no devolvió la URL de Hades Guide.',
+      user_banned: 'Tu cuenta no tiene acceso porque está restringida.',
+      request_failed_401: 'Tu sesión de HADES expiró. Cierra y vuelve a abrir la Mini App desde Telegram.',
+      request_failed_403: 'Tu cuenta no tiene acceso a Hades Guide.',
+    };
+    const key = raw.toLowerCase().replaceAll(' ', '_');
+    setAccountNotice(map[key] || `No se pudo abrir ${productName}: ${raw || 'error desconocido'}`, 'negative');
   } finally {
-    if (button && button.isConnected) {
+    if (button) {
       button.disabled = false;
       button.textContent = original || 'Abrir Hades Guide';
     }
@@ -4894,8 +4892,9 @@ const _priceTicker = {
   prevPrice:   null,
   mapMin:      null,
   mapMax:      null,
-  _pollTimer:  null,   // REST fallback interval id
-  _lastTickAt: 0,      // timestamp of last successful tick (WS or REST)
+  _pollTimer:  null,   // backend price polling interval id
+  _pollBusy:   false,  // prevents overlapping backend price polls
+  _lastTickAt: 0,      // timestamp of last successful backend tick
 };
 
 function startSignalPriceTicker(symbol) {
@@ -4903,11 +4902,12 @@ function startSignalPriceTicker(symbol) {
   if (!symbol) return;
 
   // Provider tickBuffer uses UPPERCASE symbols (e.g. "PENGUUSDT")
-  const pair = symbol.replace('BINANCE:', '').replace('/', '').toUpperCase();
+  const pair = symbol.replace('BINANCE:', '').replace('/', '').replace('-', '').toUpperCase();
   _priceTicker.symbol = pair;
   _priceTicker._lastTickAt = 0;
+  _priceTicker._pollBusy = false;
 
-  // ── 1. Subscribe to the existing market stream ──────────────────────────────
+  // ── 1. Subscribe to the existing market stream if it is ever enabled again ──
   _marketStream.onTick = (sym, data) => {
     if (sym !== pair) return;
     _priceTicker.prevPrice = _priceTicker.lastPrice;
@@ -4916,13 +4916,34 @@ function startSignalPriceTicker(symbol) {
     updateLivePriceDisplay(data.price, data.change);
   };
 
-  // Ensure stream is active (user may not be on the market view)
-  startMarketStream();
+  // ── 2. Backend-owned live price polling ────────────────────────────────────
+  // The browser must not call Binance/Bybit/OKX directly. The backend endpoint
+  // uses the central public-provider chain, cache, circuit breakers and trading
+  // session rules. This keeps the Intelligence screen moving without reviving
+  // restricted browser-side exchange calls.
+  const pollBackendPrice = async () => {
+    if (!_priceTicker.symbol || _priceTicker.symbol !== pair || _priceTicker._pollBusy) return;
+    _priceTicker._pollBusy = true;
+    try {
+      const payload = await api(`/api/miniapp/market/price/${encodeURIComponent(pair)}`);
+      if (!payload || payload.ok === false || !payload.price || Number(payload.price) <= 0) return;
+      _priceTicker.prevPrice = _priceTicker.lastPrice;
+      _priceTicker.lastPrice = Number(payload.price);
+      _priceTicker._lastTickAt = Date.now();
+      updateLivePriceDisplay(Number(payload.price), Number(payload.change_pct || 0));
+    } catch (_) {
+      // Keep the last snapshot visible. Do not spam the user while the modal is open.
+    } finally {
+      _priceTicker._pollBusy = false;
+    }
+  };
 
-  // ── 2. Sin REST directo a exchanges desde el navegador ─────────────────────
-  // El fallback REST directo podía romper Mercado con 451/CORS en ciertas regiones.
-  // Si el WebSocket no entrega ticks, mantenemos el último precio conocido sin tumbar la vista.
-  _priceTicker._pollTimer = null;
+  pollBackendPrice();
+  _priceTicker._pollTimer = setInterval(pollBackendPrice, 4000);
+
+  // Keep this call harmless. startMarketStream currently no-ops because browser
+  // exchange streams were intentionally disabled after provider restrictions.
+  startMarketStream();
 }
 
 function stopSignalPriceTicker() {
@@ -4946,6 +4967,7 @@ function stopSignalPriceTicker() {
   _priceTicker.prevPrice   = null;
   _priceTicker.mapMin      = null;
   _priceTicker.mapMax      = null;
+  _priceTicker._pollBusy   = false;
   _priceTicker._lastTickAt = 0;
 }
 
