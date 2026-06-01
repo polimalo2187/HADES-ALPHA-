@@ -53,7 +53,6 @@ from app.miniapp.service import (
 from app.observability import build_runtime_health_report, heartbeat, record_audit_event, start_background_heartbeat
 from app.oraculum_bridge import OraculumBridgeError, create_oraculum_link
 from app.sentinel_bridge import SentinelBridgeError, create_sentinel_link
-from app.hades_guide_bridge import HadesGuideBridgeError, create_hades_guide_link, consume_hades_guide_code
 from app.services.admin_runtime_service import (
     get_admin_operational_overview,
     get_admin_runtime_health_matrix,
@@ -67,6 +66,7 @@ from app.plans import can_access_feature, normalize_plan, plan_status
 from app.watchlist import add_symbol, normalize_many, remove_symbol, set_symbols, clear_watchlist
 from app.risk import RiskConfigurationError, get_exchange_fee_preset, normalize_exchange_name, normalize_entry_mode, save_user_risk_profile
 from app.binance_api import get_futures_24h_tickers
+from app.market_data_public import get_public_24h_ticker_for_symbol, public_provider_label
 from app.trading_session import get_trading_session_public_payload, get_trading_session_status
 
 logger = logging.getLogger(__name__)
@@ -96,10 +96,6 @@ def _render_index_html() -> str:
 class MiniAppAuthRequest(BaseModel):
     init_data: Optional[str] = None
     dev_user_id: Optional[int] = None
-
-
-class HadesGuideConsumeRequest(BaseModel):
-    code: str
 
 
 class MiniAppPlanSelectionRequest(BaseModel):
@@ -455,7 +451,6 @@ def create_mini_app() -> FastAPI:
             "premium": not str(user.get("subscription_status") or "").lower() in {"free", "expired"},
             "oraculum_configured": bool(os.getenv("ORACULUM_URL")),
             "sentinel_configured": bool(os.getenv("SENTINEL_URL")),
-            "hades_guide_configured": True,
             "plan_name": user.get("plan_name"),
             "days_left": user.get("days_left"),
         }
@@ -514,73 +509,6 @@ def create_mini_app() -> FastAPI:
         )
         return payload
 
-    @app.post("/api/miniapp/guide/link")
-    async def miniapp_hades_guide_link(request: Request, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
-        """Crea un enlace temporal HADES → Hades Guide para la MiniApp.
-
-        El frontend abre este enlace y Hades Guide consume el código una sola vez
-        contra /api/miniapp/guide/consume.
-        """
-        try:
-            payload = create_hades_guide_link(user, request_id=getattr(request.state, "request_id", None))
-        except HadesGuideBridgeError as exc:
-            detail = str(exc) or "hades_guide_link_failed"
-            record_audit_event(
-                event_type="hades_guide_link_failed",
-                status="warning",
-                module="miniapp",
-                user_id=int(user.get("user_id") or 0),
-                message=detail,
-                metadata={"request_id": getattr(request.state, "request_id", None)},
-            )
-            raise HTTPException(status_code=403 if detail == "user_banned" else 400, detail=detail) from exc
-
-        record_audit_event(
-            event_type="hades_guide_link_created",
-            status="ok",
-            module="miniapp",
-            user_id=int(user.get("user_id") or 0),
-            message="hades_guide_link_created",
-            metadata={
-                "expires_in_seconds": payload.get("expires_in_seconds"),
-                "request_id": getattr(request.state, "request_id", None),
-            },
-        )
-        return payload
-
-    @app.post("/api/miniapp/guide/consume")
-    async def miniapp_hades_guide_consume(payload: HadesGuideConsumeRequest, request: Request) -> Dict[str, Any]:
-        """Valida el código temporal enviado por Hades Guide.
-
-        Esta ruta es server-to-server: Hades Guide backend la llama para convertir
-        el código de un solo uso en el usuario público autorizado por HADES.
-        No usa sesión Telegram porque el código ya fue emitido desde una sesión válida.
-        """
-        try:
-            result = consume_hades_guide_code(payload.code, request_id=getattr(request.state, "request_id", None))
-        except HadesGuideBridgeError as exc:
-            detail = str(exc) or "hades_guide_consume_failed"
-            record_audit_event(
-                event_type="hades_guide_code_consume_failed",
-                status="warning",
-                module="miniapp",
-                user_id=None,
-                message=detail,
-                metadata={"request_id": getattr(request.state, "request_id", None)},
-            )
-            raise HTTPException(status_code=401, detail=detail) from exc
-
-        user_payload = result.get("user") or {}
-        record_audit_event(
-            event_type="hades_guide_code_consumed",
-            status="ok",
-            module="miniapp",
-            user_id=int(user_payload.get("userId") or user_payload.get("hadesUserId") or 0) or None,
-            message="hades_guide_code_consumed",
-            metadata={"request_id": getattr(request.state, "request_id", None)},
-        )
-        return result
-
     @app.get("/api/miniapp/dashboard")
     async def miniapp_dashboard(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
         return build_dashboard_payload(user)
@@ -620,6 +548,65 @@ def create_mini_app() -> FastAPI:
     async def miniapp_signals(limit: int = 20, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
         return {"items": build_signals_payload(user, limit=limit)}
 
+
+    @app.get("/api/miniapp/market/price/{symbol}")
+    async def miniapp_market_live_price(symbol: str, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
+        """Lightweight backend-owned live price endpoint for signal intelligence.
+
+        The MiniApp must not connect directly to exchange WebSockets/REST from the
+        browser because provider restrictions vary by user/device/region. This
+        endpoint reuses the central public-provider chain and its caches/circuit
+        breakers, so live price in the signal detail stays fresh without bypassing
+        backend market governance.
+        """
+        normalized_symbol = str(symbol or "").upper().strip().replace("/", "").replace("-", "")
+        if normalized_symbol and not normalized_symbol.endswith("USDT"):
+            normalized_symbol = f"{normalized_symbol}USDT"
+        if not normalized_symbol:
+            return {"ok": False, "reason": "invalid_symbol", "message": "Símbolo inválido."}
+
+        session = get_trading_session_status()
+        if not session.is_open:
+            return {
+                "ok": False,
+                "reason": "session_closed",
+                "symbol": normalized_symbol,
+                "market_open": False,
+                "session": get_trading_session_public_payload(),
+                "message": "Mercado pausado por horario operativo.",
+            }
+
+        row = get_public_24h_ticker_for_symbol(normalized_symbol, allow_direct_fetch=True) or {}
+        try:
+            price = float(row.get("lastPrice") or 0)
+        except (TypeError, ValueError):
+            price = 0.0
+        try:
+            change_pct = float(row.get("priceChangePercent") or 0)
+        except (TypeError, ValueError):
+            change_pct = 0.0
+
+        if price <= 0:
+            return {
+                "ok": False,
+                "reason": "no_live_coverage",
+                "symbol": normalized_symbol,
+                "market_open": True,
+                "message": "No hay precio en vivo disponible para este par en los proveedores actuales.",
+            }
+
+        provider = str(row.get("provider") or "public").lower().strip()
+        return {
+            "ok": True,
+            "symbol": normalized_symbol,
+            "price": price,
+            "change_pct": change_pct,
+            "quote_volume": row.get("quoteVolume"),
+            "provider": provider,
+            "provider_label": public_provider_label(provider),
+            "market_open": True,
+            "ts": int(__import__("time").time() * 1000),
+        }
 
     @app.get("/api/miniapp/signals/{signal_id}")
     async def miniapp_signal_detail(signal_id: str, profile: str = "moderado", user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
