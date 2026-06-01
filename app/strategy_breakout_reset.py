@@ -69,8 +69,8 @@ BREAKOUT_LOOKBACK = 24
 
 MAX_SCORE = 100.0
 FREE_NORMALIZATION_PENALTY = 8.0
-SCORE_CALIBRATION_VERSION = "v15_breakout_reset_recent_pending_entry"
-BREAKOUT_RECEPTIVE_FILTERS_VERSION = "v15_pending_reset_no_live_touch_gate"
+SCORE_CALIBRATION_VERSION = "v16_breakout_reset_loss_control_tightened"
+BREAKOUT_RECEPTIVE_FILTERS_VERSION = "v16_breakout_reset_quality_gate"
 ENTRY_MODEL_NAME = "breakout_reset_first_touch_live_v2"
 SETUP_STAGE_PRE_RESET_WAITING_RETEST = "pre_reset_waiting_retest"
 SETUP_STAGE_RESET_TOUCH_LIVE = "reset_touch_live"
@@ -79,11 +79,11 @@ SEND_MODE_PENDING_ENTRY = "entry_zone_pending"
 ENTRY_ZONE_MIN_PCT = float(os.getenv("ENTRY_ZONE_MIN_PCT", "0.0015"))
 ENTRY_ZONE_MAX_PCT = float(os.getenv("ENTRY_ZONE_MAX_PCT", "0.0035"))
 ENTRY_ZONE_RISK_FRACTION = float(os.getenv("ENTRY_ZONE_RISK_FRACTION", "0.22"))
-PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "83"))
-PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "76"))
-FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "72"))
+PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "85"))
+PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "78"))
+FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "74"))
 BREAKOUT_RESET_RECENT_BARS = int(os.getenv("BREAKOUT_RESET_RECENT_BARS", "6"))
-BREAKOUT_RESET_INVALIDATION_BODY_ATR = float(os.getenv("BREAKOUT_RESET_INVALIDATION_BODY_ATR", "0.20"))
+BREAKOUT_RESET_INVALIDATION_BODY_ATR = float(os.getenv("BREAKOUT_RESET_INVALIDATION_BODY_ATR", "0.16"))
 
 
 def _env_float(name: str, default: float) -> float:
@@ -114,34 +114,34 @@ def _required_history_bars() -> int:
 
 SHARED_PROFILE = {
     "name": "shared",
-    "adx_min": _env_float("PLUS_ADX_MIN", 15.8),
-    "atr_pct_min": _env_float("PLUS_ATR_PCT_MIN", 0.0018),
-    "atr_pct_max": _env_float("PLUS_ATR_PCT_MAX", 0.0148),
-    "min_body_ratio_breakout": _env_float("PLUS_MIN_BODY_RATIO_BREAKOUT", 0.23),
-    "min_body_ratio_continuation": _env_float("PLUS_MIN_BODY_RATIO_CONTINUATION", 0.15),
-    "min_extension_atr": _env_float("PLUS_MIN_EXTENSION_ATR", 0.16),
-    "max_extension_atr": _env_float("PLUS_MAX_EXTENSION_ATR", 0.94),
-    "min_breakout_overshoot_atr": _env_float("PLUS_MIN_BREAKOUT_OVERSHOOT_ATR", 0.07),
-    "min_pre_reset_space_atr": _env_float("PLUS_MIN_PRE_RESET_SPACE_ATR", 0.05),
-    "min_rel_volume_continuation": _env_float("PLUS_MIN_REL_VOLUME_CONTINUATION", 0.92),
-    "min_close_position_continuation": _env_float("PLUS_MIN_CLOSE_POSITION_CONTINUATION", 0.53),
-    "min_post_breakout_progress_atr": _env_float("PLUS_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.035),
+    "adx_min": _env_float("PLUS_ADX_MIN", 16.5),
+    "atr_pct_min": _env_float("PLUS_ATR_PCT_MIN", 0.0020),
+    "atr_pct_max": _env_float("PLUS_ATR_PCT_MAX", 0.0142),
+    "min_body_ratio_breakout": _env_float("PLUS_MIN_BODY_RATIO_BREAKOUT", 0.255),
+    "min_body_ratio_continuation": _env_float("PLUS_MIN_BODY_RATIO_CONTINUATION", 0.17),
+    "min_extension_atr": _env_float("PLUS_MIN_EXTENSION_ATR", 0.18),
+    "max_extension_atr": _env_float("PLUS_MAX_EXTENSION_ATR", 0.88),
+    "min_breakout_overshoot_atr": _env_float("PLUS_MIN_BREAKOUT_OVERSHOOT_ATR", 0.09),
+    "min_pre_reset_space_atr": _env_float("PLUS_MIN_PRE_RESET_SPACE_ATR", 0.07),
+    "min_rel_volume_continuation": _env_float("PLUS_MIN_REL_VOLUME_CONTINUATION", 0.98),
+    "min_close_position_continuation": _env_float("PLUS_MIN_CLOSE_POSITION_CONTINUATION", 0.57),
+    "min_post_breakout_progress_atr": _env_float("PLUS_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.05),
 }
 
 FREE_PROFILE = {
     "name": "free",
-    "adx_min": _env_float("FREE_ADX_MIN", 14.2),
-    "atr_pct_min": _env_float("FREE_ATR_PCT_MIN", 0.0015),
-    "atr_pct_max": _env_float("FREE_ATR_PCT_MAX", 0.0162),
-    "min_body_ratio_breakout": _env_float("FREE_MIN_BODY_RATIO_BREAKOUT", 0.18),
-    "min_body_ratio_continuation": _env_float("FREE_MIN_BODY_RATIO_CONTINUATION", 0.12),
-    "min_extension_atr": _env_float("FREE_MIN_EXTENSION_ATR", 0.12),
-    "max_extension_atr": _env_float("FREE_MAX_EXTENSION_ATR", 1.05),
-    "min_breakout_overshoot_atr": _env_float("FREE_MIN_BREAKOUT_OVERSHOOT_ATR", 0.04),
-    "min_pre_reset_space_atr": _env_float("FREE_MIN_PRE_RESET_SPACE_ATR", 0.025),
-    "min_rel_volume_continuation": _env_float("FREE_MIN_REL_VOLUME_CONTINUATION", 0.82),
-    "min_close_position_continuation": _env_float("FREE_MIN_CLOSE_POSITION_CONTINUATION", 0.46),
-    "min_post_breakout_progress_atr": _env_float("FREE_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.02),
+    "adx_min": _env_float("FREE_ADX_MIN", 15.0),
+    "atr_pct_min": _env_float("FREE_ATR_PCT_MIN", 0.0017),
+    "atr_pct_max": _env_float("FREE_ATR_PCT_MAX", 0.0154),
+    "min_body_ratio_breakout": _env_float("FREE_MIN_BODY_RATIO_BREAKOUT", 0.205),
+    "min_body_ratio_continuation": _env_float("FREE_MIN_BODY_RATIO_CONTINUATION", 0.14),
+    "min_extension_atr": _env_float("FREE_MIN_EXTENSION_ATR", 0.14),
+    "max_extension_atr": _env_float("FREE_MAX_EXTENSION_ATR", 0.96),
+    "min_breakout_overshoot_atr": _env_float("FREE_MIN_BREAKOUT_OVERSHOOT_ATR", 0.055),
+    "min_pre_reset_space_atr": _env_float("FREE_MIN_PRE_RESET_SPACE_ATR", 0.04),
+    "min_rel_volume_continuation": _env_float("FREE_MIN_REL_VOLUME_CONTINUATION", 0.88),
+    "min_close_position_continuation": _env_float("FREE_MIN_CLOSE_POSITION_CONTINUATION", 0.50),
+    "min_post_breakout_progress_atr": _env_float("FREE_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.035),
     "score": 78.0,
 }
 
@@ -154,18 +154,18 @@ PLUS_PROFILE = {
 PREMIUM_PROFILE = {
     **SHARED_PROFILE,
     "name": "premium",
-    "adx_min": _env_float("PREMIUM_ADX_MIN", 16.4),
-    "atr_pct_min": _env_float("PREMIUM_ATR_PCT_MIN", 0.0020),
-    "atr_pct_max": _env_float("PREMIUM_ATR_PCT_MAX", 0.0140),
-    "min_body_ratio_breakout": _env_float("PREMIUM_MIN_BODY_RATIO_BREAKOUT", 0.26),
-    "min_body_ratio_continuation": _env_float("PREMIUM_MIN_BODY_RATIO_CONTINUATION", 0.17),
-    "min_extension_atr": _env_float("PREMIUM_MIN_EXTENSION_ATR", 0.20),
-    "max_extension_atr": _env_float("PREMIUM_MAX_EXTENSION_ATR", 0.86),
-    "min_breakout_overshoot_atr": _env_float("PREMIUM_MIN_BREAKOUT_OVERSHOOT_ATR", 0.10),
-    "min_pre_reset_space_atr": _env_float("PREMIUM_MIN_PRE_RESET_SPACE_ATR", 0.08),
-    "min_rel_volume_continuation": _env_float("PREMIUM_MIN_REL_VOLUME_CONTINUATION", 1.00),
-    "min_close_position_continuation": _env_float("PREMIUM_MIN_CLOSE_POSITION_CONTINUATION", 0.61),
-    "min_post_breakout_progress_atr": _env_float("PREMIUM_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.055),
+    "adx_min": _env_float("PREMIUM_ADX_MIN", 17.2),
+    "atr_pct_min": _env_float("PREMIUM_ATR_PCT_MIN", 0.0022),
+    "atr_pct_max": _env_float("PREMIUM_ATR_PCT_MAX", 0.0134),
+    "min_body_ratio_breakout": _env_float("PREMIUM_MIN_BODY_RATIO_BREAKOUT", 0.285),
+    "min_body_ratio_continuation": _env_float("PREMIUM_MIN_BODY_RATIO_CONTINUATION", 0.19),
+    "min_extension_atr": _env_float("PREMIUM_MIN_EXTENSION_ATR", 0.22),
+    "max_extension_atr": _env_float("PREMIUM_MAX_EXTENSION_ATR", 0.80),
+    "min_breakout_overshoot_atr": _env_float("PREMIUM_MIN_BREAKOUT_OVERSHOOT_ATR", 0.12),
+    "min_pre_reset_space_atr": _env_float("PREMIUM_MIN_PRE_RESET_SPACE_ATR", 0.10),
+    "min_rel_volume_continuation": _env_float("PREMIUM_MIN_REL_VOLUME_CONTINUATION", 1.06),
+    "min_close_position_continuation": _env_float("PREMIUM_MIN_CLOSE_POSITION_CONTINUATION", 0.64),
+    "min_post_breakout_progress_atr": _env_float("PREMIUM_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.07),
     "score": 90.0,
 }
 
@@ -919,7 +919,10 @@ def _continuation_ok(last: pd.Series, direction: str, profile: Dict, quality: Op
     if profile_name == PLUS_PROFILE["name"]:
         return passed >= 2 and (flags["close_position"] or flags["progress_atr"])
 
-    return passed >= 1
+    # FREE no debe aceptar un breakout solo por una métrica aislada.
+    # Mantiene cobertura, pero exige al menos dos evidencias ligeras de follow-through
+    # para reducir señales que llegan débiles al reset y terminan en SL.
+    return passed >= 2
 
 
 
