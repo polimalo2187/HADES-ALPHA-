@@ -1,8 +1,8 @@
 // HADES App — Service Worker
-// Versión: 1.0.1
+// Versión: 1.0.2
 // Estrategia: Cache-first para assets estáticos, Network-first para API
 
-const CACHE_NAME = 'hades-live-price-intelligence-v1'; // FIX: bump para desalojar caché vieja que guardó manifest roto
+const CACHE_NAME = 'hades-guide-bridge-fix-v2'; // FIX: bump para desalojar caché vieja que guardó manifest roto
 const STATIC_ASSETS = [
   '/miniapp/static/index.html',
   '/miniapp/static/app.css',

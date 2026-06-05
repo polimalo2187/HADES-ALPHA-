@@ -822,15 +822,26 @@ async function createAndOpenHadesGuideLink(button = null) {
   const original = button ? button.textContent : '';
   if (button) {
     button.disabled = true;
-    button.textContent = 'Creando acceso...';
+    button.textContent = 'Validando acceso...';
   }
 
   try {
+    // Igual que Oraculum/Sentinel, refrescamos estado antes de crear el enlace.
+    // Esto evita usar un payload cacheado cuando el usuario acaba de activar o renovar plan.
+    try {
+      await refreshAccountState(true);
+    } catch (refreshError) {
+      console.warn('[Hades Guide] No se pudo refrescar cuenta antes de abrir Guide', refreshError);
+    }
+
+    if (button) button.textContent = 'Creando acceso...';
+
     const result = await api('/api/miniapp/guide/link', { method: 'POST' });
     if (!result?.url) throw new Error('hades_guide_link_unavailable');
 
     setAccountNotice('Hades Guide vinculado. Abriendo centro de conocimiento...', 'positive');
     if (button) button.textContent = 'Abriendo...';
+
     openExternalUrl(result.url);
   } catch (error) {
     const raw = String(error?.message || error || '').trim();
@@ -838,13 +849,22 @@ async function createAndOpenHadesGuideLink(button = null) {
       hades_guide_url_not_configured: 'HADES_GUIDE_URL no está configurado en Railway.',
       hades_guide_link_unavailable: 'El backend no devolvió la URL de Hades Guide.',
       user_banned: 'Tu cuenta no tiene acceso porque está restringida.',
+      network_unavailable: 'No se pudo conectar con el servidor de HADES. Cierra y vuelve a abrir la Mini App.',
+      failed_to_fetch: 'No se pudo conectar con el servidor de HADES. Cierra y vuelve a abrir la Mini App.',
       request_failed_401: 'Tu sesión de HADES expiró. Cierra y vuelve a abrir la Mini App desde Telegram.',
       request_failed_403: 'Tu cuenta no tiene acceso a Hades Guide.',
+      request_failed_404: 'El backend de HADES no tiene activo /api/miniapp/guide/link. Despliega esta versión del backend.',
     };
     const key = raw.toLowerCase().replaceAll(' ', '_');
-    setAccountNotice(map[key] || `No se pudo abrir ${productName}: ${raw || 'error desconocido'}`, 'negative');
+    const display = map[key] || `No se pudo abrir ${productName}: ${raw || 'error desconocido'}`;
+    setAccountNotice(display, 'negative');
+    try {
+      tg?.showAlert(display);
+    } catch (_) {
+      window.alert(display);
+    }
   } finally {
-    if (button) {
+    if (button && button.isConnected) {
       button.disabled = false;
       button.textContent = original || 'Abrir Hades Guide';
     }
