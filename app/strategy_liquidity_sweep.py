@@ -72,7 +72,15 @@ PREMIUM_PROFILE = {
     "min_rr": breakout._env_float("LSR_PREMIUM_MIN_RR", 0.98),
     "htf_price_tolerance": breakout._env_float("LSR_PREMIUM_HTF_PRICE_TOLERANCE", 0.0090),
     "htf_trend_tolerance": breakout._env_float("LSR_PREMIUM_HTF_TREND_TOLERANCE", 0.0160),
-    "htf_required_score": max(1, int(os.getenv("LSR_PREMIUM_HTF_REQUIRED_SCORE", "1"))),
+    # Endure un contexto de mayor respaldo en timeframes superiores.  El score
+    # de contexto en 1H suma hasta cuatro criterios (precio sobre EMA20,
+    # EMA20 sobre EMA50, momentum, y al menos un cierre reciente por encima
+    # de EMA20).  Para la versión premium exigimos que se cumplan todos
+    # (o casi todos) estos factores antes de permitir una señal; de lo contrario
+    # la señal se descarta como de contexto débil.  Este valor debe ser
+    # superior a la puntuación máxima esperable (4) para asegurar que sólo
+    # contextos excepcionalmente alineados generen señales premium.
+    "htf_required_score": max(1, int(os.getenv("LSR_PREMIUM_HTF_REQUIRED_SCORE", "5"))),
     "score": 90.0,
 }
 
@@ -129,6 +137,11 @@ LONG_SCORE_FLOOR_BONUS = {
 PREMIUM_SCORE_FLOOR_BONUS = 2.0
 
 
+# Configuración de gestión de riesgo para las señales de Liquidity Sweep Reversal.
+# Se restauran los parámetros base (TP1 y TP2 originales) tal y como se entregaron
+# en el proyecto inicial.  Esto respeta la estructura de 1R/2R en la gestión de
+# beneficios y evita modificaciones del profit factor.  Estas configuraciones
+# pueden sobreescribirse mediante variables de entorno si fuese necesario.
 LIQUIDITY_TRADE_PROFILES = {
     "conservador": {
         "leverage": breakout.TRADING_PROFILES["conservador"]["leverage"],
@@ -156,9 +169,12 @@ LIQUIDITY_TRADE_PROFILES = {
     },
 }
 
-PULLBACK_RETRACE_FRACTION = breakout._env_float("LSR_PULLBACK_RETRACE_FRACTION", 0.42)
-PULLBACK_ATR_MIN = breakout._env_float("LSR_PULLBACK_ATR_MIN", 0.16)
-PULLBACK_ATR_MAX = breakout._env_float("LSR_PULLBACK_ATR_MAX", 0.48)
+# Reducimos la fracción de retroceso deseado para posicionar la entrada más cerca del precio
+PULLBACK_RETRACE_FRACTION = breakout._env_float("LSR_PULLBACK_RETRACE_FRACTION", 0.32)
+# Permite pullbacks más pequeños antes de considerar una entrada válida
+PULLBACK_ATR_MIN = breakout._env_float("LSR_PULLBACK_ATR_MIN", 0.12)
+# Acorta el rango máximo de retroceso para evitar esperar pullbacks demasiado profundos
+PULLBACK_ATR_MAX = breakout._env_float("LSR_PULLBACK_ATR_MAX", 0.42)
 PULLBACK_LEVEL_BUFFER_ATR = breakout._env_float("LSR_PULLBACK_LEVEL_BUFFER_ATR", 0.04)
 PULLBACK_MARKET_GAP_ATR = breakout._env_float("LSR_PULLBACK_MARKET_GAP_ATR", 0.03)
 POST_FILL_INVALIDATION_MINUTES = max(5, int(os.getenv("LSR_POST_FILL_INVALIDATION_MINUTES", "35")))

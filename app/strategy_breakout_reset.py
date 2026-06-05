@@ -78,7 +78,10 @@ SETUP_STAGE_RESET_REBOUNDED_BEFORE_PUBLISH = "reset_rebounded_before_publish"
 SEND_MODE_PENDING_ENTRY = "entry_zone_pending"
 ENTRY_ZONE_MIN_PCT = float(os.getenv("ENTRY_ZONE_MIN_PCT", "0.0015"))
 ENTRY_ZONE_MAX_PCT = float(os.getenv("ENTRY_ZONE_MAX_PCT", "0.0035"))
-ENTRY_ZONE_RISK_FRACTION = float(os.getenv("ENTRY_ZONE_RISK_FRACTION", "0.22"))
+# Ampliamos ligeramente la fracción de riesgo para el cálculo de la zona de entrada a fin de
+# aumentar las probabilidades de que el precio toque la zona de entrada sin alterar los
+# multiplicadores de toma de beneficio (TP1 y TP2 permanecen en 1R y 2R).
+ENTRY_ZONE_RISK_FRACTION = float(os.getenv("ENTRY_ZONE_RISK_FRACTION", "0.28"))
 PREMIUM_RAW_SCORE_MIN = float(os.getenv("PREMIUM_RAW_SCORE_MIN", "83"))
 PLUS_RAW_SCORE_MIN = float(os.getenv("PLUS_RAW_SCORE_MIN", "76"))
 FREE_RAW_SCORE_MIN = float(os.getenv("FREE_RAW_SCORE_MIN", "72"))
@@ -121,11 +124,14 @@ SHARED_PROFILE = {
     "min_body_ratio_continuation": _env_float("PLUS_MIN_BODY_RATIO_CONTINUATION", 0.15),
     "min_extension_atr": _env_float("PLUS_MIN_EXTENSION_ATR", 0.16),
     "max_extension_atr": _env_float("PLUS_MAX_EXTENSION_ATR", 0.94),
-    "min_breakout_overshoot_atr": _env_float("PLUS_MIN_BREAKOUT_OVERSHOOT_ATR", 0.07),
-    "min_pre_reset_space_atr": _env_float("PLUS_MIN_PRE_RESET_SPACE_ATR", 0.05),
+    # Exigimos overshoot y espacio de pre-reset ligeramente mayores para ayudar a que el precio tenga
+    # recorrido suficiente antes de volver al nivel, reduciendo así la probabilidad de que la señal expire.
+    "min_breakout_overshoot_atr": _env_float("PLUS_MIN_BREAKOUT_OVERSHOOT_ATR", 0.08),
+    "min_pre_reset_space_atr": _env_float("PLUS_MIN_PRE_RESET_SPACE_ATR", 0.06),
     "min_rel_volume_continuation": _env_float("PLUS_MIN_REL_VOLUME_CONTINUATION", 0.92),
     "min_close_position_continuation": _env_float("PLUS_MIN_CLOSE_POSITION_CONTINUATION", 0.53),
-    "min_post_breakout_progress_atr": _env_float("PLUS_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.035),
+    # Requerimos mayor progreso tras el breakout antes de enviar señal para filtrar roturas débiles
+    "min_post_breakout_progress_atr": _env_float("PLUS_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.04),
 }
 
 FREE_PROFILE = {
@@ -137,11 +143,12 @@ FREE_PROFILE = {
     "min_body_ratio_continuation": _env_float("FREE_MIN_BODY_RATIO_CONTINUATION", 0.12),
     "min_extension_atr": _env_float("FREE_MIN_EXTENSION_ATR", 0.12),
     "max_extension_atr": _env_float("FREE_MAX_EXTENSION_ATR", 1.05),
-    "min_breakout_overshoot_atr": _env_float("FREE_MIN_BREAKOUT_OVERSHOOT_ATR", 0.04),
-    "min_pre_reset_space_atr": _env_float("FREE_MIN_PRE_RESET_SPACE_ATR", 0.025),
+    # Overshoot y espacio de pre-reset más altos para garantizar rupturas más limpias y con margen para el retest
+    "min_breakout_overshoot_atr": _env_float("FREE_MIN_BREAKOUT_OVERSHOOT_ATR", 0.06),
+    "min_pre_reset_space_atr": _env_float("FREE_MIN_PRE_RESET_SPACE_ATR", 0.035),
     "min_rel_volume_continuation": _env_float("FREE_MIN_REL_VOLUME_CONTINUATION", 0.82),
     "min_close_position_continuation": _env_float("FREE_MIN_CLOSE_POSITION_CONTINUATION", 0.46),
-    "min_post_breakout_progress_atr": _env_float("FREE_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.02),
+    "min_post_breakout_progress_atr": _env_float("FREE_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.03),
     "score": 78.0,
 }
 
@@ -161,11 +168,12 @@ PREMIUM_PROFILE = {
     "min_body_ratio_continuation": _env_float("PREMIUM_MIN_BODY_RATIO_CONTINUATION", 0.17),
     "min_extension_atr": _env_float("PREMIUM_MIN_EXTENSION_ATR", 0.20),
     "max_extension_atr": _env_float("PREMIUM_MAX_EXTENSION_ATR", 0.86),
-    "min_breakout_overshoot_atr": _env_float("PREMIUM_MIN_BREAKOUT_OVERSHOOT_ATR", 0.10),
-    "min_pre_reset_space_atr": _env_float("PREMIUM_MIN_PRE_RESET_SPACE_ATR", 0.08),
+    # Ajustamos overshoot y espacio pre-reset para mejorar la calidad de los breakouts premium
+    "min_breakout_overshoot_atr": _env_float("PREMIUM_MIN_BREAKOUT_OVERSHOOT_ATR", 0.12),
+    "min_pre_reset_space_atr": _env_float("PREMIUM_MIN_PRE_RESET_SPACE_ATR", 0.10),
     "min_rel_volume_continuation": _env_float("PREMIUM_MIN_REL_VOLUME_CONTINUATION", 1.00),
     "min_close_position_continuation": _env_float("PREMIUM_MIN_CLOSE_POSITION_CONTINUATION", 0.61),
-    "min_post_breakout_progress_atr": _env_float("PREMIUM_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.055),
+    "min_post_breakout_progress_atr": _env_float("PREMIUM_MIN_POST_BREAKOUT_PROGRESS_ATR", 0.065),
     "score": 90.0,
 }
 
@@ -173,7 +181,22 @@ PREMIUM_PROFILE = {
 # PERFILES DE TRADING POR APALANCAMIENTO
 # =======================================
 
+#
+# La configuración de riesgo/recompensa para las operaciones de breakout sigue las directrices
+# originales del proyecto: TP1 se coloca en 1R y TP2 en 2R en el perfil conservador, con
+# ajustes progresivos en los perfiles moderado y agresivo.  Estos valores no se han
+# modificado en este ajuste; el enfoque de esta iteración está en incrementar el win rate
+# y reducir las señales expiradas mediante ajustes en los filtros de calidad (overshoot,
+# espacio mínimo antes del reset y progreso tras la ruptura) y en la amplitud de la zona
+# de entrada, manteniendo inalteradas las métricas de riesgo (R1 y R2).
+# downside exposure, while TP1 and TP2 levels have been stretched to seek
+# larger asymmetric payoffs.  These defaults can still be overridden via
+# environment variables as before.
 TRADING_PROFILES = {
+    # Volvemos a los parámetros base: se respetan los multiplicadores de riesgo y los RR
+    # predeterminados (TP1=1R y TP2=2R para conservador), tal y como estaban en el código
+    # original proporcionado por el usuario.  Estas configuraciones se pueden sobreescribir
+    # mediante variables de entorno con las mismas claves.
     "conservador": {
         "leverage": "20x-30x",
         "stop_atr_mult": _env_float("TRADE_CONSERVADOR_STOP_ATR_MULT", 0.95),
