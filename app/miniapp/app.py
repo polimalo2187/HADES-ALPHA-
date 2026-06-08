@@ -618,8 +618,9 @@ def create_mini_app() -> FastAPI:
                 message=str(exc),
                 metadata={"request_id": getattr(request.state, "request_id", None)},
             )
-            status_code = 403 if str(exc) in {"premium_required", "user_banned"} else 400
-            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+            error_code = str(exc)
+            status_code = 503 if error_code == "storage_unavailable" else (403 if error_code in {"premium_required", "user_banned"} else 400)
+            raise HTTPException(status_code=status_code, detail=error_code) from exc
 
         user_payload = result.get("user") or {}
         request.state.user_id = int(user_payload.get("telegramId") or 0) or None
