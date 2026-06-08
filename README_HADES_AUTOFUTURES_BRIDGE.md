@@ -52,3 +52,15 @@ Correcciones aplicadas para igualar el flujo a Oraculum/Sentinel/Guide y evitar 
 - storage_unavailable devuelve HTTP 503 controlado, no timeout/502 de infraestructura.
 - MongoClient tiene timeouts explícitos.
 ```
+
+
+## Fix: consumo GET/POST compatible
+
+Se agregó soporte de consumo por GET además de POST:
+
+```text
+GET  /api/miniapp/autofutures/consume?code=...
+POST /api/miniapp/autofutures/consume
+```
+
+AutoFutures intentará GET primero y POST como respaldo.
