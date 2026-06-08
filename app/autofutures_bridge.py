@@ -1,22 +1,20 @@
 from __future__ import annotations
 
-import base64
 import hashlib
-import hmac
-import json
 import os
-import time
-from datetime import datetime, timezone
+import secrets
+from datetime import timedelta
 from typing import Any, Dict, Optional
 from urllib.parse import urlencode
 
+from app.database import autofutures_link_tokens_collection
 from app.models import utcnow
 from app.plans import PLAN_PREMIUM, SUBSCRIPTION_STATUS_ACTIVE, normalize_plan, plan_status
 from app.services.admin_service import is_effectively_banned
 
 
 class AutoFuturesBridgeError(ValueError):
-    """Error controlado para el puente HADES Alpha -> Hades AutoFutures."""
+    """Error controlado para el puente HADES -> AutoFutures."""
 
 
 DEFAULT_AUTOFUTURES_URL = "https://hades-autofutures-production-32f9.up.railway.app"
@@ -30,17 +28,8 @@ def _first_env_value(*names: str) -> str:
     return ""
 
 
-def _normalize_url(url: str) -> str:
-    normalized = str(url or "").strip().rstrip("/")
-    if not normalized:
-        return ""
-    if normalized.startswith("http://") or normalized.startswith("https://"):
-        return normalized
-    return f"https://{normalized}"
-
-
 def _autofutures_url() -> str:
-    url = _normalize_url(
+    url = (
         _first_env_value(
             "HADES_AUTOFUTURES_FRONTEND_URL",
             "AUTOFUTURES_URL",
@@ -49,57 +38,10 @@ def _autofutures_url() -> str:
             "VITE_HADES_AUTOFUTURES_URL",
         )
         or DEFAULT_AUTOFUTURES_URL
-    )
+    ).rstrip("/")
     if not (url.startswith("https://") or url.startswith("http://")):
         raise AutoFuturesBridgeError("HADES_AUTOFUTURES_FRONTEND_URL inválido")
     return url
-
-
-SSO_SECRET_ENV_NAMES = (
-    "HADES_AUTOFUTURES_SSO_SECRET",
-    "HADES_AUTO_FUTURES_SSO_SECRET",
-    "AUTOFUTURES_SSO_SECRET",
-    "AUTO_FUTURES_SSO_SECRET",
-    "HADES_AUTOFUTURES_SECRET",
-    "HADES_AUTOFUTURES_JWT_SECRET",
-    "HADES_ALPHA_SSO_SECRET",
-)
-
-
-def _sso_secret_diagnostics() -> Dict[str, Any]:
-    detected = []
-    for name in SSO_SECRET_ENV_NAMES:
-        value = os.getenv(name)
-        if value is not None:
-            detected.append({
-                "name": name,
-                "length": len(value.strip()),
-                "valid_length": len(value.strip()) >= 32,
-            })
-    return {
-        "detected": detected,
-        "accepted_names": list(SSO_SECRET_ENV_NAMES),
-    }
-
-
-def _sso_secret() -> str:
-    for name in SSO_SECRET_ENV_NAMES:
-        raw = os.getenv(name)
-        if raw is None:
-            continue
-        secret = raw.strip().strip('"').strip("'")
-        if len(secret) >= 32:
-            return secret
-
-    diagnostics = _sso_secret_diagnostics()
-    detected = diagnostics.get("detected") or []
-    if detected:
-        names = ", ".join(f"{item['name']}({item['length']})" for item in detected)
-        raise AutoFuturesBridgeError(f"HADES_AUTOFUTURES_SSO_SECRET inválido: variables detectadas con longitud insuficiente: {names}")
-
-    raise AutoFuturesBridgeError(
-        "HADES_AUTOFUTURES_SSO_SECRET inválido: no se detectó ninguna variable SSO aceptada"
-    )
 
 
 def _link_ttl_seconds() -> int:
@@ -109,25 +51,8 @@ def _link_ttl_seconds() -> int:
         return 60
 
 
-def _base64url(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
-
-
-def _json_default(value: Any) -> str:
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-        return value.isoformat().replace("+00:00", "Z")
-    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
-
-
-def _sign_jwt(payload: Dict[str, Any], secret: str) -> str:
-    header = {"alg": "HS256", "typ": "JWT"}
-    encoded_header = _base64url(json.dumps(header, separators=(",", ":"), sort_keys=True).encode("utf-8"))
-    encoded_payload = _base64url(json.dumps(payload, default=_json_default, separators=(",", ":"), sort_keys=True).encode("utf-8"))
-    signing_input = f"{encoded_header}.{encoded_payload}".encode("utf-8")
-    signature = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
-    return f"{encoded_header}.{encoded_payload}.{_base64url(signature)}"
+def _hash_code(code: str) -> str:
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()
 
 
 def build_autofutures_entitlement(user: Dict[str, Any]) -> Dict[str, Any]:
@@ -150,44 +75,92 @@ def build_autofutures_entitlement(user: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def create_autofutures_link(user: Dict[str, Any], *, request_id: Optional[str] = None) -> Dict[str, Any]:
-    if is_effectively_banned(user):
-        raise AutoFuturesBridgeError("user_banned")
+    entitlement = build_autofutures_entitlement(user)
+    if not entitlement.get("ok"):
+        raise AutoFuturesBridgeError("premium_required")
 
-    user_id = int(user.get("user_id") or 0)
+    now = utcnow()
+    ttl = _link_ttl_seconds()
+    code = secrets.token_urlsafe(36)
+    token_hash = _hash_code(code)
+    premium_until = entitlement.get("expires_at")
+
+    autofutures_link_tokens_collection().insert_one({
+        "token_hash": token_hash,
+        "user_id": int(user.get("user_id") or 0),
+        "username": user.get("username"),
+        "plan": PLAN_PREMIUM,
+        "premium_until": premium_until,
+        "created_at": now,
+        "expires_at": now + timedelta(seconds=ttl),
+        "used_at": None,
+        "request_id": request_id,
+        "schema_version": 1,
+    })
+
+    url = f"{_autofutures_url()}/auth/hades/link?{urlencode({'code': code})}"
+    return {
+        "ok": True,
+        "url": url,
+        "expires_in_seconds": ttl,
+        "expires_at": (now + timedelta(seconds=ttl)).isoformat() + "Z",
+        "premium_until": premium_until.isoformat() + "Z" if premium_until else None,
+        "days_left": int(entitlement.get("days_left") or 0),
+    }
+
+
+def consume_autofutures_code(code: str, *, request_id: Optional[str] = None) -> Dict[str, Any]:
+    raw = str(code or "").strip()
+    if not raw:
+        raise AutoFuturesBridgeError("code_required")
+
+    token_hash = _hash_code(raw)
+    now = utcnow()
+    token = autofutures_link_tokens_collection().find_one_and_update(
+        {
+            "token_hash": token_hash,
+            "used_at": None,
+            "expires_at": {"$gt": now},
+        },
+        {
+            "$set": {
+                "used_at": now,
+                "consume_request_id": request_id,
+            }
+        },
+        return_document=True,
+    )
+    if not token:
+        raise AutoFuturesBridgeError("invalid_or_expired_code")
+
+    user_id = int(token.get("user_id") or 0)
     if user_id <= 0:
         raise AutoFuturesBridgeError("invalid_user")
+
+    from app.miniapp.service import get_user_by_id
+
+    user = get_user_by_id(user_id)
+    if not user:
+        raise AutoFuturesBridgeError("user_not_found")
+    if is_effectively_banned(user):
+        raise AutoFuturesBridgeError("user_banned")
 
     entitlement = build_autofutures_entitlement(user)
     if not entitlement.get("ok"):
         raise AutoFuturesBridgeError("premium_required")
 
-    now_ts = int(time.time())
-    ttl = _link_ttl_seconds()
-    expires_ts = now_ts + ttl
-    premium_until = entitlement.get("expires_at")
-
-    payload = {
-        "iss": "hades-alpha",
-        "aud": "hades-autofutures",
-        "iat": now_ts,
-        "exp": expires_ts,
-        "hadesUserId": str(user_id),
-        "telegramId": str(user_id),
-        "username": user.get("username"),
-        "email": user.get("email"),
-        "premiumActive": True,
-        "premiumUntil": premium_until.isoformat().replace("+00:00", "Z") if isinstance(premium_until, datetime) else None,
-        "requestId": request_id,
-    }
-
-    token = _sign_jwt(payload, _sso_secret())
-    url = f"{_autofutures_url()}/auth/callback?{urlencode({'token': token})}"
-
+    expires_at = entitlement.get("expires_at")
     return {
         "ok": True,
-        "url": url,
-        "expires_in_seconds": ttl,
-        "expires_at": datetime.fromtimestamp(expires_ts, tz=timezone.utc).isoformat().replace("+00:00", "Z"),
-        "premium_until": payload["premiumUntil"],
-        "days_left": int(entitlement.get("days_left") or 0),
+        "user": {
+            "hadesUserId": str(user_id),
+            "jadeUserId": str(user_id),
+            "telegramId": str(user_id),
+            "username": user.get("username"),
+            "email": user.get("email"),
+            "premiumActive": True,
+            "premiumUntil": expires_at.isoformat() + "Z" if expires_at else None,
+            "daysLeft": int(entitlement.get("days_left") or 0),
+            "source": "hades_alpha",
+        },
     }
