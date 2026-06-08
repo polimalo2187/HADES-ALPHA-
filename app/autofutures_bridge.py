@@ -11,6 +11,7 @@ from app.database import autofutures_link_tokens_collection
 from app.models import utcnow
 from app.plans import PLAN_PREMIUM, SUBSCRIPTION_STATUS_ACTIVE, normalize_plan, plan_status
 from app.services.admin_service import is_effectively_banned
+from pymongo.errors import PyMongoError
 
 
 class AutoFuturesBridgeError(ValueError):
@@ -116,20 +117,24 @@ def consume_autofutures_code(code: str, *, request_id: Optional[str] = None) -> 
 
     token_hash = _hash_code(raw)
     now = utcnow()
-    token = autofutures_link_tokens_collection().find_one_and_update(
-        {
-            "token_hash": token_hash,
-            "used_at": None,
-            "expires_at": {"$gt": now},
-        },
-        {
-            "$set": {
-                "used_at": now,
-                "consume_request_id": request_id,
-            }
-        },
-        return_document=True,
-    )
+    try:
+        token = autofutures_link_tokens_collection().find_one_and_update(
+            {
+                "token_hash": token_hash,
+                "used_at": None,
+                "expires_at": {"$gt": now},
+            },
+            {
+                "$set": {
+                    "used_at": now,
+                    "consume_request_id": request_id,
+                }
+            },
+            return_document=True,
+        )
+    except PyMongoError as exc:
+        raise AutoFuturesBridgeError("storage_unavailable") from exc
+
     if not token:
         raise AutoFuturesBridgeError("invalid_or_expired_code")
 
@@ -137,9 +142,11 @@ def consume_autofutures_code(code: str, *, request_id: Optional[str] = None) -> 
     if user_id <= 0:
         raise AutoFuturesBridgeError("invalid_user")
 
-    from app.miniapp.service import get_user_by_id
-
-    user = get_user_by_id(user_id)
+    try:
+        from app.plans import get_user as get_user_by_id
+        user = get_user_by_id(user_id)
+    except PyMongoError as exc:
+        raise AutoFuturesBridgeError("storage_unavailable") from exc
     if not user:
         raise AutoFuturesBridgeError("user_not_found")
     if is_effectively_banned(user):

@@ -34,10 +34,22 @@ _db = None
 _indexes_initialized = False
 
 
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)) or default)
+    except Exception:
+        return default
+
+
 def get_client() -> MongoClient:
     global _client
     if _client is None:
-        _client = MongoClient(MONGODB_URI)
+        _client = MongoClient(
+            MONGODB_URI,
+            serverSelectionTimeoutMS=_int_env("MONGO_SERVER_SELECTION_TIMEOUT_MS", 5000),
+            connectTimeoutMS=_int_env("MONGO_CONNECT_TIMEOUT_MS", 5000),
+            socketTimeoutMS=_int_env("MONGO_SOCKET_TIMEOUT_MS", 8000),
+        )
     return _client
 
 
