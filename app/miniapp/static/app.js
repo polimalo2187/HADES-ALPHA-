@@ -752,8 +752,22 @@ function openExternalUrl(url) {
       window.Telegram.WebApp.openLink(normalized, { try_instant_view: false });
       return;
     }
-  } catch (_) {}
-  window.open(normalized, '_blank', 'noopener,noreferrer');
+  } catch (error) {
+    console.warn('[HADES MiniApp] Telegram openLink failed', error);
+  }
+
+  try {
+    const opened = window.open(normalized, '_blank', 'noopener,noreferrer');
+    if (opened) return;
+  } catch (error) {
+    console.warn('[HADES MiniApp] window.open failed', error);
+  }
+
+  try {
+    window.location.href = normalized;
+  } catch (error) {
+    console.warn('[HADES MiniApp] location fallback failed', error);
+  }
 }
 
 
@@ -5816,45 +5830,93 @@ function setView(view) {
 }
 
 
+
 async function createAndOpenAutoFuturesLink(button = null) {
   const productName = 'Hades AutoFutures';
-  const original = button?.textContent;
+  const original = button?.textContent || 'Abrir Hades AutoFutures';
+
+  const showFeedback = (message, tone = 'accent', alert = false) => {
+    try {
+      setAccountNotice(message, tone);
+    } catch (_) {}
+    if (alert) {
+      try {
+        tg?.showAlert(message);
+      } catch (_) {
+        try { window.alert(message); } catch (_) {}
+      }
+    }
+  };
 
   try {
     if (button) {
       button.disabled = true;
-      button.textContent = 'Vinculando...';
+      button.textContent = 'Validando premium...';
     }
 
+    showFeedback('Validando premium y creando acceso seguro a Hades AutoFutures...', 'accent');
+
     try {
-      await loadAccount();
+      await refreshAccountState(true);
     } catch (refreshError) {
       console.warn('[Hades AutoFutures] No se pudo refrescar cuenta antes de abrir AutoFutures', refreshError);
     }
 
+    if (button) button.textContent = 'Creando acceso...';
+
     const result = await api('/api/miniapp/autofutures/link', { method: 'POST' });
     if (!result?.url) throw new Error('autofutures_link_unavailable');
 
-    setAccountNotice('Hades AutoFutures vinculado. Abriendo trading automático...', 'positive');
+    const successMessage = 'Hades AutoFutures vinculado. Abriendo trading automático...';
+    showFeedback(successMessage, 'positive', false);
+
+    if (button) button.textContent = 'Abriendo...';
+
+    // Telegram openLink es el camino principal. El fallback cubre navegador normal.
     openExternalUrl(result.url);
+
+    // Fallback adicional: si Telegram/browser no abre nada, el usuario ve la URL copiable.
+    window.setTimeout(() => {
+      try {
+        if (document.visibilityState === 'visible') {
+          setAccountNotice(`Si no abrió automáticamente, copia y abre este enlace: ${result.url}`, 'accent');
+        }
+      } catch (_) {}
+    }, 900);
   } catch (error) {
     console.error('[Hades AutoFutures] link error', error);
+    const raw = String(error?.message || error || '').trim();
     const messageMap = {
       premium_required: 'Necesitas PREMIUM activo para abrir Hades AutoFutures.',
       user_banned: 'Tu cuenta está bloqueada. Contacta soporte.',
       invalid_user: 'No se pudo validar tu usuario de Hades.',
       autofutures_url_not_configured: 'HADES_AUTOFUTURES_FRONTEND_URL no está configurado en Railway.',
       autofutures_link_unavailable: 'El backend no devolvió la URL de Hades AutoFutures.',
+      network_unavailable: 'No se pudo conectar con el backend de HADES. Cierra y abre la Mini App nuevamente.',
+      failed_to_fetch: 'No se pudo conectar con el backend de HADES. Cierra y abre la Mini App nuevamente.',
+      request_failed_400: 'El backend rechazó la creación del acceso. Revisa variables de AutoFutures en Hades Alpha.',
+      request_failed_401: 'Tu sesión de HADES expiró. Cierra y vuelve a abrir la Mini App desde Telegram.',
       request_failed_403: 'Tu cuenta no tiene acceso premium a Hades AutoFutures.',
       request_failed_404: 'El backend de HADES no tiene activo /api/miniapp/autofutures/link. Despliega esta versión del backend.',
+      request_failed_500: 'Error interno creando el acceso a AutoFutures. Revisa logs del backend de Hades Alpha.',
     };
 
-    const key = error?.message || 'autofutures_link_unavailable';
-    setAccountNotice(messageMap[key] || `No se pudo abrir ${productName}.`, 'negative');
+    const key = raw.toLowerCase().replaceAll(' ', '_');
+    const display = messageMap[key] || `No se pudo abrir ${productName}: ${raw || 'error desconocido'}`;
+
+    showFeedback(display, 'negative', true);
+
+    if (state.currentView === 'account') {
+      try {
+        renderAccount();
+        bindViewButtons();
+        setAccountNotice(display, 'negative');
+      } catch (_) {}
+    }
   } finally {
-    if (button) {
+    if (button && button.isConnected) {
       button.disabled = false;
-      button.textContent = original || 'Abrir Hades AutoFutures';
+      button.textContent = original;
     }
   }
 }
