@@ -39,3 +39,16 @@ POST /api/miniapp/autofutures/consume
 ```text
 autofutures_link_tokens
 ```
+
+
+## Fix exhaustivo 1.0
+
+Correcciones aplicadas para igualar el flujo a Oraculum/Sentinel/Guide y evitar 502 silenciosos:
+
+```text
+- consume_autofutures_code ya no importa app.miniapp.service; usa app.plans.get_user.
+- Se evita importar el módulo pesado de MiniApp en el endpoint público de consumo.
+- Se capturan errores PyMongo como storage_unavailable.
+- storage_unavailable devuelve HTTP 503 controlado, no timeout/502 de infraestructura.
+- MongoClient tiene timeouts explícitos.
+```
