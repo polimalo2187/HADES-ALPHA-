@@ -56,3 +56,28 @@ Cambios:
 - fallback de apertura si Telegram/browser bloquea la URL
 - mensaje con URL copiable si no abre automáticamente
 ```
+
+
+## Fix 1.2: diagnóstico de variable SSO
+
+Se reforzó la lectura del secreto SSO.
+
+Ahora el puente acepta estos nombres:
+
+```text
+HADES_AUTOFUTURES_SSO_SECRET
+HADES_AUTO_FUTURES_SSO_SECRET
+AUTOFUTURES_SSO_SECRET
+AUTO_FUTURES_SSO_SECRET
+HADES_AUTOFUTURES_SECRET
+HADES_AUTOFUTURES_JWT_SECRET
+HADES_ALPHA_SSO_SECRET
+```
+
+También se agregó un endpoint de diagnóstico protegido por sesión MiniApp:
+
+```text
+GET /api/miniapp/autofutures/diagnostics
+```
+
+El endpoint no expone el valor del secreto. Solo indica qué variables fueron detectadas y su longitud.
