@@ -735,6 +735,8 @@ function bridgeErrorMessage(product, error) {
     sentinel_link_unavailable: 'El backend no devolvió la URL de Sentinel.',
     hades_guide_url_not_configured: 'HADES_GUIDE_URL no está configurado en Railway.',
     hades_guide_link_unavailable: 'El backend no devolvió la URL de Hades Guide.',
+    autofutures_url_not_configured: 'HADES_AUTOFUTURES_FRONTEND_URL no está configurado en Railway.',
+    autofutures_link_unavailable: 'El backend no devolvió la URL de Hades AutoFutures.',
     request_failed_401: 'Tu sesión de HADES expiró. Cierra y vuelve a abrir la Mini App desde Telegram.',
     request_failed_403: `${product} requiere PREMIUM activo o la sesión no tiene permiso.`,
   };
@@ -3411,7 +3413,7 @@ function renderHome() {
           <div>
             <div class="ecosystem-kicker">ECOSISTEMA HADES</div>
             <h2>Centro de mando premium</h2>
-            <p>HADES Alpha organiza la operación. Oraculum filtra oportunidades predictivas. HADES Sentinel valida el riesgo antes de operar.</p>
+            <p>HADES Alpha organiza la operación. Oraculum filtra oportunidades predictivas. HADES Sentinel valida el riesgo y AutoFutures automatiza la ejecución simulada en futuros.</p>
           </div>
           <span class="ecosystem-status ${ecosystemPremiumActive ? 'active' : 'locked'}">${ecosystemStatusLabel}</span>
         </div>
@@ -3455,6 +3457,16 @@ function renderHome() {
             </div>
             <button type="button" class="ecosystem-suite-action" data-open-sentinel ${ecosystemPremiumActive ? '' : 'disabled'}>Abrir Sentinel</button>
           </article>
+
+          <article class="ecosystem-suite-card autofutures ${ecosystemPremiumActive ? 'is-active' : 'is-locked'}">
+            <div class="ecosystem-suite-icon">🤖</div>
+            <div class="ecosystem-suite-body">
+              <strong>Hades AutoFutures</strong>
+              <span>Trading automático</span>
+              <p>Bot de futuros CoinW en modo paper trading con engine independiente, control premium y gestión segura por cuenta.</p>
+            </div>
+            <button type="button" class="ecosystem-suite-action" data-open-autofutures ${ecosystemPremiumActive ? '' : 'disabled'}>Abrir AutoFutures</button>
+          </article>
         </div>
 
         <div class="pretrade-card">
@@ -3472,7 +3484,8 @@ function renderHome() {
           <div class="pretrade-actions">
             <button type="button" class="button button-secondary" data-goto="signals">1. Señales</button>
             <button type="button" class="button button-secondary" data-open-oraculum ${ecosystemPremiumActive ? '' : 'disabled'}>2. Oraculum</button>
-            <button type="button" class="button button-primary" data-open-sentinel ${ecosystemPremiumActive ? '' : 'disabled'}>3. Sentinel</button>
+            <button type="button" class="button button-secondary" data-open-sentinel ${ecosystemPremiumActive ? '' : 'disabled'}>3. Sentinel</button>
+            <button type="button" class="button button-primary" data-open-autofutures ${ecosystemPremiumActive ? '' : 'disabled'}>4. AutoFutures</button>
           </div>
         </div>
       </div>
@@ -5675,6 +5688,29 @@ function renderAccount() {
         </div>
       </div>
 
+
+      <div class="card card-span-12 account-ecosystem-card account-autofutures-card autofutures-bridge-card ${isPremiumActive ? 'is-active' : 'is-locked'}">
+        <div class="item-header">
+          <div>
+            <h2 style="margin:0;">Hades AutoFutures</h2>
+            <div class="item-subtitle">Bot automático de futuros CoinW. Acceso exclusivo para usuarios PREMIUM de Hades Alpha.</div>
+          </div>
+          <span class="plan-tag">${isPremiumActive ? 'PREMIUM ACTIVO' : 'PREMIUM REQUERIDO'}</span>
+        </div>
+        <div class="pill-row compact-pill-row">
+          <span class="pill">Plan: ${escapeHtml(me.plan_name || subscription.plan_name || 'FREE')}</span>
+          <span class="pill">Vence: ${escapeHtml(expiresText)}</span>
+          <span class="pill">Días: ${escapeHtml(safeDaysLeft || 0)}</span>
+        </div>
+        <p>${isPremiumActive
+          ? 'Al tocar el botón se crea un acceso firmado de corta duración y AutoFutures valida tu premium antes de abrir el dashboard.'
+          : 'Activa PREMIUM para poder abrir AutoFutures. Sin premium el bot automático queda bloqueado.'}</p>
+        <div class="action-row">
+          <button type="button" class="button button-primary" data-open-autofutures ${isPremiumActive ? '' : 'disabled'}>🤖 Vincular / Abrir AutoFutures</button>
+          <button class="button button-secondary" data-billing-focus-action="refresh-account">Actualizar estado</button>
+        </div>
+      </div>
+
       <div class="card card-span-12 account-premium-card account-support-card">
         <div class="account-card-topline"><div class="account-card-icon">🛟</div><span>SUPPORT</span></div>
         <h2>Soporte</h2>
@@ -5779,6 +5815,50 @@ function setView(view) {
   }
 }
 
+
+async function createAndOpenAutoFuturesLink(button = null) {
+  const productName = 'Hades AutoFutures';
+  const original = button?.textContent;
+
+  try {
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'Vinculando...';
+    }
+
+    try {
+      await loadAccount();
+    } catch (refreshError) {
+      console.warn('[Hades AutoFutures] No se pudo refrescar cuenta antes de abrir AutoFutures', refreshError);
+    }
+
+    const result = await api('/api/miniapp/autofutures/link', { method: 'POST' });
+    if (!result?.url) throw new Error('autofutures_link_unavailable');
+
+    setAccountNotice('Hades AutoFutures vinculado. Abriendo trading automático...', 'positive');
+    openExternalUrl(result.url);
+  } catch (error) {
+    console.error('[Hades AutoFutures] link error', error);
+    const messageMap = {
+      premium_required: 'Necesitas PREMIUM activo para abrir Hades AutoFutures.',
+      user_banned: 'Tu cuenta está bloqueada. Contacta soporte.',
+      invalid_user: 'No se pudo validar tu usuario de Hades.',
+      autofutures_url_not_configured: 'HADES_AUTOFUTURES_FRONTEND_URL no está configurado en Railway.',
+      autofutures_link_unavailable: 'El backend no devolvió la URL de Hades AutoFutures.',
+      request_failed_403: 'Tu cuenta no tiene acceso premium a Hades AutoFutures.',
+      request_failed_404: 'El backend de HADES no tiene activo /api/miniapp/autofutures/link. Despliega esta versión del backend.',
+    };
+
+    const key = error?.message || 'autofutures_link_unavailable';
+    setAccountNotice(messageMap[key] || `No se pudo abrir ${productName}.`, 'negative');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = original || 'Abrir Hades AutoFutures';
+    }
+  }
+}
+
 async function copyValue(value, successMessage = 'Copiado correctamente.') {
   const normalized = String(value || '').trim();
   if (!normalized) {
@@ -5832,6 +5912,13 @@ function bindViewButtons() {
     button.onclick = () => {
       if (button.disabled) return;
       createAndOpenHadesGuideLink(button);
+    };
+  });
+
+  document.querySelectorAll('[data-open-autofutures]').forEach(button => {
+    button.onclick = () => {
+      if (button.disabled) return;
+      createAndOpenAutoFuturesLink(button);
     };
   });
 

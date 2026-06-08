@@ -5975,3 +5975,15 @@ html, body, .app-shell, .section-grid, .card {
   .session-banner { align-items: flex-start; }
   .session-times { display: none; }
 }
+
+
+.ecosystem-suite-card.autofutures {
+  background: linear-gradient(145deg, rgba(87, 132, 255, 0.18), rgba(18, 22, 44, 0.94));
+  border-color: rgba(137, 170, 255, 0.38);
+}
+
+.account-ecosystem-card.autofutures-bridge-card,
+.account-autofutures-card {
+  background: linear-gradient(145deg, rgba(80, 105, 255, 0.16), rgba(11, 17, 35, 0.94));
+  border-color: rgba(137, 170, 255, 0.34);
+}
