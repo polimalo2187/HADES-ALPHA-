@@ -42,3 +42,17 @@ POST /api/miniapp/autofutures/link
 ```
 
 Requiere sesión MiniApp activa y usuario PREMIUM activo.
+
+
+## Fix 1.1: feedback visible del botón
+
+Se reforzó el botón de AutoFutures para evitar que el usuario toque y parezca que no ocurre nada.
+
+Cambios:
+
+```text
+- feedback inmediato: “Validando premium...”
+- alertas visibles en errores
+- fallback de apertura si Telegram/browser bloquea la URL
+- mensaje con URL copiable si no abre automáticamente
+```
