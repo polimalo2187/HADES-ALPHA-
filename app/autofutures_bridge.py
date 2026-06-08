@@ -55,15 +55,51 @@ def _autofutures_url() -> str:
     return url
 
 
+SSO_SECRET_ENV_NAMES = (
+    "HADES_AUTOFUTURES_SSO_SECRET",
+    "HADES_AUTO_FUTURES_SSO_SECRET",
+    "AUTOFUTURES_SSO_SECRET",
+    "AUTO_FUTURES_SSO_SECRET",
+    "HADES_AUTOFUTURES_SECRET",
+    "HADES_AUTOFUTURES_JWT_SECRET",
+    "HADES_ALPHA_SSO_SECRET",
+)
+
+
+def _sso_secret_diagnostics() -> Dict[str, Any]:
+    detected = []
+    for name in SSO_SECRET_ENV_NAMES:
+        value = os.getenv(name)
+        if value is not None:
+            detected.append({
+                "name": name,
+                "length": len(value.strip()),
+                "valid_length": len(value.strip()) >= 32,
+            })
+    return {
+        "detected": detected,
+        "accepted_names": list(SSO_SECRET_ENV_NAMES),
+    }
+
+
 def _sso_secret() -> str:
-    secret = _first_env_value(
-        "HADES_AUTOFUTURES_SSO_SECRET",
-        "AUTOFUTURES_SSO_SECRET",
-        "HADES_ALPHA_SSO_SECRET",
+    for name in SSO_SECRET_ENV_NAMES:
+        raw = os.getenv(name)
+        if raw is None:
+            continue
+        secret = raw.strip().strip('"').strip("'")
+        if len(secret) >= 32:
+            return secret
+
+    diagnostics = _sso_secret_diagnostics()
+    detected = diagnostics.get("detected") or []
+    if detected:
+        names = ", ".join(f"{item['name']}({item['length']})" for item in detected)
+        raise AutoFuturesBridgeError(f"HADES_AUTOFUTURES_SSO_SECRET inválido: variables detectadas con longitud insuficiente: {names}")
+
+    raise AutoFuturesBridgeError(
+        "HADES_AUTOFUTURES_SSO_SECRET inválido: no se detectó ninguna variable SSO aceptada"
     )
-    if len(secret) < 32:
-        raise AutoFuturesBridgeError("HADES_AUTOFUTURES_SSO_SECRET inválido")
-    return secret
 
 
 def _link_ttl_seconds() -> int:
