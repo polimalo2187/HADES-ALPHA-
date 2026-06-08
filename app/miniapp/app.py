@@ -54,7 +54,7 @@ from app.observability import build_runtime_health_report, heartbeat, record_aud
 from app.oraculum_bridge import OraculumBridgeError, create_oraculum_link
 from app.sentinel_bridge import SentinelBridgeError, create_sentinel_link
 from app.hades_guide_bridge import HadesGuideBridgeError, create_hades_guide_link, consume_hades_guide_code
-from app.autofutures_bridge import AutoFuturesBridgeError, create_autofutures_link
+from app.autofutures_bridge import AutoFuturesBridgeError, create_autofutures_link, _sso_secret_diagnostics
 from app.services.admin_runtime_service import (
     get_admin_operational_overview,
     get_admin_runtime_health_matrix,
@@ -516,6 +516,19 @@ def create_mini_app() -> FastAPI:
             },
         )
         return payload
+
+    @app.get("/api/miniapp/autofutures/diagnostics")
+    async def miniapp_autofutures_diagnostics(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
+        diagnostics = _sso_secret_diagnostics()
+        return {
+            "ok": True,
+            "service": "hades-alpha",
+            "feature": "autofutures_bridge",
+            "secret": diagnostics,
+            "premium_plan": user.get("plan"),
+            "subscription_status": user.get("subscription_status"),
+        }
+
 
     @app.post("/api/miniapp/autofutures/link")
     async def miniapp_autofutures_link(request: Request, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
