@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from bson import ObjectId
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -606,19 +606,19 @@ def create_mini_app() -> FastAPI:
         )
         return result
 
-    @app.post("/api/miniapp/autofutures/consume")
-    async def miniapp_autofutures_consume(payload: AutoFuturesConsumeRequest, request: Request) -> Dict[str, Any]:
+    async def _consume_autofutures_bridge_code(code: str, request: Request) -> Dict[str, Any]:
         try:
-            result = consume_autofutures_code(payload.code, request_id=getattr(request.state, "request_id", None))
+            result = consume_autofutures_code(code, request_id=getattr(request.state, "request_id", None))
         except AutoFuturesBridgeError as exc:
+            error_code = str(exc)
+            # Este endpoint debe responder siempre de forma controlada. No debe provocar 502 silencioso.
             record_audit_event(
                 event_type="autofutures_code_consume_failed",
                 status="warning",
                 module="miniapp",
-                message=str(exc),
+                message=error_code,
                 metadata={"request_id": getattr(request.state, "request_id", None)},
             )
-            error_code = str(exc)
             status_code = 503 if error_code == "storage_unavailable" else (403 if error_code in {"premium_required", "user_banned"} else 400)
             raise HTTPException(status_code=status_code, detail=error_code) from exc
 
@@ -633,6 +633,14 @@ def create_mini_app() -> FastAPI:
             metadata={"request_id": getattr(request.state, "request_id", None)},
         )
         return result
+
+    @app.post("/api/miniapp/autofutures/consume")
+    async def miniapp_autofutures_consume(payload: AutoFuturesConsumeRequest, request: Request) -> Dict[str, Any]:
+        return await _consume_autofutures_bridge_code(payload.code, request)
+
+    @app.get("/api/miniapp/autofutures/consume")
+    async def miniapp_autofutures_consume_get(request: Request, code: str = Query(..., min_length=8)) -> Dict[str, Any]:
+        return await _consume_autofutures_bridge_code(code, request)
 
     @app.get("/api/miniapp/dashboard")
     async def miniapp_dashboard(user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
