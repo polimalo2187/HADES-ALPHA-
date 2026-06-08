@@ -54,6 +54,7 @@ from app.observability import build_runtime_health_report, heartbeat, record_aud
 from app.oraculum_bridge import OraculumBridgeError, create_oraculum_link
 from app.sentinel_bridge import SentinelBridgeError, create_sentinel_link
 from app.hades_guide_bridge import HadesGuideBridgeError, create_hades_guide_link, consume_hades_guide_code
+from app.autofutures_bridge import AutoFuturesBridgeError, create_autofutures_link
 from app.services.admin_runtime_service import (
     get_admin_operational_overview,
     get_admin_runtime_health_matrix,
@@ -457,6 +458,7 @@ def create_mini_app() -> FastAPI:
             "oraculum_configured": bool(os.getenv("ORACULUM_URL")),
             "sentinel_configured": bool(os.getenv("SENTINEL_URL")),
             "hades_guide_configured": bool(os.getenv("HADES_GUIDE_URL") or os.getenv("GUIDE_URL") or os.getenv("PUBLIC_HADES_GUIDE_URL") or os.getenv("VITE_HADES_GUIDE_URL")),
+            "autofutures_configured": bool(os.getenv("HADES_AUTOFUTURES_FRONTEND_URL") or os.getenv("AUTOFUTURES_URL") or os.getenv("HADES_AUTOFUTURES_URL") or os.getenv("PUBLIC_HADES_AUTOFUTURES_URL") or os.getenv("VITE_HADES_AUTOFUTURES_URL")),
             "plan_name": user.get("plan_name"),
             "days_left": user.get("days_left"),
         }
@@ -510,6 +512,35 @@ def create_mini_app() -> FastAPI:
             message="sentinel_link_created",
             metadata={
                 "expires_in_seconds": payload.get("expires_in_seconds"),
+                "premium_until": payload.get("premium_until"),
+            },
+        )
+        return payload
+
+    @app.post("/api/miniapp/autofutures/link")
+    async def miniapp_autofutures_link(request: Request, user: Dict[str, Any] = Depends(get_authenticated_user)) -> Dict[str, Any]:
+        try:
+            payload = create_autofutures_link(user, request_id=getattr(request.state, "request_id", None))
+        except AutoFuturesBridgeError as exc:
+            record_audit_event(
+                event_type="autofutures_link_failed",
+                status="warning",
+                module="miniapp",
+                user_id=int(user.get("user_id") or 0),
+                message=str(exc),
+            )
+            status_code = 403 if str(exc) in {"premium_required", "user_banned"} else 400
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+        record_audit_event(
+            event_type="autofutures_link_created",
+            status="ok",
+            module="miniapp",
+            user_id=int(user.get("user_id") or 0),
+            message="autofutures_link_created",
+            metadata={
+                "expires_in_seconds": payload.get("expires_in_seconds"),
+                "expires_at": payload.get("expires_at"),
                 "premium_until": payload.get("premium_until"),
             },
         )
