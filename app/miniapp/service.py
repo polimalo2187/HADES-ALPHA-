@@ -30,6 +30,7 @@ from app.plans import (
     validate_entitlement_days,
 )
 from app.statistics import (
+    TOTAL_PERFORMANCE_WINDOW_DAYS,
     build_admin_strategy_observability,
     build_performance_window,
     get_latest_scanner_cycle_snapshot,
@@ -1875,22 +1876,38 @@ def _resolved_count(summary: Any) -> int:
         return 0
 
 
-def _select_dashboard_summary(snapshot: Dict[str, Any]) -> tuple[Dict[str, Any], str]:
+def _load_total_performance_window() -> tuple[Dict[str, Any], bool]:
+    materialized = _safe_call(lambda: get_materialized_window(TOTAL_PERFORMANCE_WINDOW_DAYS), None)
+    if isinstance(materialized, dict):
+        return materialized, True
+
+    built = _safe_call(lambda: build_performance_window(TOTAL_PERFORMANCE_WINDOW_DAYS), None)
+    return (built if isinstance(built, dict) else {}), False
+
+
+def _select_dashboard_summary(
+    snapshot: Dict[str, Any],
+    *,
+    total_payload: Optional[Dict[str, Any]] = None,
+) -> tuple[Dict[str, Any], str]:
     summary_7d = snapshot.get("summary_7d") if isinstance(snapshot.get("summary_7d"), dict) else None
     summary_30d = snapshot.get("summary_30d") if isinstance(snapshot.get("summary_30d"), dict) else None
+    summary_total = None
 
-    if _resolved_count(summary_7d) > 0:
-        return summary_7d or _empty_summary(), "7D"
+    if isinstance(total_payload, dict) and isinstance(total_payload.get("summary"), dict):
+        summary_total = total_payload.get("summary")
+    elif isinstance(snapshot.get("summary_total"), dict):
+        summary_total = snapshot.get("summary_total")
+
+    # La portada debe representar la curva completa del sistema, no una ventana móvil.
+    if _resolved_count(summary_total) > 0:
+        return summary_total or _empty_summary(), "Total"
     if _resolved_count(summary_30d) > 0:
         return summary_30d or _empty_summary(), "30D"
+    if _resolved_count(summary_7d) > 0:
+        return summary_7d or _empty_summary(), "7D"
 
-    total_materialized = _safe_call(lambda: get_materialized_window(3650), None)
-    total_payload = total_materialized or (_safe_call(lambda: build_performance_window(3650), None) or {})
-    total_summary = total_payload.get("summary") if isinstance(total_payload, dict) else None
-    if _resolved_count(total_summary) > 0:
-        return total_summary or _empty_summary(), "Total"
-
-    return (summary_7d or summary_30d or _empty_summary()), "7D"
+    return (summary_total or summary_30d or summary_7d or _empty_summary()), "Total"
 
 
 
@@ -2946,13 +2963,12 @@ def _serialize_admin_strategy_observability(payload: Optional[Dict[str, Any]]) -
     }
 
 
-def build_performance_center_payload(user: Dict[str, Any], *, focus_days: int = 30) -> Dict[str, Any]:
-    requested_focus = int(focus_days or 30)
-    focus_days = requested_focus if requested_focus in {7, 30, 3650} else 30
+def build_performance_center_payload(user: Dict[str, Any], *, focus_days: int = TOTAL_PERFORMANCE_WINDOW_DAYS) -> Dict[str, Any]:
+    requested_focus = int(focus_days or TOTAL_PERFORMANCE_WINDOW_DAYS)
+    focus_days = requested_focus if requested_focus in {7, 30, TOTAL_PERFORMANCE_WINDOW_DAYS} else TOTAL_PERFORMANCE_WINDOW_DAYS
 
     snapshot = _safe_call(get_performance_snapshot, {}) or {}
-    total_materialized = _safe_call(lambda: get_materialized_window(3650), None)
-    total_payload = total_materialized or (_safe_call(lambda: build_performance_window(3650), None) or {})
+    total_payload, total_materialized = _load_total_performance_window()
 
     windows = [
         _serialize_performance_window(
@@ -2975,13 +2991,13 @@ def build_performance_center_payload(user: Dict[str, Any], *, focus_days: int = 
         ),
         _serialize_performance_window(
             total_payload,
-            days=3650,
+            days=TOTAL_PERFORMANCE_WINDOW_DAYS,
             label="Total",
             materialized=bool(total_materialized),
         ),
     ]
 
-    focus_payload = next((item for item in windows if item["days"] == focus_days), windows[1])
+    focus_payload = next((item for item in windows if item["days"] == focus_days), windows[-1])
     return {
         "overview": {
             "focus_days": focus_payload["days"],
@@ -2997,11 +3013,10 @@ def build_performance_center_payload(user: Dict[str, Any], *, focus_days: int = 
 
 def build_admin_performance_payload(*, focus_days: int = 30) -> Dict[str, Any]:
     requested_focus = int(focus_days or 30)
-    focus_days = requested_focus if requested_focus in {7, 30, 3650} else 30
+    focus_days = requested_focus if requested_focus in {7, 30, TOTAL_PERFORMANCE_WINDOW_DAYS} else 30
 
     snapshot = _safe_call(get_performance_snapshot, {}) or {}
-    total_materialized = _safe_call(lambda: get_materialized_window(3650), None)
-    total_payload = total_materialized or (_safe_call(lambda: build_performance_window(3650), None) or {})
+    total_payload, total_materialized = _load_total_performance_window()
 
     windows = [
         _serialize_performance_window(
@@ -3024,7 +3039,7 @@ def build_admin_performance_payload(*, focus_days: int = 30) -> Dict[str, Any]:
         ),
         _serialize_performance_window(
             total_payload,
-            days=3650,
+            days=TOTAL_PERFORMANCE_WINDOW_DAYS,
             label="Total",
             materialized=bool(total_materialized),
         ),
@@ -3180,9 +3195,12 @@ def build_account_center_payload(user: Dict[str, Any]) -> Dict[str, Any]:
 def build_dashboard_payload(user: Dict[str, Any]) -> Dict[str, Any]:
     user_id = int(user.get("user_id") or 0)
     snapshot = _safe_call(get_performance_snapshot, {}) or {}
+    total_payload, total_materialized = _load_total_performance_window()
     summary_7d = _serialize_performance_summary(snapshot.get("summary_7d"))
     summary_30d = _serialize_performance_summary(snapshot.get("summary_30d"))
-    home_summary_raw, home_summary_label = _select_dashboard_summary(snapshot)
+    total_summary_source = total_payload.get("summary") if isinstance(total_payload, dict) and total_payload.get("summary") else snapshot.get("summary_total")
+    summary_total = _serialize_performance_summary(total_summary_source)
+    home_summary_raw, home_summary_label = _select_dashboard_summary(snapshot, total_payload=total_payload)
     home_summary = _serialize_performance_summary(home_summary_raw)
 
     active_query = {"user_id": user_id, "telegram_valid_until": {"$gte": datetime.utcnow()}}
@@ -3231,6 +3249,8 @@ def build_dashboard_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         "trading_session": trading_session,
         "summary_7d": summary_7d,
         "summary_30d": summary_30d,
+        "summary_total": summary_total,
+        "summary_total_materialized": bool(total_materialized),
         "home_summary": home_summary,
         "home_summary_label": home_summary_label,
         "active_signals_count": active_count,
@@ -3527,8 +3547,10 @@ def build_bootstrap_payload(user: Dict[str, Any]) -> Dict[str, Any]:
         "dashboard": {
             "summary_7d": _empty_summary(),
             "summary_30d": _empty_summary(),
+            "summary_total": _empty_summary(),
+            "summary_total_materialized": False,
             "home_summary": _empty_summary(),
-            "home_summary_label": "7D",
+            "home_summary_label": "Total",
             "recent_signals": [],
             "recent_history": [],
             "active_signals_count": 0,
