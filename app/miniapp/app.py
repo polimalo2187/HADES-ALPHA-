@@ -920,7 +920,7 @@ def create_mini_app() -> FastAPI:
 
     @app.get("/api/miniapp/performance")
     async def miniapp_performance_center(
-        days: int = 30,
+        days: int = 3650,
         user: Dict[str, Any] = Depends(get_authenticated_user),
     ) -> Dict[str, Any]:
         if int(days) not in {7, 30, 3650}:
