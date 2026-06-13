@@ -16,7 +16,8 @@ from app.database import (
 from app.models import new_stats_snapshot, STATS_SNAPSHOT_SCHEMA_VERSION
 
 
-MATERIALIZED_WINDOWS_DAYS = (1, 7, 30)
+TOTAL_PERFORMANCE_WINDOW_DAYS = 3650
+MATERIALIZED_WINDOWS_DAYS = (1, 7, 30, TOTAL_PERFORMANCE_WINDOW_DAYS)
 MATERIALIZED_MAX_AGE_SECONDS = 15 * 60
 
 
@@ -1314,9 +1315,11 @@ def get_performance_snapshot(
 ) -> Dict[str, Any]:
     short_materialized = get_materialized_window(short_days)
     long_materialized = get_materialized_window(long_days)
+    total_materialized = get_materialized_window(TOTAL_PERFORMANCE_WINDOW_DAYS)
 
     short_payload = short_materialized or build_performance_window(short_days)
     long_payload = long_materialized or build_performance_window(long_days)
+    total_payload = total_materialized if isinstance(total_materialized, dict) else {}
 
     worst_symbols = long_payload.get("worst_symbols", [])
     if worst_symbols_limit != 3 or worst_symbols_min_resolved != 3:
@@ -1330,9 +1333,11 @@ def get_performance_snapshot(
     snapshot = {
         "summary_7d": short_payload.get("summary", {}),
         "summary_30d": long_payload.get("summary", {}),
+        "summary_total": total_payload.get("summary", {}),
         "by_plan_30d": long_payload.get("by_plan", {}),
         "activity_7d": short_payload.get("activity", {}),
         "activity_30d": long_payload.get("activity", {}),
+        "activity_total": total_payload.get("activity", {}),
         "activity_by_plan_30d": long_payload.get("activity_by_plan", {}),
         "by_score_30d": long_payload.get("by_score", {}),
         "direction_30d": long_payload.get("direction", []),
@@ -1343,6 +1348,7 @@ def get_performance_snapshot(
         "diagnostics_30d": long_payload.get("diagnostics", {}),
         "materialized_7d": short_materialized is not None,
         "materialized_30d": long_materialized is not None,
+        "materialized_total": total_materialized is not None,
     }
 
     return snapshot
