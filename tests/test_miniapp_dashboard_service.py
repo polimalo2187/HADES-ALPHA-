@@ -10,6 +10,7 @@ class MiniAppDashboardServiceTests(unittest.TestCase):
     def test_dashboard_payload_tolerates_bad_signal_serialization(self):
         user = {"user_id": 123, "plan": "premium"}
         with patch("app.miniapp.service.get_performance_snapshot", return_value={}), \
+             patch("app.miniapp.service._load_total_performance_window", return_value=({}, False)), \
              patch("app.miniapp.service.user_signals_collection") as user_signals, \
              patch("app.miniapp.service.get_history_entries_for_user", return_value=[]), \
              patch("app.miniapp.service.get_active_payment_order_for_user", return_value=None), \
@@ -25,6 +26,7 @@ class MiniAppDashboardServiceTests(unittest.TestCase):
     def test_dashboard_payload_tolerates_bad_order_serialization(self):
         user = {"user_id": 123, "plan": "premium"}
         with patch("app.miniapp.service.get_performance_snapshot", return_value={}), \
+             patch("app.miniapp.service._load_total_performance_window", return_value=({}, False)), \
              patch("app.miniapp.service.user_signals_collection") as user_signals, \
              patch("app.miniapp.service.get_history_entries_for_user", return_value=[]), \
              patch("app.miniapp.service.get_active_payment_order_for_user", return_value={"status": object()}), \
@@ -38,13 +40,15 @@ class MiniAppDashboardServiceTests(unittest.TestCase):
 
 
 
-    def test_dashboard_payload_falls_back_to_30d_when_7d_empty(self):
+    def test_dashboard_payload_prefers_total_over_short_windows(self):
         user = {"user_id": 123, "plan": "premium"}
         snapshot = {
-            "summary_7d": {"resolved": 0, "winrate": 0.0},
-            "summary_30d": {"resolved": 5, "winrate": 60.0, "profit_factor": 1.8, "expectancy_r": 0.4},
+            "summary_7d": {"resolved": 7, "winrate": 57.0},
+            "summary_30d": {"resolved": 30, "winrate": 60.0, "profit_factor": 1.8, "expectancy_r": 0.4},
         }
+        total_payload = {"summary": {"resolved": 90, "winrate": 70.0, "profit_factor": 3.4, "expectancy_r": 0.7}}
         with patch("app.miniapp.service.get_performance_snapshot", return_value=snapshot), \
+             patch("app.miniapp.service._load_total_performance_window", return_value=(total_payload, True)), \
              patch("app.miniapp.service.user_signals_collection") as user_signals, \
              patch("app.miniapp.service.get_history_entries_for_user", return_value=[]), \
              patch("app.miniapp.service.get_active_payment_order_for_user", return_value=None), \
@@ -53,8 +57,10 @@ class MiniAppDashboardServiceTests(unittest.TestCase):
             user_signals.return_value.count_documents.return_value = 0
             watchlists.return_value.find_one.return_value = {"symbols": []}
             payload = build_dashboard_payload(user)
-        self.assertEqual(payload["home_summary_label"], "30D")
-        self.assertEqual(payload["home_summary"]["resolved"], 5)
+        self.assertEqual(payload["home_summary_label"], "Total")
+        self.assertEqual(payload["home_summary"]["resolved"], 90)
+        self.assertEqual(payload["summary_total"]["profit_factor"], 3.4)
+        self.assertTrue(payload["summary_total_materialized"])
 
 
     def test_dashboard_payload_serializes_non_finite_metrics(self):
@@ -64,6 +70,7 @@ class MiniAppDashboardServiceTests(unittest.TestCase):
             "summary_30d": {"resolved": 0, "winrate": 0.0},
         }
         with patch("app.miniapp.service.get_performance_snapshot", return_value=snapshot), \
+             patch("app.miniapp.service._load_total_performance_window", return_value=({"summary": {"resolved": 0}}, False)), \
              patch("app.miniapp.service.user_signals_collection") as user_signals, \
              patch("app.miniapp.service.get_history_entries_for_user", return_value=[]), \
              patch("app.miniapp.service.get_active_payment_order_for_user", return_value=None), \
@@ -85,8 +92,7 @@ class MiniAppDashboardServiceTests(unittest.TestCase):
         }
         total_payload = {"summary": {"resolved": 9, "winrate": 55.0, "profit_factor": 1.4, "expectancy_r": 0.2}}
         with patch("app.miniapp.service.get_performance_snapshot", return_value=snapshot), \
-             patch("app.miniapp.service.get_materialized_window", return_value=None), \
-             patch("app.miniapp.service.build_performance_window", return_value=total_payload), \
+             patch("app.miniapp.service._load_total_performance_window", return_value=(total_payload, False)), \
              patch("app.miniapp.service.user_signals_collection") as user_signals, \
              patch("app.miniapp.service.get_history_entries_for_user", return_value=[]), \
              patch("app.miniapp.service.get_active_payment_order_for_user", return_value=None), \
