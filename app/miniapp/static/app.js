@@ -67,7 +67,7 @@ const state = {
     loading: false,
     notice: null,
     query: {
-      days: 30,
+      days: 3650,
     },
   },
   settingsCenter: {
@@ -2220,7 +2220,7 @@ function formatRatioValue(value, infinite = false, digits = 2) {
 function normalizePerformanceDays(value) {
   const numeric = Number(value);
   if (numeric === 7 || numeric === 30 || numeric === 3650) return numeric;
-  return 30;
+  return 3650;
 }
 
 function performanceWindowLabel(days) {
@@ -2230,8 +2230,8 @@ function performanceWindowLabel(days) {
 async function refreshPerformanceCenter(force = false, options = {}) {
   const nextDays = options.days !== undefined && options.days !== null
     ? normalizePerformanceDays(options.days)
-    : normalizePerformanceDays(state.performanceCenter.query?.days || 30);
-  const sameQuery = nextDays === normalizePerformanceDays(state.performanceCenter.query?.days || 30);
+    : normalizePerformanceDays(state.performanceCenter.query?.days || 3650);
+  const sameQuery = nextDays === normalizePerformanceDays(state.performanceCenter.query?.days || 3650);
   if (state.performanceCenter.loading) return state.performanceCenter.payload;
   if (!force && state.performanceCenter.payload && sameQuery) return state.performanceCenter.payload;
 
@@ -2525,7 +2525,7 @@ function renderPerformance() {
           </div>
           <div class="perf-hero-right">
             <div class="perf-hero-icon" style="color:${diagColor};">${diagIcon}</div>
-            <div class="perf-hero-window">${escapeHtml(overview.focus_label || performanceWindowLabel(overview.focus_days || 30))}</div>
+            <div class="perf-hero-window">${escapeHtml(overview.focus_label || performanceWindowLabel(overview.focus_days || 3650))}</div>
             <div class="perf-hero-total">${escapeHtml(String(summary.total ?? '—'))}<span class="perf-hero-total-label"> evaluadas</span></div>
             <div class="perf-hero-gen">Act. ${escapeHtml(formatDate(overview.generated_at))}</div>
           </div>
@@ -3193,8 +3193,8 @@ function renderTradingSessionBanner(compact = false) {
 function renderHome() {
   const me = state.payload.me || {};
   const dashboard = state.payload.dashboard || {};
-  const summary = dashboard.home_summary || dashboard.summary_7d || {};
-  const summaryLabel = dashboard.home_summary_label || '7D';
+  const summary = dashboard.home_summary || dashboard.summary_total || dashboard.summary_30d || dashboard.summary_7d || {};
+  const summaryLabel = dashboard.home_summary_label || 'Total';
   const market = state.payload.market || {};
   const activeOrder = dashboard.active_payment_order;
   const recentSignals = dashboard.recent_signals || [];
@@ -3391,30 +3391,30 @@ function renderHome() {
         </div>
       </div>
 
-      <!-- ⑧ RENDIMIENTO 30D TEASER -->
+      <!-- ⑧ RENDIMIENTO TOTAL TEASER -->
       <div class="card card-span-12 perf-teaser-card">
         <div class="perf-teaser-header">
           <div>
             <div class="perf-teaser-eyebrow">MÓDULO DE RENDIMIENTO</div>
-            <h2 style="margin:0">Rendimiento 30D</h2>
+            <h2 style="margin:0">Rendimiento ${escapeHtml(summaryLabel)}</h2>
           </div>
-          <button class="button button-primary" data-open-performance-center="true">Abrir</button>
+          <button class="button button-primary" data-open-performance-center="true" data-performance-days="3650">Abrir</button>
         </div>
         <div class="perf-teaser-grid">
-          <div class="perf-teaser-stat ${metricToneClass('pf', dashboard.summary_30d?.profit_factor || 0)}">
-            <div class="perf-teaser-val">${escapeHtml(formatNumber(dashboard.summary_30d?.profit_factor || 0))}</div>
+          <div class="perf-teaser-stat ${metricToneClass('pf', summary.profit_factor_infinite ? 999 : summary.profit_factor || 0)}">
+            <div class="perf-teaser-val">${escapeHtml(formatRatioValue(summary.profit_factor, summary.profit_factor_infinite))}</div>
             <div class="perf-teaser-label">Profit Factor</div>
           </div>
-          <div class="perf-teaser-stat ${metricToneClass('expectancy', dashboard.summary_30d?.expectancy_r || 0)}">
-            <div class="perf-teaser-val">${Number(dashboard.summary_30d?.expectancy_r || 0) >= 0 ? '+' : ''}${escapeHtml(formatNumber(dashboard.summary_30d?.expectancy_r || 0, 4))}</div>
+          <div class="perf-teaser-stat ${metricToneClass('expectancy', summary.expectancy_r || 0)}">
+            <div class="perf-teaser-val">${Number(summary.expectancy_r || 0) >= 0 ? '+' : ''}${escapeHtml(formatNumber(summary.expectancy_r || 0, 4))}</div>
             <div class="perf-teaser-label">Expectancy R</div>
           </div>
-          <div class="perf-teaser-stat ${metricToneClass('winrate', dashboard.summary_30d?.winrate || 0)}">
-            <div class="perf-teaser-val">${escapeHtml(formatNumber(dashboard.summary_30d?.winrate || 0))}%</div>
+          <div class="perf-teaser-stat ${metricToneClass('winrate', summary.winrate || 0)}">
+            <div class="perf-teaser-val">${escapeHtml(formatNumber(summary.winrate || 0))}%</div>
             <div class="perf-teaser-label">Win Rate</div>
           </div>
           <div class="perf-teaser-stat">
-            <div class="perf-teaser-val">${escapeHtml(String(dashboard.summary_30d?.resolved || 0))}</div>
+            <div class="perf-teaser-val">${escapeHtml(String(summary.resolved || 0))}</div>
             <div class="perf-teaser-label">Resueltas</div>
           </div>
         </div>
@@ -6023,10 +6023,10 @@ function bindViewButtons() {
     };
   });
   document.querySelectorAll('[data-open-performance-center]').forEach(button => {
-    button.onclick = () => openPerformanceCenter({ days: button.dataset.performanceDays || 30 });
+    button.onclick = () => openPerformanceCenter({ days: button.dataset.performanceDays || 3650 });
   });
   document.querySelectorAll('[data-performance-window]').forEach(button => {
-    button.onclick = () => openPerformanceCenter({ days: button.dataset.performanceWindow || 30 });
+    button.onclick = () => openPerformanceCenter({ days: button.dataset.performanceWindow || 3650 });
   });
   document.querySelectorAll('[data-performance-refresh]').forEach(button => {
     button.onclick = async () => {
