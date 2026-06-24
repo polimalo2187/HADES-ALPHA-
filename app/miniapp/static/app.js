@@ -3532,7 +3532,7 @@ function renderHome() {
         </div>
       </div>
 
-      ${activeOrder ? paymentInstructions(activeOrder) : ''}
+      <!-- Pago activo oculto: gestión desde panel admin -->
     </div>
   `;
 }
@@ -3724,12 +3724,9 @@ function renderMarket() {
         <div class="peg-icon">${isExpired ? '⏰' : '🔒'}</div>
         <div class="peg-title">${isExpired ? 'Tu plan ha vencido' : 'Acceso restringido'}</div>
         <p class="peg-desc">${isExpired
-          ? 'Tu suscripción ha expirado. Adquiere o renueva un plan para volver a acceder al Mercado y todas sus funcionalidades.'
-          : 'Necesitas un plan activo para acceder al Mercado. Elige el plan que mejor se adapte a ti.'
+          ? 'Tu suscripción ha expirado. Contacta al administrador para renovar tu plan.'
+          : 'Necesitas un plan activo para acceder al Mercado. Contacta al administrador para activar tu plan.'
         }</p>
-        <div class="peg-actions">
-          <button class="button button-primary peg-btn-plans" data-billing-focus-action="open-plans">💼 Ver planes</button>
-        </div>
       </div>
     `;
     bindViewButtons();
@@ -4570,7 +4567,7 @@ function billingFocusCard(focus = {}, billing = {}) {
     if (primaryCtaLower === 'soporte') {
       primaryAction = `<a class="button button-secondary" target="_blank" rel="noopener" href="${escapeHtml(supportUrl)}">${escapeHtml(primaryCta)}</a>`;
     } else if (primaryCtaLower === 'generar orden' || primaryCtaLower === 'renovar') {
-      primaryAction = `<button type="button" class="button button-secondary" data-billing-focus-action="open-plans">${escapeHtml(primaryCta)}</button>`;
+      primaryAction = ``; // Oculto: activación solo desde panel admin
     } else if (primaryCtaLower === 'confirmar pago' || primaryCtaLower === 'revisar de nuevo') {
       primaryAction = `<button type="button" class="button button-secondary" data-billing-focus-action="focus-order">${escapeHtml(primaryCta)}</button>`;
     } else if (primaryCtaLower === 'refrescar cuenta' || primaryCtaLower === 'esperando verificación') {
@@ -5601,33 +5598,7 @@ function renderAccount() {
         </div>
       </div>` : ''}
 
-      ${billingFocusCard(billingFocus, billing)}
-      ${paymentConfigDiagnosticsCard(billing)}
-
-      <div class="card card-span-12 account-premium-card account-billing-card">
-        <div class="account-card-topline"><div class="account-card-icon">💳</div><span>BILLING</span></div>
-        <h2>Billing</h2>
-        <div class="account-metric-grid">
-          ${accountMetricCard('Config pago', billing.payment_config_ready ? 'Lista' : 'Incompleta', billing.payment_config_ready ? 'is-positive' : 'is-warning')}
-          ${accountMetricCard('Abiertas', billingSummary.open ?? 0)}
-          ${accountMetricCard('Completadas', billingSummary.completed ?? 0, 'is-positive')}
-          ${accountMetricCard('No Fill', billingSummary.expired ?? 0, 'is-warning')}
-          ${accountMetricCard('Canceladas', billingSummary.cancelled ?? 0)}
-          ${accountMetricCard('Último cobro', formatDate(billing.latest_completed_at))}
-        </div>
-      </div>
-
-      ${paymentInstructions(activeOrder, billingFocus) || '<div class="card card-span-12"><h2>Pago actual</h2><div class="empty-state">No tienes una orden de pago pendiente.</div></div>'}
-      ${planBlock('plus', plans.plus || [], me.plan, billing, { hidden: isPremiumActive })}
-      ${planBlock('premium', plans.premium || [], me.plan, billing)}
-
-      <div class="card card-span-6 account-premium-card account-orders-card">
-        <div class="account-card-topline"><div class="account-card-icon">🧾</div><span>ORDERS</span></div>
-        <h2>Órdenes recientes</h2>
-        <div class="list">
-          ${recentOrders.length ? recentOrders.map(recentOrderItem).join('') : '<div class="empty-state">Todavía no hay órdenes registradas.</div>'}
-        </div>
-      </div>
+      <!-- BILLING/PLANES/ÓRDENES: ocultos en frontend. La activación de planes se gestiona desde el panel de administración. -->
 
       <div class="card card-span-6 account-premium-card account-rewards-card">
         <div class="account-card-topline"><div class="account-card-icon">🎁</div><span>REWARDS</span></div>
@@ -5989,19 +5960,11 @@ function bindViewButtons() {
       const action = String(button.dataset.billingFocusAction || '').trim();
       if (!action) return;
       if (action === 'open-plans') {
-        setView('account');
-        setAccountNotice('Selecciona la duración que quieres comprar o renovar en los bloques de planes.', 'accent');
-        renderAccount();
-        bindViewButtons();
-        focusPlanBlock();
+        // Oculto: activación de planes solo desde panel de administración.
         return;
       }
       if (action === 'focus-order') {
-        setView('account');
-        setAccountNotice('Revisa el bloque de pago actual para copiar la wallet, el monto exacto o confirmar la orden.', 'accent');
-        renderAccount();
-        bindViewButtons();
-        focusPaymentCard();
+        // Oculto: gestión de órdenes solo desde panel de administración.
         return;
       }
       if (action === 'refresh-account') {
@@ -6630,46 +6593,7 @@ function bindViewButtons() {
   });
 
   document.querySelectorAll('[data-create-order]').forEach(button => {
-    button.onclick = async () => {
-      if (button.disabled) return;
-      const [plan, days] = button.dataset.createOrder.split(':');
-      const original = button.textContent;
-      button.disabled = true;
-      button.textContent = 'Procesando...';
-      try {
-        setAccountNotice('Generando orden de pago...', 'accent');
-        renderAccount();
-        bindViewButtons();
-        const result = await api('/api/miniapp/payment-order', {
-          method: 'POST',
-          body: JSON.stringify({ plan, days: Number(days) }),
-        });
-        applyPaymentOrderPreview(result.order || null);
-        setAccountNotice('Orden de pago lista. Revisa el bloque de pago para copiar la wallet, el monto exacto y confirmar.', 'positive');
-        renderAll();
-        setView('account');
-        focusPaymentCard();
-        Promise.resolve(refreshAccountState())
-          .then(() => {
-            setView('account');
-            focusPaymentCard();
-          })
-          .catch(refreshError => {
-            console.warn('MiniApp account refresh after create order failed', refreshError);
-          });
-        tg?.showAlert('Orden de pago lista. Revisa el bloque de pago para copiar la wallet, el monto exacto y confirmar.');
-      } catch (error) {
-        setAccountNotice(`No se pudo generar la orden: ${paymentReasonMessage(error.message, error.message)}`, 'warning');
-        renderAccount();
-        bindViewButtons();
-        tg?.showAlert(`No se pudo generar la orden: ${paymentReasonMessage(error.message, error.message)}`);
-      } finally {
-        if (button.isConnected) {
-          button.disabled = false;
-          button.textContent = original;
-        }
-      }
-    };
+    button.onclick = () => { /* Oculto: activación de planes solo desde panel de administración. */ };
   });
   document.querySelectorAll('[data-confirm-order]').forEach(button => {
     button.onclick = async () => {
